@@ -10,7 +10,6 @@ Endpoints:
   POST /api/platform/setup/suggest-schema  — AI-suggest extraction schema fields
   POST /api/platform/setup/initialize      — provision UC schema + volume via job
   POST /api/platform/setup/activate        — mark domain active
-  GET  /api/platform/pipeline-runs/{domain_id}  — list recent pipeline runs for a domain
 """
 
 import json
@@ -344,22 +343,3 @@ def activate_domain(req: ActivateRequest):
         WHERE domain_id = '{_esc(req.domain_id)}'
     """)
     return {"success": True, "domain_id": req.domain_id, "status": "active"}
-
-
-@router.get("/pipeline-runs/{domain_id}")
-def get_pipeline_runs(domain_id: str):
-    """List recent pipeline runs for a domain."""
-    try:
-        rows = run_sql(f"""
-            SELECT run_id, job_run_id, status, triggered_by,
-                   CAST(started_at AS STRING) AS started_at,
-                   CAST(finished_at AS STRING) AS finished_at,
-                   error_msg
-            FROM {CATALOG}.{PLATFORM}.pipeline_runs
-            WHERE domain_id = '{_esc(domain_id)}'
-            ORDER BY started_at DESC
-            LIMIT 20
-        """)
-        return {"runs": rows, "total": len(rows)}
-    except Exception:
-        return {"runs": [], "total": 0}
