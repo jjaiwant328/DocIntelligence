@@ -8,6 +8,7 @@ import { ArrowLeft, Upload, FileText, Database, Settings, AlertCircle, File, Eye
 import { apiCall } from "@/lib/api-config";
 import { FloatingTooltip } from "@/components/ui/floating-tooltip";
 import { useDomain, DomainInfo } from "@/context/DomainContext";
+import { usePipelineRun } from "@/context/PipelineRunContext";
 
 // Helper function to format state names for better UX
 const formatStateName = (state: string): string => {
@@ -1636,6 +1637,7 @@ function PipelineStagesDisplay({
 
 
 function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRunComplete: () => void }) {
+    const { startRun } = usePipelineRun();
     const [showGuide, setShowGuide]     = useState(false);
     const [step, setStep]               = useState<ProcStep>("configure");
     const [docTypeSchemas, setDocTypeSchemas] = useState<DocTypeSchema[]>([]);
@@ -1647,7 +1649,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     // "ai_infer"   = AI discovers fields for every document using ai_extract + universal schema
     const [schemaMode, setSchemaMode]         = useState<"configured" | "hybrid" | "ai_infer">("hybrid");
     const [volumePath, setVolumePath]         = useState("");
-    const [jobName, setJobName]               = useState("");
+    const [jobName, setJobName]               = useState(`Docintel-${domainId}`);
     const [schedCron, setSchedCron]           = useState("");
     const [schedPreset, setSchedPreset]       = useState("");
     const [useNotifications, setUseNotifications] = useState(false);
@@ -1712,6 +1714,9 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     useEffect(() => {
         (async () => {
             setConfigLoading(true);
+            // Default the job name to Docintel-<subject area> for this domain;
+            // overridden below if a saved processing-config has an explicit job_name.
+            setJobName(`Docintel-${domainId}`);
             try {
                 const r = await fetch("/api/docintel/doc-type-schemas");
                 if (r.ok) {
@@ -1981,6 +1986,8 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                 // Faster polling for interactive (user watching live), slower for batch
                 const pollMs = mode === "interactive" ? 10_000 : 30_000;
                 if (!pollRef.current) pollRef.current = setInterval(fetchPipelineStatus, pollMs);
+                // Hand live progress to the global popup so it persists across tab navigation.
+                startRun({ domainId, jobName, runId: resp.run_id, runUrl: resp.run_url });
             } else {
                 const errText = !r.ok ? await r.text() : "Unknown error";
                 setPipelineData(prev => prev ? { ...prev, status: "error", message: errText } : { status: "error", message: errText });
@@ -2447,11 +2454,11 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 <label className="text-xs font-semibold text-gray-600 mb-1 block">Job Name (optional)</label>
                                 <input
                                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                    placeholder={`DocIntel-${domainId}`}
+                                    placeholder={`Docintel-${domainId}`}
                                     value={jobName}
                                     onChange={e => setJobName(e.target.value)}
                                 />
-                                <p className="text-[11px] text-gray-400 mt-1">Leave blank to use the existing job for this domain.</p>
+                                <p className="text-[11px] text-gray-400 mt-1">Defaults to <span className="font-mono">Docintel-{domainId}</span>. Display label only — the domain&apos;s pipeline job is used to run.</p>
                             </div>
                         </div>
                     </div>
@@ -2880,20 +2887,17 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                         )}
                     </div>
 
-                    {/* Pipeline stages — only show for runs triggered in THIS session
-                        (prevents previous run's saved status from appearing on mount) */}
+                    {/* Live pipeline progress now renders in the global status popup
+                        (bottom-right), which keeps updating across tab navigation. */}
                     {sessionRunTriggered && (
                       pipelineData?.status === "running" ||
                       pipelineData?.status === "succeeded" ||
                       pipelineData?.status === "failed"
                     ) && (
-                        <PipelineStagesDisplay
-                            pipelineStatus={pipelineData!.status}
-                            startTimeMs={pipelineData!.start_time_ms}
-                            elapsedMs={pipelineData!.duration_ms}
-                            tasks={pipelineData!.tasks}
-                            runMeta={runMeta}
-                        />
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-3 text-xs text-blue-700 flex items-center gap-2">
+                            <span className="animate-pulse">●</span>
+                            Live progress is shown in the status popup (bottom-right) — it keeps updating even if you switch tabs.
+                        </div>
                     )}
                     {/* Show last-run summary when no session run has been triggered yet */}
                     {!sessionRunTriggered && pipelineData && pipelineData.status !== "never_run" && (

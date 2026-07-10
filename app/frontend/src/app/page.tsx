@@ -5,6 +5,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { DomainContext, DomainInfo } from "@/context/DomainContext";
 import Link from "next/link";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
+import { PipelineRunProvider } from "@/context/PipelineRunContext";
+import { PipelineStatusPopup } from "@/components/PipelineStatusPopup";
 
 // Lazy-load each domain workspace module — now each receives domain as an explicit prop
 const DocIntelligence = dynamic(() => import("./document-intelligence/page"), {
@@ -337,6 +339,7 @@ export default function Home() {
 
   return (
     <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState }}>
+      <PipelineRunProvider>
       <main className="flex-1 flex flex-col bg-gray-50">
         {/* Domain + tab bar */}
         <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-0 min-h-[48px]">
@@ -520,6 +523,8 @@ export default function Home() {
           onClose={() => setViewDocId(null)}
         />
       )}
+      <PipelineStatusPopup />
+      </PipelineRunProvider>
     </DomainContext.Provider>
   );
 }
