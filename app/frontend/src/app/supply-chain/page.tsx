@@ -413,10 +413,6 @@ function buildTabs(domainId: string) {
       icon: "📊",
       label: "Overview",
       tooltip: "Document processing stats, entity distribution, and key extractions",
-      subs: [
-        { id: "summary", label: "Summary" },
-        { id: "charts",  label: "📈 Charts" },
-      ] as { id: string; label: string }[],
     },
     {
       id: "ontology",
@@ -2579,7 +2575,19 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
 
   useEffect(() => { loadMasterActions(); }, [loadMasterActions]);
 
-  // Reports sub-tab
+  // Collect all unique doc types needed by playbooks — must run unconditionally (hooks rules)
+  useEffect(() => {
+    if (catFilter === "reports") return; // skip when not needed, but hook is always called
+    const allPlaybooks = getDomainPlaybooks(domainId);
+    const allTypes = Array.from(new Set(allPlaybooks.flatMap(p => p.source_doc_types ?? [])));
+    if (!allTypes.length) return;
+    fetch(`${apiBase}/api/docintel/docs-by-type?domain_id=${encodeURIComponent(domainId)}&doc_types=${encodeURIComponent(allTypes.join(","))}`)
+      .then(r => r.ok ? r.json() : { by_type: {} })
+      .then(d => setDocsByType(d.by_type ?? {}))
+      .catch(() => {});
+  }, [domainId, catFilter, apiBase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reports sub-tab — early return AFTER all hooks
   if (catFilter === "reports") {
     return (
       <PanelErrorBoundary label="Action Reports">
@@ -2592,16 +2600,6 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
   const filtered = catFilter==="all"
     ? domainPlaybooks
     : domainPlaybooks.filter(p=>p.category.toLowerCase()===catFilter);
-
-  // Collect all unique doc types needed by visible playbooks and fetch them once
-  useEffect(() => {
-    const allTypes = Array.from(new Set(domainPlaybooks.flatMap(p => p.source_doc_types ?? [])));
-    if (!allTypes.length) return;
-    fetch(`/api/docintel/docs-by-type?domain_id=${encodeURIComponent(domainId)}&doc_types=${encodeURIComponent(allTypes.join(","))}`)
-      .then(r => r.ok ? r.json() : { by_type: {} })
-      .then(d => setDocsByType(d.by_type ?? {}))
-      .catch(() => {});
-  }, [domainId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCount = actions.filter(a=>a.status==="OPEN").length;
   const critCount = actions.filter(a=>a.priority==="CRITICAL"||a.priority==="HIGH").length;
@@ -3202,424 +3200,6 @@ interface IncidentSummary {
   affected_count: number; affected_label: string;
 }
 
-// ── Chart Builder ─────────────────────────────────────────────────────────────
-// Interactive chart panel for Control Tower — generic, works for any domain.
-// Uses pure SVG (no npm chart lib needed). Data sourced from DomainOverview.
-
-type ChartType = "bar" | "donut" | "horizontal_bar" | "area";
-
-interface ChartDef {
-  id:       string;
-  label:    string;
-  icon:     string;
-  type:     ChartType;
-  dataKey:  "doc_types" | "entity_types" | "recent_extractions" | "incident_counts";
-  nameField: string;
-  valueField: string;
-  description: string;
-}
-
-const GENERIC_CHARTS: ChartDef[] = [
-  {
-    id: "doc_type_bar",
-    label: "Documents by Type",
-    icon: "📄",
-    type: "bar",
-    dataKey: "doc_types",
-    nameField: "doc_type",
-    valueField: "doc_count",
-    description: "Volume of processed documents broken down by document type",
-  },
-  {
-    id: "doc_type_donut",
-    label: "Document Mix",
-    icon: "🍩",
-    type: "donut",
-    dataKey: "doc_types",
-    nameField: "doc_type",
-    valueField: "doc_count",
-    description: "Proportional distribution of document types in this subject area",
-  },
-  {
-    id: "entity_bar",
-    label: "Entity Types",
-    icon: "🕸️",
-    type: "horizontal_bar",
-    dataKey: "entity_types",
-    nameField: "entity_type",
-    valueField: "count",
-    description: "Knowledge graph entities by type extracted from your documents",
-  },
-  {
-    id: "doc_type_area",
-    label: "Doc Type Trend",
-    icon: "📈",
-    type: "area",
-    dataKey: "doc_types",
-    nameField: "doc_type",
-    valueField: "doc_count",
-    description: "Cumulative document processing across types (relative scale)",
-  },
-];
-
-const PALETTE = [
-  "#3b82f6","#6366f1","#8b5cf6","#ec4899","#ef4444",
-  "#f97316","#f59e0b","#10b981","#06b6d4","#14b8a6",
-];
-
-function SvgBarChart({ data, nameField, valueField, height = 200 }: {
-  data: Record<string,unknown>[]; nameField: string; valueField: string; height?: number;
-}) {
-  if (!data.length) return <p className="text-xs text-gray-400 text-center py-8">No data yet</p>;
-  const vals = data.map(d => Number(d[valueField]) || 0);
-  const max  = Math.max(...vals, 1);
-  const w    = 100 / data.length;
-  return (
-    <div className="w-full overflow-x-auto">
-      <svg width="100%" height={height} viewBox={`0 0 ${data.length * 60} ${height}`} preserveAspectRatio="xMidYMid meet">
-        {data.map((d, i) => {
-          const v    = Number(d[valueField]) || 0;
-          const bh   = Math.max(2, (v / max) * (height - 36));
-          const x    = i * 60 + 4;
-          const y    = height - bh - 24;
-          const name = String(d[nameField] || "").replace(/_/g," ");
-          const lbl  = name.length > 8 ? name.slice(0,7)+"…" : name;
-          return (
-            <g key={i}>
-              <rect x={x} y={y} width={52} height={bh} rx={3} fill={PALETTE[i % PALETTE.length]} opacity={0.85}/>
-              <text x={x+26} y={y-4} textAnchor="middle" fontSize="10" fill="#6b7280">{v}</text>
-              <text x={x+26} y={height-8} textAnchor="middle" fontSize="9" fill="#9ca3af">{lbl}</text>
-            </g>
-          );
-        })}
-      </svg>
-      <div className="flex flex-wrap gap-2 mt-2 justify-center">
-        {data.map((d,i) => (
-          <span key={i} className="flex items-center gap-1 text-[10px] text-gray-500">
-            <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{background: PALETTE[i%PALETTE.length]}}/>
-            {String(d[nameField]||"").replace(/_/g," ")}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SvgDonutChart({ data, nameField, valueField, size = 160 }: {
-  data: Record<string,unknown>[]; nameField: string; valueField: string; size?: number;
-}) {
-  if (!data.length) return <p className="text-xs text-gray-400 text-center py-8">No data yet</p>;
-  const total = data.reduce((s,d) => s + (Number(d[valueField])||0), 0) || 1;
-  const cx = size/2, cy = size/2, r = size*0.38, inner = size*0.23;
-  let angle = -Math.PI/2;
-  const slices = data.map((d,i) => {
-    const frac = (Number(d[valueField])||0) / total;
-    const a0   = angle;
-    const a1   = angle + frac * 2 * Math.PI;
-    angle = a1;
-    const x0 = cx + r*Math.cos(a0), y0 = cy + r*Math.sin(a0);
-    const x1 = cx + r*Math.cos(a1), y1 = cy + r*Math.sin(a1);
-    const xi0= cx + inner*Math.cos(a0), yi0= cy + inner*Math.sin(a0);
-    const xi1= cx + inner*Math.cos(a1), yi1= cy + inner*Math.sin(a1);
-    const large = frac > 0.5 ? 1 : 0;
-    return { d: `M${xi0},${yi0} L${x0},${y0} A${r},${r} 0 ${large} 1 ${x1},${y1} L${xi1},${yi1} A${inner},${inner} 0 ${large} 0 ${xi0},${yi0} Z`,
-      color: PALETTE[i%PALETTE.length], name: String(d[nameField]||"").replace(/_/g," "), val: Number(d[valueField])||0, pct: Math.round(frac*100) };
-  });
-  return (
-    <div className="flex flex-col items-center gap-3">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        {slices.map((s,i) => <path key={i} d={s.d} fill={s.color} opacity={0.88}/>)}
-        <text x={cx} y={cy-6} textAnchor="middle" fontSize="14" fontWeight="700" fill="#374151">{total}</text>
-        <text x={cx} y={cy+10} textAnchor="middle" fontSize="9" fill="#9ca3af">total</text>
-      </svg>
-      <div className="flex flex-wrap gap-2 justify-center">
-        {slices.map((s,i) => (
-          <span key={i} className="flex items-center gap-1 text-[10px] text-gray-500">
-            <span className="w-2 h-2 rounded-full shrink-0 inline-block" style={{background:s.color}}/>
-            {s.name} <span className="font-semibold text-gray-700">{s.pct}%</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SvgHorizontalBar({ data, nameField, valueField }: {
-  data: Record<string,unknown>[]; nameField: string; valueField: string;
-}) {
-  if (!data.length) return <p className="text-xs text-gray-400 text-center py-8">No data yet</p>;
-  const vals = data.map(d => Number(d[valueField])||0);
-  const max  = Math.max(...vals, 1);
-  const rows = data.slice(0,10);
-  return (
-    <div className="space-y-2">
-      {rows.map((d,i) => {
-        const v   = Number(d[valueField])||0;
-        const pct = (v/max)*100;
-        const nm  = String(d[nameField]||"").replace(/_/g," ");
-        return (
-          <div key={i} className="flex items-center gap-2 text-xs">
-            <span className="w-36 truncate text-gray-700 shrink-0">{nm}</span>
-            <div className="flex-1 h-5 bg-gray-100 rounded overflow-hidden">
-              <div className="h-full rounded transition-all" style={{width:`${pct}%`, background: PALETTE[i%PALETTE.length]}}/>
-            </div>
-            <span className="w-8 text-right font-mono text-gray-500 shrink-0">{v}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function SvgAreaChart({ data, nameField, valueField, height=160 }: {
-  data: Record<string,unknown>[]; nameField: string; valueField: string; height?: number;
-}) {
-  if (data.length < 2) return <SvgBarChart data={data} nameField={nameField} valueField={valueField} height={height}/>;
-  const w   = 540;
-  const pad = 20;
-  const vals= data.map(d => Number(d[valueField])||0);
-  const max = Math.max(...vals, 1);
-  const pts = data.map((d,i) => {
-    const x = pad + (i/(data.length-1))*(w-2*pad);
-    const y = height - pad - ((Number(d[valueField])||0)/max)*(height-2*pad);
-    return `${x},${y}`;
-  });
-  const polyline = pts.join(" ");
-  const firstPt  = pts[0].split(",");
-  const lastPt   = pts[pts.length-1].split(",");
-  const area     = `M${pts[0]} L${polyline} L${lastPt[0]},${height-pad} L${firstPt[0]},${height-pad} Z`;
-  return (
-    <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3"/>
-          <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02"/>
-        </linearGradient>
-      </defs>
-      <path d={area} fill="url(#area-grad)"/>
-      <polyline points={polyline} fill="none" stroke="#3b82f6" strokeWidth="2"/>
-      {data.map((d,i) => {
-        const x = pad + (i/(data.length-1))*(w-2*pad);
-        const y = height - pad - ((Number(d[valueField])||0)/max)*(height-2*pad);
-        const nm= String(d[nameField]||"").replace(/_/g," ");
-        const lbl = nm.length>7? nm.slice(0,6)+"…": nm;
-        return (
-          <g key={i}>
-            <circle cx={x} cy={y} r={3} fill="#3b82f6"/>
-            <text x={x} y={height-4} textAnchor="middle" fontSize="9" fill="#9ca3af">{lbl}</text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-interface CustomChartState { label: string; type: ChartType; dataKey: ChartDef["dataKey"]; nameField: string; valueField: string; }
-
-function ChartBuilder({ overview }: { overview: DomainOverview | null }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [showCustom, setShowCustom]   = useState(false);
-  const [custom, setCustom]           = useState<CustomChartState>({
-    label: "", type: "bar", dataKey: "doc_types", nameField: "doc_type", valueField: "doc_count",
-  });
-  const [customCharts, setCustomCharts] = useState<(ChartDef & { id: string })[]>([]);
-
-  if (!overview) return (
-    <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2">
-      <span className="text-3xl">📊</span>
-      <p className="text-sm">No data yet — run the pipeline to process documents first.</p>
-    </div>
-  );
-
-  const allCharts: ChartDef[] = [...GENERIC_CHARTS, ...customCharts];
-  const activeChart = allCharts.find(c => c.id === selected) ?? GENERIC_CHARTS[0];
-
-  // Get the raw data array for the selected chart
-  function getChartData(chart: ChartDef): Record<string, unknown>[] {
-    if (chart.dataKey === "doc_types")          return overview?.doc_types as unknown as Record<string,unknown>[] ?? [];
-    if (chart.dataKey === "entity_types")       return overview?.entity_types as unknown as Record<string,unknown>[] ?? [];
-    if (chart.dataKey === "recent_extractions") return overview?.recent_extractions as unknown as Record<string,unknown>[] ?? [];
-    if (chart.dataKey === "incident_counts")    return Object.entries(overview?.incident_counts ?? {}).map(([k,v]) => ({ label: k, count: v }));
-    return [];
-  }
-
-  function renderChart(chart: ChartDef) {
-    const data = getChartData(chart);
-    if (chart.type === "donut")         return <SvgDonutChart data={data} nameField={chart.nameField} valueField={chart.valueField}/>;
-    if (chart.type === "horizontal_bar")return <SvgHorizontalBar data={data} nameField={chart.nameField} valueField={chart.valueField}/>;
-    if (chart.type === "area")          return <SvgAreaChart data={data} nameField={chart.nameField} valueField={chart.valueField}/>;
-    return <SvgBarChart data={data} nameField={chart.nameField} valueField={chart.valueField}/>;
-  }
-
-  // Field options based on data key
-  const FIELD_OPTIONS: Record<string, { name: string; value: string }[]> = {
-    doc_types:    [{ name:"doc_type", value:"doc_type" }, { name:"doc_count", value:"doc_count" }],
-    entity_types: [{ name:"entity_type", value:"entity_type" }, { name:"count", value:"count" }],
-    incident_counts: [{ name:"label", value:"label" }, { name:"count", value:"count" }],
-    recent_extractions: [{ name:"field_name", value:"field_name" }, { name:"field_value", value:"field_value" }],
-  };
-
-  function addCustomChart() {
-    if (!custom.label.trim()) return;
-    const newChart: ChartDef & { id: string } = {
-      ...custom,
-      id:          `custom_${Date.now()}`,
-      icon:        "✨",
-      description: `Custom chart — ${custom.dataKey.replace(/_/g," ")}`,
-    };
-    setCustomCharts(prev => [...prev, newChart]);
-    setSelected(newChart.id);
-    setShowCustom(false);
-    setCustom({ label: "", type: "bar", dataKey: "doc_types", nameField: "doc_type", valueField: "doc_count" });
-  }
-
-  return (
-    <div className="space-y-4">
-
-      {/* Chart Picker Row */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {allCharts.map(c => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => setSelected(c.id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer
-              ${(selected ?? GENERIC_CHARTS[0].id) === c.id
-                ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"}`}
-          >
-            <span>{c.icon}</span>{c.label}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => setShowCustom(v => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-dashed border-blue-300 text-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
-        >
-          + Custom Chart
-        </button>
-      </div>
-
-      {/* Custom Chart Builder */}
-      {showCustom && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-          <p className="text-sm font-semibold text-blue-900">Build Custom Chart</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Chart Title</label>
-              <input
-                className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                placeholder="e.g. Doc Types by Count"
-                value={custom.label}
-                onChange={e => setCustom(p => ({...p, label: e.target.value}))}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Chart Type</label>
-              <select
-                className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none"
-                value={custom.type}
-                onChange={e => setCustom(p => ({...p, type: e.target.value as ChartType}))}
-              >
-                <option value="bar">Vertical Bar</option>
-                <option value="horizontal_bar">Horizontal Bar</option>
-                <option value="donut">Donut / Pie</option>
-                <option value="area">Area / Line</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Data Source</label>
-              <select
-                className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none"
-                value={custom.dataKey}
-                onChange={e => {
-                  const dk = e.target.value as ChartDef["dataKey"];
-                  const opts = FIELD_OPTIONS[dk] ?? [];
-                  setCustom(p => ({...p, dataKey: dk, nameField: opts[0]?.name ?? "", valueField: opts[1]?.value ?? ""}));
-                }}
-              >
-                <option value="doc_types">Document Types</option>
-                <option value="entity_types">Entity Types</option>
-                <option value="incident_counts">Incident Counts</option>
-                <option value="recent_extractions">Recent Extractions</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Label Field / Value Field</label>
-              <div className="flex gap-1">
-                <select
-                  className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none"
-                  value={custom.nameField}
-                  onChange={e => setCustom(p => ({...p, nameField: e.target.value}))}
-                >
-                  {(FIELD_OPTIONS[custom.dataKey] ?? []).map(f => <option key={f.name} value={f.name}>{f.name}</option>)}
-                </select>
-                <select
-                  className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none"
-                  value={custom.valueField}
-                  onChange={e => setCustom(p => ({...p, valueField: e.target.value}))}
-                >
-                  {(FIELD_OPTIONS[custom.dataKey] ?? []).map(f => <option key={f.value} value={f.value}>{f.value}</option>)}
-                </select>
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button
-              type="button"
-              onClick={addCustomChart}
-              disabled={!custom.label.trim()}
-              className="px-4 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 cursor-pointer"
-            >
-              Add Chart
-            </button>
-            <button type="button" onClick={() => setShowCustom(false)} className="text-xs text-gray-500 hover:text-gray-800 cursor-pointer">Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Active Chart Display */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-              <span>{activeChart.icon}</span>{activeChart.label}
-            </h3>
-            <p className="text-xs text-gray-400 mt-0.5">{activeChart.description}</p>
-          </div>
-          {customCharts.find(c => c.id === activeChart.id) && (
-            <button
-              type="button"
-              onClick={() => { setCustomCharts(p => p.filter(c => c.id !== activeChart.id)); setSelected(null); }}
-              className="text-xs text-red-400 hover:text-red-600 cursor-pointer"
-            >
-              Remove
-            </button>
-          )}
-        </div>
-        <div className="min-h-[180px] flex items-center justify-center">
-          {renderChart(activeChart)}
-        </div>
-      </div>
-
-      {/* Data Summary strip */}
-      <div className="grid grid-cols-3 gap-3 text-center">
-        {[
-          { label: "Doc Types",  val: overview.doc_types.length },
-          { label: "Entities",   val: overview.total_entities },
-          { label: "Total Docs", val: overview.total_docs },
-        ].map(kpi => (
-          <div key={kpi.label} className="bg-white rounded-lg border border-gray-100 p-3">
-            <p className="text-lg font-bold text-blue-600">{(kpi.val ?? 0).toLocaleString()}</p>
-            <p className="text-[10px] text-gray-400 font-medium">{kpi.label}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SupplyChainPage({ domain: domainProp }: { domain?: import("@/context/DomainContext").DomainInfo }) {
@@ -3907,14 +3487,6 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
           {tab === "overview" && (
             <div className="space-y-4">
 
-              {/* Charts Sub-Tab */}
-              {sub === "charts" && (
-                <ChartBuilder overview={domainOverview}/>
-              )}
-
-              {/* Summary Sub-Tab (default) */}
-              {sub !== "charts" && (<>
-
               {/* KPI Cards */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {[
@@ -4048,10 +3620,8 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
                 )}
               </div>
 
-              </>)}
             </div>
           )}
-
 
           {/* ── ONTOLOGY TAB ── */}
           {tab === "ontology" && (
