@@ -1,9 +1,38 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Component } from "react";
+import type { ReactNode } from "react";
 import { getApiBaseUrl } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
+
+// ── Generic error boundary — prevents a sub-panel crash from killing the page ──
+class PanelErrorBoundary extends Component<{ children: ReactNode; label?: string }, { caught: boolean; msg: string }> {
+  constructor(props: { children: ReactNode; label?: string }) {
+    super(props);
+    this.state = { caught: false, msg: "" };
+  }
+  static getDerivedStateFromError(err: unknown) {
+    return { caught: true, msg: err instanceof Error ? err.message : String(err) };
+  }
+  render() {
+    if (this.state.caught) {
+      return (
+        <div className="p-6 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 space-y-2">
+          <p className="font-semibold">⚠️ {this.props.label ?? "Panel"} encountered an error</p>
+          <p className="text-xs font-mono text-red-600 break-all">{this.state.msg}</p>
+          <button
+            onClick={() => this.setState({ caught: false, msg: "" })}
+            className="text-xs px-3 py-1.5 rounded-lg border border-red-300 hover:bg-red-100 cursor-pointer"
+          >
+            ↺ Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -2552,7 +2581,11 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
 
   // Reports sub-tab
   if (catFilter === "reports") {
-    return <ActionReportsView domainId={domainId} apiBase={apiBase} />;
+    return (
+      <PanelErrorBoundary label="Action Reports">
+        <ActionReportsView domainId={domainId} apiBase={apiBase} />
+      </PanelErrorBoundary>
+    );
   }
 
   const domainPlaybooks = getDomainPlaybooks(domainId);
@@ -2971,37 +3004,60 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
 
 /** Action Reports sub-tab */
 function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: string }) {
-  const [data, setData]     = useState<{by_status:Record<string,number>;by_priority:Record<string,number>;total:number;overdue:ActionMasterRecord[];actions:ActionMasterRecord[];overdue_count:number} | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [data, setData]       = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState("ALL");
   const [histExpanded, setHistExpanded] = useState<string | null>(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
+    setError(null);
     fetch(`${apiBase}/api/docintel/action-reports?domain_id=${encodeURIComponent(domainId)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setData(d); })
-      .catch(() => {})
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(d => setData(d))
+      .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
-  };
-  useEffect(load, [domainId]); // eslint-disable-line
+  }, [domainId, apiBase]);
+
+  useEffect(() => { load(); }, [load]);
 
   const STATUS_ORDER = ["OPEN","INITIATED","IN_PROGRESS","PENDING_VERIFICATION","COMPLETED","IGNORED","CANCELLED"];
 
-  if (loading) return <div className="text-center text-sm text-gray-400 py-10">Loading action reports…</div>;
-  if (!data) return <div className="text-center text-sm text-gray-400 py-10">No action data yet.</div>;
+  if (loading) return <div className="text-center text-sm text-gray-400 py-10 animate-pulse">Loading action reports…</div>;
+  if (error)   return (
+    <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700 space-y-2">
+      <p className="font-semibold">Failed to load action reports</p>
+      <p className="text-xs font-mono">{error}</p>
+      <button onClick={load} className="text-xs px-3 py-1 rounded border border-red-300 hover:bg-red-100 cursor-pointer">↺ Retry</button>
+    </div>
+  );
+  if (!data) return <div className="text-center text-sm text-gray-400 py-10">No action data yet — log an action in the Action Center to see reports here.</div>;
 
-  const filtered = filterStatus === "ALL" ? data.actions : data.actions.filter(a => a.status === filterStatus);
+  // Defensively normalize every field — backend may return nulls
+  const byStatus:   Record<string, number> = (data.by_status   as Record<string,number>) ?? {};
+  const byPriority: Record<string, number> = (data.by_priority as Record<string,number>) ?? {};
+  const total:      number                 = Number(data.total ?? 0);
+  const overdueCount: number               = Number(data.overdue_count ?? 0);
+  const overdue:    ActionMasterRecord[]   = Array.isArray(data.overdue)  ? (data.overdue  as ActionMasterRecord[]) : [];
+  const allActions: ActionMasterRecord[]   = Array.isArray(data.actions)  ? (data.actions  as ActionMasterRecord[]) : [];
+
+  const filtered = filterStatus === "ALL"
+    ? allActions
+    : allActions.filter(a => (a.status ?? "OPEN") === filterStatus);
 
   return (
     <div className="space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Total Actions",  val: data.total,                 color: "bg-gray-50 border-gray-200 text-gray-800" },
-          { label: "Open / Active",  val: (data.by_status["OPEN"] ?? 0) + (data.by_status["INITIATED"] ?? 0) + (data.by_status["IN_PROGRESS"] ?? 0) + (data.by_status["PENDING_VERIFICATION"] ?? 0), color: "bg-blue-50 border-blue-200 text-blue-800" },
-          { label: "Completed",      val: data.by_status["COMPLETED"] ?? 0, color: "bg-green-50 border-green-200 text-green-800" },
-          { label: "Overdue",        val: data.overdue_count,         color: data.overdue_count > 0 ? "bg-red-50 border-red-200 text-red-800" : "bg-gray-50 border-gray-200 text-gray-800" },
+          { label: "Total Actions",  val: total,         color: "bg-gray-50 border-gray-200 text-gray-800" },
+          { label: "Open / Active",  val: (byStatus["OPEN"] ?? 0) + (byStatus["INITIATED"] ?? 0) + (byStatus["IN_PROGRESS"] ?? 0) + (byStatus["PENDING_VERIFICATION"] ?? 0), color: "bg-blue-50 border-blue-200 text-blue-800" },
+          { label: "Completed",      val: byStatus["COMPLETED"] ?? 0, color: "bg-green-50 border-green-200 text-green-800" },
+          { label: "Overdue",        val: overdueCount,  color: overdueCount > 0 ? "bg-red-50 border-red-200 text-red-800" : "bg-gray-50 border-gray-200 text-gray-800" },
         ].map(k => (
           <div key={k.label} className={`rounded-lg border px-4 py-3 ${k.color}`}>
             <p className="text-2xl font-bold">{k.val}</p>
@@ -3012,23 +3068,23 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
 
       {/* Status distribution */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {STATUS_ORDER.filter(s => data.by_status[s]).map(s => (
+        {STATUS_ORDER.filter(s => byStatus[s]).map(s => (
           <div key={s} className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${ACTION_STATUS_COLORS[s] ?? "bg-gray-50 border-gray-200 text-gray-700"}`}>
-            <span className="font-semibold">{data.by_status[s]}</span>
+            <span className="font-semibold">{byStatus[s]}</span>
             <span>{s.replace(/_/g, " ")}</span>
           </div>
         ))}
       </div>
 
       {/* Overdue actions */}
-      {data.overdue.length > 0 && (
+      {overdue.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-2">
-          <p className="text-xs font-semibold text-red-700">⚠️ {data.overdue.length} Overdue Actions</p>
-          {data.overdue.map(a => (
-            <div key={a.action_id} className="text-xs text-red-800 flex gap-2 items-start">
+          <p className="text-xs font-semibold text-red-700">⚠️ {overdue.length} Overdue Actions</p>
+          {overdue.map((a, idx) => (
+            <div key={a.action_id ?? idx} className="text-xs text-red-800 flex gap-2 items-start">
               <span className="font-mono font-semibold">{a.action_id}</span>
-              <span className="flex-1">{a.description}</span>
-              <span className="font-semibold text-red-600">Due {a.due_date}</span>
+              <span className="flex-1">{a.description ?? "—"}</span>
+              <span className="font-semibold text-red-600">Due {a.due_date ?? "—"}</span>
             </div>
           ))}
         </div>
@@ -3036,15 +3092,15 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
 
       {/* Refresh + filter */}
       <div className="flex items-center gap-2 flex-wrap">
-        <p className="text-xs font-semibold text-gray-600">All Actions</p>
+        <p className="text-xs font-semibold text-gray-600">All Actions ({allActions.length})</p>
         <div className="flex gap-1 ml-auto flex-wrap">
-          {["ALL", ...STATUS_ORDER].filter(s => s === "ALL" || data.by_status[s]).map(s => (
+          {["ALL", ...STATUS_ORDER].filter(s => s === "ALL" || byStatus[s]).map(s => (
             <button key={s} onClick={() => setFilterStatus(s)}
-              className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${filterStatus === s ? "bg-gray-800 text-white border-gray-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-              {s === "ALL" ? "All" : s.replace(/_/g, " ")}
+              className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors cursor-pointer ${filterStatus === s ? "bg-gray-800 text-white border-gray-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+              {s === "ALL" ? `All (${allActions.length})` : s.replace(/_/g, " ")}
             </button>
           ))}
-          <button onClick={load} className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 ml-1">↺ Refresh</button>
+          <button onClick={load} className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 ml-1 cursor-pointer">↺ Refresh</button>
         </div>
       </div>
 
@@ -4026,15 +4082,17 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
                   All actions logged with timestamp to <code className="bg-gray-100 px-1 rounded">jai_docintel.agents.action_log</code>
                 </p>
               </div>
-              <ActionCenter
-                catFilter={sub}
-                onLogged={loadActions}
-                actions={actions}
-                domainId={domainId}
-                incidentRef={activeIncidentId}
-                onDocClick={openDocViewer}
-                apiBase={getApiBaseUrl()}
-              />
+              <PanelErrorBoundary label="Action Center">
+                <ActionCenter
+                  catFilter={sub}
+                  onLogged={loadActions}
+                  actions={actions}
+                  domainId={domainId}
+                  incidentRef={activeIncidentId}
+                  onDocClick={openDocViewer}
+                  apiBase={getApiBaseUrl()}
+                />
+              </PanelErrorBoundary>
             </div>
           )}
 
