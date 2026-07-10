@@ -2420,14 +2420,17 @@ function ActionCard({ pb, onLogged, domainId = "supply_chain", incidentRef = "RC
   async function takeAction() {
     setSubmitting(true);
     try {
-      // Write to legacy action_log (backward compat)
-      await postJson(`/api/docintel/log-action?domain_id=${encodeURIComponent(domainId)}`, {
-        action_type: pb.action_type,
-        description: desc,
-        priority: pb.priority,
-        incident_ref: incidentRef,
-        logged_by: loggedBy,
-      });
+      // Write to legacy action_log (backward compat) — best-effort; must not block
+      // the platform.action_master write that Action Center / Reports read.
+      try {
+        await postJson(`/api/docintel/log-action?domain_id=${encodeURIComponent(domainId)}`, {
+          action_type: pb.action_type,
+          description: desc,
+          priority: pb.priority,
+          incident_ref: incidentRef,
+          logged_by: loggedBy,
+        });
+      } catch { /* legacy log optional */ }
       // Also write to platform.action_master for lifecycle tracking
       try {
         const res = await fetch(`${apiBase}/api/docintel/action-master`, {
@@ -3652,7 +3655,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                   <h2 className="text-base font-semibold text-gray-800">Action Center — {domainName}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {getDomainPlaybooks(domainId).length} predefined response actions across {getDomainCategories(domainId).length - 1} categories ·
-                  All actions logged with timestamp to <code className="bg-gray-100 px-1 rounded">jai_docintel.agents.action_log</code>
+                  Logged actions are tracked in <code className="bg-gray-100 px-1 rounded">jai_docintel.platform.action_master</code>
                 </p>
               </div>
               <PanelErrorBoundary label="Action Center">
