@@ -1,0 +1,555 @@
+# System Context
+
+You are building an enterprise-grade demonstration of Document Intelligence combined with Ontology and Semantic Retrieval for a Quick Service Restaurant (QSR) supply chain organization.
+
+The purpose of the system is to demonstrate how unstructured supply chain documents can be transformed into governed business knowledge that supports AI agents, semantic search, analytics, root cause analysis, and operational decision making.
+
+The implementation must be designed specifically for a Databricks Lakehouse architecture and should leverage Databricks-native capabilities whenever possible.
+
+The demo should resemble a realistic deployment for a large QSR organization such as Chick-fil-A, McDonald's, Taco Bell, or Starbucks.
+
+The goal is not OCR.
+
+The goal is not RAG.
+
+The goal is the creation of a semantic operational knowledge layer that combines:
+
+* Documents
+* Structured transactional data
+* Business ontology
+* Vector search
+* AI agents
+
+The final result should behave like an AI-powered supply chain control tower.
+
+---
+
+# Business Problem Statement
+
+Supply chain organizations possess large volumes of information that never enters ERP systems.
+
+ERP systems capture:
+
+* Purchase Orders
+* Receipts
+* Shipments
+* Inventory movements
+* Invoice payments
+
+Critical operational context exists elsewhere:
+
+* Supplier contracts
+* Bills of lading
+* Quality incident reports
+* Certificates of analysis
+* Inspection reports
+* Recall notices
+* Maintenance reports
+* Supplier emails
+* Delivery exception notifications
+
+These documents explain:
+
+* Why delays occurred
+* Why spoilage happened
+* Which suppliers caused risk
+* Which contracts determine liability
+* Which restaurants received affected product
+
+The system must convert these unstructured documents into structured business entities and relationships.
+
+---
+
+# Architectural Objective
+
+Transform:
+
+Unstructured Documents
+
+into
+
+Business Knowledge Graph
+
+that supports
+
+Operational AI Applications.
+
+Transformation pipeline:
+
+Documents
+→ Extraction
+→ Ontology Mapping
+→ Semantic Layer
+→ AI Agent
+→ Business Decision
+
+---
+
+# Required Databricks Components
+
+The implementation should use the following Databricks services where appropriate.
+
+## Storage
+
+* Unity Catalog Volumes
+* Delta Lake
+
+## Data Ingestion
+
+* Lakeflow Connect
+* Auto Loader
+
+## AI Processing
+
+* AI Functions
+* Foundation Model APIs
+* Document Parsing Functions
+
+## Search
+
+* Databricks Vector Search
+
+## AI Applications
+
+* Databricks AI Agents (Foundation Model APIs)
+
+## Governance
+
+* Unity Catalog
+* Lineage
+* Permissions
+* Data Classification
+
+---
+
+# Document Corpus
+
+Create a synthetic but realistic document package.
+
+The corpus should include approximately 10-15 documents.
+
+## Supplier Contract
+
+Fields:
+
+* Supplier Name
+* Effective Date
+* Expiration Date
+* SLA Requirements
+* Temperature Requirements
+* Liability Clauses
+* Penalty Clauses
+
+Example business rule:
+
+Supplier is liable if shipment temperature exceeds 40°F for more than 30 minutes.
+
+---
+
+## Bill of Lading
+
+Fields:
+
+* Shipment ID
+* Trailer ID
+* Carrier Name
+* Pickup Timestamp
+* Delivery Timestamp
+* Distribution Center
+* Product Quantity
+
+---
+
+## Temperature Monitoring Log
+
+Fields:
+
+* Timestamp
+* Temperature Reading
+* Threshold
+* Trailer Identifier
+
+Example event:
+
+37°F
+38°F
+44°F
+47°F
+48°F
+
+This document should trigger a temperature excursion event.
+
+---
+
+## Certificate of Analysis
+
+Fields:
+
+* Supplier
+* Lot Number
+* Product
+* Production Date
+* Expiration Date
+* Microbiology Results
+
+---
+
+## Quality Incident Report
+
+Example narrative:
+
+Trailer refrigeration unit failed for 68 minutes during transportation.
+
+Maximum internal trailer temperature reached 48°F.
+
+---
+
+## Recall Notice
+
+Fields:
+
+* Lot Number
+* Product
+* Severity
+* Recall Date
+* Impact Scope
+
+---
+
+## Email Chain
+
+Example topics:
+
+* Shipment exception approvals
+* Conditional release approvals
+* Distribution center escalations
+* Supplier communications
+
+---
+
+## Supplier Scorecard
+
+Fields:
+
+* On Time Delivery
+* Fill Rate
+* Defect Rate
+* Temperature Violations
+* Claims Frequency
+
+---
+
+# Structured Data Tables
+
+Generate realistic transactional tables.
+
+## Suppliers
+
+Columns:
+
+supplier_id
+supplier_name
+region
+risk_score
+contract_id
+
+---
+
+## Products
+
+Columns:
+
+product_id
+product_name
+category
+shelf_life_days
+
+---
+
+## Distribution Centers
+
+Columns:
+
+dc_id
+dc_name
+region
+
+---
+
+## Restaurants
+
+Columns:
+
+restaurant_id
+restaurant_name
+region
+distribution_center
+
+---
+
+## Shipments
+
+Columns:
+
+shipment_id
+supplier_id
+lot_number
+carrier_id
+dc_id
+departure_time
+arrival_time
+
+---
+
+## Inventory Distribution
+
+Columns:
+
+lot_number
+restaurant_id
+quantity_delivered
+delivery_date
+
+---
+
+# Ontology Requirements
+
+Create an ontology representing supply chain entities and relationships.
+
+Required entity classes:
+
+Supplier
+Contract
+Carrier
+Shipment
+DistributionCenter
+Restaurant
+Ingredient
+Product
+Lot
+QualityIncident
+RecallEvent
+TemperatureExcursion
+WeatherEvent
+Invoice
+
+---
+
+# Required Relationships
+
+Supplier SUPPLIES Product
+
+Supplier GOVERNED_BY Contract
+
+Shipment CONTAINS Lot
+
+Lot USED_IN Product
+
+Shipment DELIVERED_TO DistributionCenter
+
+DistributionCenter DISTRIBUTES_TO Restaurant
+
+Shipment EXPERIENCED TemperatureExcursion
+
+TemperatureExcursion GENERATED QualityIncident
+
+RecallEvent IMPACTED Lot
+
+Restaurant SOLD Product
+
+Carrier TRANSPORTED Shipment
+
+---
+
+# Entity Resolution Rules
+
+The system must support canonical identities.
+
+Examples:
+
+Store145
+Restaurant145
+ATL145
+Location145
+
+must resolve to:
+
+Restaurant_145
+
+Similarly:
+
+Tyson
+Tyson Foods
+Tyson Poultry Division
+
+must resolve to:
+
+Supplier_001
+
+The ontology must use canonical identifiers.
+
+---
+
+# Document Extraction Rules
+
+Each document should be transformed into normalized entities.
+
+Examples:
+
+Input:
+
+"Premium Poultry shipment exceeded 48°F during transit."
+
+Output:
+
+Supplier = Premium Poultry
+
+Shipment Event = Temperature Excursion
+
+Maximum Temperature = 48°F
+
+Risk Classification = High
+
+---
+
+Input:
+
+"Atlanta Distribution Center released shipment after QA review."
+
+Output:
+
+Distribution Center = Atlanta DC
+
+Approval Status = Conditional Release
+
+Responsible Organization = QA
+
+---
+
+# Vector Search Requirements
+
+All documents should be chunked and embedded.
+
+Required metadata:
+
+document_type
+supplier
+shipment_id
+lot_number
+region
+date
+risk_level
+
+Hybrid retrieval should support:
+
+* Semantic similarity
+* Metadata filtering
+* Ontology traversal
+
+---
+
+# Agent Requirements
+
+The AI agent should answer business questions that require reasoning across both structured and unstructured information.
+
+Examples:
+
+Which restaurants received product from the affected shipment?
+
+Which suppliers generated the highest number of temperature incidents?
+
+Which contracts transfer financial liability to suppliers?
+
+Which products are at greatest spoilage risk?
+
+Which distribution centers experience the highest cold chain failures?
+
+Which restaurants are affected by the recall?
+
+What is the estimated financial exposure?
+
+---
+
+# Demonstration Scenario
+
+Primary scenario:
+
+A refrigerated poultry shipment experienced a refrigeration failure during transport.
+
+Temperature exceeded contractual limits.
+
+The shipment was delivered to a distribution center.
+
+Inventory was distributed to multiple restaurants.
+
+A recall event was later issued.
+
+The system must determine:
+
+* impacted restaurants
+* impacted menu items
+* financial exposure
+* contractual liability
+* supplier risk implications
+
+---
+
+# Success Criteria
+
+The demo is successful if an executive can ask a natural language question and receive an answer synthesized from:
+
+* contracts
+* quality reports
+* temperature logs
+* recall notices
+* shipment records
+* supplier performance data
+* restaurant distribution data
+
+without manually searching documents.
+
+The system should demonstrate:
+
+Document Intelligence
++
+Ontology
++
+Vector Search
++
+AI Agents
++
+Lakehouse Governance
+
+working together as a single operational intelligence platform.
+
+---
+
+# Non-Goals
+
+Do not build a generic chatbot.
+
+Do not build a pure RAG application.
+
+Do not limit the implementation to OCR extraction.
+
+Do not create isolated document summaries.
+
+The objective is operational decision intelligence supported by semantic business context.
+
+---
+
+# Final Mental Model
+
+Documents answer:
+
+"What happened?"
+
+Ontology answers:
+
+"What does it mean?"
+
+AI Agents answer:
+
+"What should we do next?"
+
+The Lakehouse provides the governed platform that enables all three.

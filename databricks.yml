@@ -1,0 +1,260 @@
+bundle:
+  name: docintel
+
+variables:
+  catalog:
+    default: jai_docintel
+  domain_id:
+    default: supply_chain
+  schema_raw:
+    default: raw
+  schema_ont:
+    default: ontology
+  schema_vec:
+    default: vectors
+  schema_agt:
+    default: agents
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-4101016551133680.0.azuredatabricks.net
+      profile: jai-az-ws
+
+resources:
+  jobs:
+    docintel_full_pipeline:
+      name: "DocIntelligence — Full Pipeline"
+      description: "QSR Supply Chain Document Intelligence pipeline (runs notebooks 00–07 in sequence)"
+      tasks:
+        - task_key: platform_setup
+          notebook_task:
+            notebook_path: ./notebooks/00_platform_setup.py
+            base_parameters:
+              catalog: "${var.catalog}"
+
+        - task_key: setup
+          depends_on:
+            - task_key: platform_setup
+          notebook_task:
+            notebook_path: ./notebooks/00_setup.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              domain_id: "${var.domain_id}"
+
+        - task_key: synthetic_corpus
+          depends_on:
+            - task_key: setup
+          notebook_task:
+            notebook_path: ./notebooks/01_synthetic_corpus.py
+
+        - task_key: structured_tables
+          depends_on:
+            - task_key: setup
+          notebook_task:
+            notebook_path: ./notebooks/02_structured_tables.py
+
+        - task_key: generate_pdfs
+          depends_on:
+            - task_key: synthetic_corpus
+          notebook_task:
+            notebook_path: ./notebooks/00c_generate_pdfs.py
+
+        - task_key: workflow_prepare
+          depends_on:
+            - task_key: generate_pdfs
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/00-clean-pipeline-tables.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              output_volume_path: "/Volumes/jai_docintel/raw/documents/outputs/"
+              checkpoint_base_path: "ai_parse_document_app_workflow"
+              clean_pipeline_tables: "No"
+              raw_table_name: "parsed_documents_raw"
+              content_table_name: "parsed_documents_content"
+              structured_table_name: "parsed_documents_structured"
+
+        - task_key: workflow_parse
+          depends_on:
+            - task_key: workflow_prepare
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/01_parse_documents.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              source_volume_path: "/Volumes/jai_docintel/raw/documents/"
+              output_volume_path: "/Volumes/jai_docintel/raw/documents/outputs/"
+              table_name: "parsed_documents_raw"
+
+        - task_key: workflow_extract
+          depends_on:
+            - task_key: workflow_parse
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/02_extract_document_content.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              source_table_name: "parsed_documents_raw"
+              table_name: "parsed_documents_content"
+
+        - task_key: idp_pipeline
+          depends_on:
+            - task_key: workflow_extract
+          notebook_task:
+            notebook_path: ./notebooks/03_idp_pipeline.py
+            base_parameters:
+              domain_id: "${var.domain_id}"
+
+        - task_key: ontology_mapping
+          depends_on:
+            - task_key: idp_pipeline
+            - task_key: structured_tables
+          notebook_task:
+            notebook_path: ./notebooks/04_ontology_mapping.py
+            base_parameters:
+              domain_id: "${var.domain_id}"
+
+        - task_key: vector_search
+          depends_on:
+            - task_key: idp_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/05_vector_search.py
+            base_parameters:
+              domain_id: "${var.domain_id}"
+
+        - task_key: agent
+          depends_on:
+            - task_key: ontology_mapping
+            - task_key: vector_search
+          notebook_task:
+            notebook_path: ./notebooks/06_agent.py
+            base_parameters:
+              domain_id: "${var.domain_id}"
+
+        - task_key: demo_scenario
+          depends_on:
+            - task_key: agent
+          notebook_task:
+            notebook_path: ./notebooks/07_demo_scenario.py
+
+      email_notifications:
+        on_failure:
+          - jaiwant.jonathan@databricks.com
+
+    # On-demand / daily processing job — skips data-generation tasks,
+    # runs only the pipeline tasks that pick up newly uploaded documents
+    docintel_process_docs:
+      name: "DocIntelligence — Process New Documents"
+      description: "Processes newly uploaded documents: parse → classify/extract → ontology → vector search → agent registration. Safe to run on-demand or on a schedule."
+      parameters:
+        - name: domain_id
+          default: supply_chain
+      tasks:
+        - task_key: workflow_prepare
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/00-clean-pipeline-tables.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              output_volume_path: "/Volumes/jai_docintel/raw/documents/outputs/"
+              checkpoint_base_path: "ai_parse_document_app_workflow"
+              clean_pipeline_tables: "No"
+              raw_table_name: "parsed_documents_raw"
+              content_table_name: "parsed_documents_content"
+              structured_table_name: "parsed_documents_structured"
+
+        - task_key: workflow_parse
+          depends_on:
+            - task_key: workflow_prepare
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/01_parse_documents.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              source_volume_path: "/Volumes/jai_docintel/raw/documents/"
+              output_volume_path: "/Volumes/jai_docintel/raw/documents/outputs/"
+              table_name: "parsed_documents_raw"
+
+        - task_key: workflow_extract
+          depends_on:
+            - task_key: workflow_parse
+          notebook_task:
+            notebook_path: ./app/unstructured_workflow/src/transformations/02_extract_document_content.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              schema: "raw"
+              source_table_name: "parsed_documents_raw"
+              table_name: "parsed_documents_content"
+
+        - task_key: idp_pipeline
+          depends_on:
+            - task_key: workflow_extract
+          notebook_task:
+            notebook_path: ./notebooks/03_idp_pipeline.py
+            base_parameters:
+              domain_id: "{{job.parameters.domain_id}}"
+
+        - task_key: ontology_mapping
+          depends_on:
+            - task_key: idp_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/04_ontology_mapping.py
+            base_parameters:
+              domain_id: "{{job.parameters.domain_id}}"
+
+        - task_key: vector_search
+          depends_on:
+            - task_key: idp_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/05_vector_search.py
+            base_parameters:
+              domain_id: "{{job.parameters.domain_id}}"
+
+        - task_key: agent
+          depends_on:
+            - task_key: ontology_mapping
+            - task_key: vector_search
+          notebook_task:
+            notebook_path: ./notebooks/06_agent.py
+            base_parameters:
+              domain_id: "{{job.parameters.domain_id}}"
+
+      # Run nightly at 2 AM UTC to process documents uploaded during the day
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
+
+      email_notifications:
+        on_failure:
+          - jaiwant.jonathan@databricks.com
+
+    # Lightweight job for initializing a new domain (triggered by the setup wizard)
+    docintel_setup_domain:
+      name: "DocIntelligence — Setup New Domain"
+      description: "One-time setup for a new document intelligence domain: creates UC schema, volume, and tables."
+      parameters:
+        - name: domain_id
+          default: supply_chain
+      tasks:
+        - task_key: platform_setup
+          notebook_task:
+            notebook_path: ./notebooks/00_platform_setup.py
+            base_parameters:
+              catalog: "${var.catalog}"
+
+        - task_key: domain_setup
+          depends_on:
+            - task_key: platform_setup
+          notebook_task:
+            notebook_path: ./notebooks/00_setup.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              domain_id: "{{job.parameters.domain_id}}"
+
+      email_notifications:
+        on_failure:
+          - jaiwant.jonathan@databricks.com
