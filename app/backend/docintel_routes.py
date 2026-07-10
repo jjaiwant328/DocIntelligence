@@ -294,6 +294,32 @@ def run_sql(query: str, timeout_secs: int = 50) -> list:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+def _unwrap_value(raw):
+    """Normalize an ai_extract field_value into a clean scalar string (or None).
+
+    field_value may be a dict {"value": X}, a JSON/Python-repr string, or a plain
+    string. Null/empty forms (including the raw wrapper 'Value:null') return None so
+    raw payloads never leak into the UI.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return _unwrap_value(raw.get("value") or raw.get("text") or raw.get("answer"))
+    s = str(raw).strip()
+    if not s or s.lower() in ("none", "null", "value:null", "{}", '{"value":null}', "{'value': none}"):
+        return None
+    if s.startswith("{"):
+        import json as _json, ast as _ast
+        for _parse in (_json.loads, _ast.literal_eval):
+            try:
+                obj = _parse(s)
+                if isinstance(obj, dict):
+                    return _unwrap_value(obj.get("value") or obj.get("text") or obj.get("answer"))
+            except Exception:
+                pass
+    return s
+
 # ── Classification labels (same as notebooks/03_idp_pipeline.py) ──────────────
 
 CLASSIFICATION_LABELS = json.dumps({
@@ -3791,8 +3817,14 @@ async def correspondence_digest(domain_id: str = "supply_chain"):
             LIMIT 200
         """) or []
 
-        # Derive status from deadline
+        # Clean raw field values (unwrap {"value":...}) and derive status from deadline
+        _RISK_LEVELS = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
         for row in rows:
+            for _f in ("jurisdiction", "assigned_owner", "deadline", "statute_number"):
+                row[_f] = _unwrap_value(row.get(_f))
+            _rl = _unwrap_value(row.get("risk_level"))
+            _rl = _rl.strip().upper() if _rl else None
+            row["risk_level"] = _rl if _rl in _RISK_LEVELS else None
             dl = row.get("deadline") or ""
             if not dl:
                 row["status"] = "NO_DEADLINE"

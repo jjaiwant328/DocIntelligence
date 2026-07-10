@@ -1812,13 +1812,16 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                     <td className="px-3 py-2.5 text-gray-600">{item.assigned_owner || "—"}</td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{item.deadline || "—"}</td>
                     <td className="px-3 py-2.5">
-                      {item.risk_level ? (
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          item.risk_level === "CRITICAL" ? "bg-red-600 text-white" :
-                          item.risk_level === "HIGH" ? "bg-red-100 text-red-700" :
-                          item.risk_level === "MEDIUM" ? "bg-amber-100 text-amber-700" :
-                          "bg-gray-100 text-gray-600"}`}>{item.risk_level}</span>
-                      ) : "—"}
+                      {["CRITICAL","HIGH","MEDIUM","LOW"].includes((item.risk_level || "").toUpperCase()) ? (() => {
+                        const rl = (item.risk_level || "").toUpperCase();
+                        return (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            rl === "CRITICAL" ? "bg-red-600 text-white" :
+                            rl === "HIGH" ? "bg-red-100 text-red-700" :
+                            rl === "MEDIUM" ? "bg-amber-100 text-amber-700" :
+                            "bg-gray-100 text-gray-600"}`}>{rl}</span>
+                        );
+                      })() : "—"}
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${digestStatusStyle[item.status] ?? "bg-gray-100 text-gray-500"}`}>

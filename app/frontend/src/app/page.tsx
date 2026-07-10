@@ -61,15 +61,10 @@ const WORKSPACE_TABS = [
     badgeColor: "bg-green-100 text-green-700",
     description: "Incident overview, ontology map, supplier risk rankings, and action center.",
   },
-  {
-    id: "agent",
-    icon: "🤖",
-    label: "AI Agent",
-    shortLabel: "AI Agent",
-    badge: "FMAPIs · UC Tools",
-    badgeColor: "bg-purple-100 text-purple-700",
-    description: "Ask natural-language questions across documents, Delta tables, and the knowledge graph.",
-  },
+  // AI Agent tab removed — redundant with Copilot Studio → Ask Copilot, which uses the
+  // same Vector Search + LLM path for these domains and is a richer superset (structured
+  // answers, per-fact source links, briefings, prompt management). The agent route
+  // (app/agent/page.tsx) remains on disk for easy restore.
 ];
 
 const STATUS_COLOR: Record<string, string> = {
@@ -414,7 +409,6 @@ export default function Home() {
           {activeTab === "doc"     && <DocIntelligence domain={activeDomain!} />}
           {activeTab === "library" && <DocIntelligence domain={activeDomain!} initialStep="library" />}
           {activeTab === "tower"   && <ControlTower domain={activeDomain!} />}
-          {activeTab === "agent"   && <AIAgent domain={activeDomain!} />}
         </div>
       </main>
 
