@@ -1634,7 +1634,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${digestStatusStyle[item.status] ?? "bg-gray-100 text-gray-500"}`}>
-                        {item.status.replace("_", " ")}
+                        {(item.status ?? "").replace("_", " ")}
                       </span>
                     </td>
                   </tr>
@@ -2538,8 +2538,8 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
               return (
                 <div key={i} className={`rounded-md border p-2.5 text-xs ${needsAction?"border-red-200 bg-red-50":"border-gray-100 bg-white"}`}>
                   <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                    <span className={`px-1.5 py-0.5 rounded font-semibold text-[10px] ${prioColor[a.priority]??prioColor.MEDIUM}`}>{a.priority}</span>
-                    <span className="font-medium text-gray-700">{a.action_type.replace(/_/g," ")}</span>
+                    <span className={`px-1.5 py-0.5 rounded font-semibold text-[10px] ${prioColor[a.priority??'MEDIUM']??prioColor.MEDIUM}`}>{a.priority ?? "MEDIUM"}</span>
+                    <span className="font-medium text-gray-700">{(a.action_type ?? "").replace(/_/g," ")}</span>
                     {needsAction&&<span className="text-[10px] font-bold text-red-600 animate-pulse ml-auto">⚠ OPEN</span>}
                   </div>
                   <p className="text-gray-600">{a.description}</p>
@@ -2760,7 +2760,7 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
     PENDING_VERIFICATION: ["COMPLETED", "IN_PROGRESS"],
   };
 
-  const allowedTransitions = STATUS_TRANSITIONS[action.status] ?? [];
+  const allowedTransitions = STATUS_TRANSITIONS[safeStatus] ?? [];
 
   async function doTransition(newStatus: string, vals: Record<string, string>) {
     setSubmitting(true);
@@ -2798,17 +2798,20 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
     setHistOpen(true);
   }
 
-  const statusColor = ACTION_STATUS_COLORS[action.status] ?? ACTION_STATUS_COLORS.OPEN;
+  const safeStatus     = action.status     ?? "OPEN";
+  const safeActionType = action.action_type ?? "";
+  const safePriority   = action.priority   ?? "MEDIUM";
+  const statusColor    = ACTION_STATUS_COLORS[safeStatus] ?? ACTION_STATUS_COLORS.OPEN;
 
   return (
-    <div className={`rounded-lg border p-3.5 bg-white text-xs space-y-2 ${["COMPLETED","CANCELLED","IGNORED"].includes(action.status) ? "opacity-60" : ""}`}>
+    <div className={`rounded-lg border p-3.5 bg-white text-xs space-y-2 ${["COMPLETED","CANCELLED","IGNORED"].includes(safeStatus) ? "opacity-60" : ""}`}>
       <div className="flex items-start gap-2 flex-wrap">
-        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[action.priority] ?? prioColor.MEDIUM}`}>{action.priority}</span>
-        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusColor}`}>{action.status.replace(/_/g, " ")}</span>
-        <span className="font-medium text-gray-800 flex-1">{action.action_type.replace(/_/g, " ")}</span>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[safePriority] ?? prioColor.MEDIUM}`}>{safePriority}</span>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusColor}`}>{safeStatus.replace(/_/g, " ")}</span>
+        <span className="font-medium text-gray-800 flex-1">{safeActionType.replace(/_/g, " ")}</span>
         <span className="text-gray-400 font-mono text-[10px]">#{action.action_id}</span>
       </div>
-      <p className="text-gray-600 leading-relaxed">{action.description}</p>
+      <p className="text-gray-600 leading-relaxed">{action.description ?? "—"}</p>
       <div className="flex flex-wrap gap-3 text-[10px] text-gray-400">
         {action.owner     && <span>👤 {action.owner}</span>}
         {action.due_date  && <span>📅 Due {action.due_date}</span>}
@@ -2849,7 +2852,7 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
       {/* Transition modal */}
       {modal && TRANSITION_CONFIG[modal] && (
         <TransitionModal
-          title={`${TRANSITION_CONFIG[modal].label}: ${action.action_type.replace(/_/g," ")}`}
+          title={`${TRANSITION_CONFIG[modal].label}: ${(action.action_type ?? "").replace(/_/g," ")}`}
           fields={TRANSITION_CONFIG[modal].fields}
           submitting={submitting}
           onCancel={() => setModal(null)}
@@ -2952,30 +2955,37 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
           {filtered.length === 0 && (
             <div className="text-center text-xs text-gray-400 py-8">No actions matching this filter.</div>
           )}
-          {filtered.map(a => (
-            <div key={a.action_id}>
+          {filtered.map(a => {
+            const safeType   = (a.action_type   ?? "").replace(/_/g, " ");
+            const safeStatus = (a.status        ?? "OPEN").replace(/_/g, " ");
+            const safePrio   = a.priority ?? "MEDIUM";
+            const isOverdue  = a.due_date
+              ? a.due_date < new Date().toISOString().slice(0,10) && !["COMPLETED","CANCELLED"].includes(a.status ?? "")
+              : false;
+            return (
+            <div key={a.action_id ?? Math.random()}>
               <div className="grid grid-cols-12 px-3 py-2.5 text-xs hover:bg-gray-50 cursor-pointer"
                 onClick={() => setHistExpanded(h => h === a.action_id ? null : a.action_id)}>
                 <div className="col-span-2">
                   <p className="font-mono text-[10px] text-gray-500">{a.action_id}</p>
-                  <p className="text-gray-700 font-medium truncate">{a.action_type.replace(/_/g," ")}</p>
+                  <p className="text-gray-700 font-medium truncate">{safeType}</p>
                 </div>
                 <div className="col-span-4 pr-2">
-                  <p className="text-gray-600 line-clamp-2">{a.description}</p>
+                  <p className="text-gray-600 line-clamp-2">{a.description ?? "—"}</p>
                 </div>
                 <div className="col-span-2">
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[a.status] ?? ""}`}>
-                    {a.status.replace(/_/g," ")}
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[a.status ?? "OPEN"] ?? ""}`}>
+                    {safeStatus}
                   </span>
                 </div>
                 <div className="col-span-2 space-y-0.5">
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${prioColor[a.priority] ?? prioColor.MEDIUM}`}>{a.priority}</span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${prioColor[safePrio] ?? prioColor.MEDIUM}`}>{safePrio}</span>
                   {a.owner && <p className="text-gray-500 text-[10px]">👤 {a.owner}</p>}
                 </div>
                 <div className="col-span-2 text-[10px] text-gray-400 space-y-0.5">
                   {a.created_at && <p>{new Date(a.created_at).toLocaleDateString()}</p>}
-                  {a.due_date   && <p className={a.due_date < new Date().toISOString().slice(0,10) && !["COMPLETED","CANCELLED"].includes(a.status) ? "text-red-500 font-semibold" : ""}>{a.due_date}</p>}
-                  {a.completed_date && <p className="text-green-600">✓ {a.completed_date?.slice(0,10)}</p>}
+                  {a.due_date   && <p className={isOverdue ? "text-red-500 font-semibold" : ""}>{a.due_date}</p>}
+                  {a.completed_date && <p className="text-green-600">✓ {String(a.completed_date).slice(0,10)}</p>}
                 </div>
               </div>
               {/* History expansion */}
@@ -2983,7 +2993,8 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
                 <ActionHistoryInline actionId={a.action_id} apiBase={apiBase} />
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
