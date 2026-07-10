@@ -1,0 +1,8 @@
+app/.git_bak/
+app/.git/
+**/__pycache__/
+*.pyc
+.env
+node_modules/
+app/frontend/.next/
+app/frontend/out/
