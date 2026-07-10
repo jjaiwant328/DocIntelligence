@@ -117,7 +117,7 @@ pdf_stream = (
     spark.readStream
         .format("cloudFiles")
         .options(**_base_opts)
-        .option("cloudFiles.pathGlobFilter", "*.{pdf,jpg,jpeg,png}")
+        .option("pathGlobFilter", "*.{pdf,jpg,jpeg,png}")
         .load(source_volume_path)
 )
 
