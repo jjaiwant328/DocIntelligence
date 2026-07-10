@@ -3203,7 +3203,7 @@ interface IncidentSummary {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-export default function SupplyChainPage({ domain: domainProp }: { domain?: import("@/context/DomainContext").DomainInfo }) {
+function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/context/DomainContext").DomainInfo }) {
   const { domain: domainCtx } = useDomain();
   const domain = domainProp ?? domainCtx;
   const domainId = domain?.domain_id || "supply_chain";
@@ -3703,4 +3703,15 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
     )}
     </>
   );
+}
+
+// Mount gate: this is a client-only dashboard. Returning null until mounted avoids a
+// static-export prerender crash (undefined.map during SSR of /supply-chain) and has no
+// user-visible effect in the browser beyond a single initial tick. Keeps `next build`
+// (and deploy.sh) green so frontend changes can deploy.
+export default function SupplyChainPage(props: { domain?: import("@/context/DomainContext").DomainInfo }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+  return <SupplyChainPageInner {...props} />;
 }
