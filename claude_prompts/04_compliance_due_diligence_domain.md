@@ -34,6 +34,8 @@ Bootstrap uploads corpus → volume → `00c_generate_pdfs.py` → activate.
 ### 3. Ontology overlay
 Rely on Prompt 02's config-driven map (from `ontology_config`). Verify Project/Municipality/RegulatoryRequirement/License/Response entities + the relationships above materialize in `{compliance_due_diligence}.entities`/`.relationships`.
 
+> **Known pre-existing bug to fix here** (surfaced in Phase 1 live testing): in `notebooks/04_ontology_mapping.py`, the generic `Document`-entity loop currently yields 0 rows even when `parsed_documents` has data (compliance had 43 docs but 0 Document entities). The Knowledge Graph for the new domain needs Document nodes — debug the `doc["doc_id"]`/`parsed_documents` read (likely a column-name/Row-access issue) as part of this domain build.
+
 ### 4. The four "agents" as tools (MVP — orchestrated inside existing agent)
 Add UC-function/LangChain tools consumed by `agent_query` for `domain_id=compliance_due_diligence`:
 1. **Intake** — classify a feasibility request → `{request_type, project/store, municipality, priority}` (reuse `ai_classify` + extracted fields).
