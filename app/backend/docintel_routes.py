@@ -4032,7 +4032,7 @@ def _ensure_escalation_rules_table():
                 rule_type  STRING,           -- low_confidence | deadline_risk | requirement_change | high_value
                 params     STRING,           -- JSON
                 target     STRING,           -- attorney_review | priority_bump | notify
-                active     BOOLEAN DEFAULT true,
+                active     BOOLEAN,           -- always written explicitly on insert
                 created_at TIMESTAMP
             ) USING DELTA
         """, timeout_secs=30)
