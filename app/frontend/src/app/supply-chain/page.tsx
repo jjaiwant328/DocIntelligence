@@ -2897,6 +2897,12 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
     PENDING_VERIFICATION: ["COMPLETED", "IN_PROGRESS"],
   };
 
+  // Normalize nullable DB fields BEFORE any code that uses them
+  const safeStatus     = action.status     ?? "OPEN";
+  const safeActionType = action.action_type ?? "";
+  const safePriority   = action.priority   ?? "MEDIUM";
+  const statusColor    = ACTION_STATUS_COLORS[safeStatus] ?? ACTION_STATUS_COLORS["OPEN"] ?? "";
+
   const allowedTransitions = STATUS_TRANSITIONS[safeStatus] ?? [];
 
   async function doTransition(newStatus: string, vals: Record<string, string>) {
@@ -2934,11 +2940,6 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
     setHistory(d.history ?? []);
     setHistOpen(true);
   }
-
-  const safeStatus     = action.status     ?? "OPEN";
-  const safeActionType = action.action_type ?? "";
-  const safePriority   = action.priority   ?? "MEDIUM";
-  const statusColor    = ACTION_STATUS_COLORS[safeStatus] ?? ACTION_STATUS_COLORS.OPEN;
 
   return (
     <div className={`rounded-lg border p-3.5 bg-white text-xs space-y-2 ${["COMPLETED","CANCELLED","IGNORED"].includes(safeStatus) ? "opacity-60" : ""}`}>
