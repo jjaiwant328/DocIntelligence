@@ -29,6 +29,15 @@ Authoritative name map: [`../platform/MANIFEST.md`](../platform/MANIFEST.md).
 - **No relocation of live code** in Phases 0–2. New artifacts go under `domains/` and new scripts/notebooks; the deployed backend/frontend/notebooks stay put.
 - **Verify before done.** Each prompt lists acceptance criteria; run them against profile `jai-az-ws`.
 
+## Primary target: the Compliance store-MVP demo
+
+The concrete goal these prompts serve is the **Compliance Due Diligence store-development demo** (RaceTrac feasibility — see `../store_development.md`). When a prompt offers options, choose what advances that demo: the Tampa feasibility walkthrough (classify → research municipal requirements → recall prior response → detect a regulatory change → create a tracked, escalated action). `compliance_due_diligence` is the flagship `domain_id`; `supply_chain` and the operational `compliance` domain are only regression baselines.
+
+## Deployment surface — apps & Genie (read before Phases 2–3)
+
+- **One Databricks App, not one-per-phase.** The existing multi-domain app (`app/frontend` + `app/backend`) serves every subject area via `?domain_id=`. Do **not** create a separate app for the compliance domain or for any phase — a new domain is a `domain_configs` row that the single app inherits. A second app would fork the platform (the anti-pattern this repo avoids).
+- **Genie space (optional, Phase 2/3).** The in-app AI Agent/Copilot already answers NL questions over Vector Search + gold tables. A **Genie space** is a worthwhile *addition* for structured/aggregate questions over the compliance tracker tables (e.g. "how many Tampa feasibility requests are open?", "which municipalities changed requirements this quarter?") — Genie generates SQL over `extracted_fields` / gold / `action_master`. Treat it as an optional enhancement wired into the Historical-Knowledge/Ask surface, not a replacement for the agent. If built: one Genie space scoped to the `compliance_due_diligence` schema + `platform.action_master`, surfaced in the app's Ask/Copilot tab. See `08_demo_experience.md`.
+
 ## Files
 
 - `01_platform_foundation.md`

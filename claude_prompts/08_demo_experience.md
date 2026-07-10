@@ -15,6 +15,7 @@ Once `compliance_due_diligence` is active, all of the above light up for it with
 2. **Change-Detection view** — surface `regulatory_change_history` / `REGULATORY CHANGE DETECTED` results (affected project, previous vs new requirement, impact) — ideally a sub-view under Control Tower → Compliance Map (Regulatory Pulse) or Copilot.
 3. **Escalation view** — show `platform.escalation_rules` and the `attorney_review_queue` entries with their triggering rule (extends the existing Legal Queue sub-view).
 4. **Demo script** — a runnable Tampa feasibility walkthrough (`domains/compliance_due_diligence/DEMO.md`): upload feasibility email → classify → research → recall prior Tampa project → detect Dallas change → create tracked action.
+5. **Genie space (optional enhancement — same app, no new app).** Create one Genie space scoped to the `compliance_due_diligence` schema + `platform.action_master` to answer structured/aggregate questions the agent handles poorly (e.g. "how many open Tampa feasibility requests?", "which municipalities changed requirements this quarter?"). Surface it inside the existing Copilot/Ask tab (e.g. a "Data Questions" mode) via the Genie Conversation API — do **not** stand up a separate application. Skip if the agent already answers these well enough for the demo.
 
 ## Deliverables
 - UI verification report for the new domain.
