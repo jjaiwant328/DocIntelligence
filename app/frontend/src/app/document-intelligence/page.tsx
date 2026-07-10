@@ -1662,6 +1662,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     const [configLoading, setConfigLoading]   = useState(true);
     const [savingConfig, setSavingConfig]     = useState(false);
     const [configSaved, setConfigSaved]       = useState(false);
+    const [configError, setConfigError]       = useState<string | null>(null);
     const [configLastSaved, setConfigLastSaved] = useState<string | null>(null);
 
     // Volume dropdown
@@ -1811,6 +1812,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     // ── Save config ──────────────────────────────────────────────────────────
     async function saveConfig() {
         setSavingConfig(true);
+        setConfigError(null);
         try {
             const body = {
                 domain_id: domainId,
@@ -1825,8 +1827,17 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            if (r.ok) { setConfigSaved(true); setConfigLastSaved(new Date().toISOString()); setTimeout(() => setConfigSaved(false), 3000); }
-        } catch { /* silent */ }
+            if (r.ok) {
+                setConfigSaved(true); setConfigLastSaved(new Date().toISOString());
+                setTimeout(() => setConfigSaved(false), 3000);
+            } else {
+                let detail = `Save failed (HTTP ${r.status})`;
+                try { const d = await r.json(); if (d?.detail) detail = d.detail; } catch { /* ignore */ }
+                setConfigError(detail);
+            }
+        } catch (e: unknown) {
+            setConfigError(e instanceof Error ? e.message : String(e));
+        }
         setSavingConfig(false);
     }
 
@@ -2560,9 +2571,14 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                             >
                                 {savingConfig ? "Saving…" : configSaved ? "✓ Saved" : "Save Configuration"}
                             </button>
-                            {configLastSaved && (
+                            {configLastSaved && !configError && (
                                 <span className="text-[11px] text-gray-400">
                                     Last saved {new Date(configLastSaved).toLocaleString()} · {domainId}
+                                </span>
+                            )}
+                            {configError && (
+                                <span className="text-[11px] text-red-600 max-w-md">
+                                    ⚠ Could not save: {configError}
                                 </span>
                             )}
                         </div>

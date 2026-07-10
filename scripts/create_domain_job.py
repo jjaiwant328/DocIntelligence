@@ -274,7 +274,9 @@ def grant_app_permissions(w: WorkspaceClient, job_id: int):
     try:
         acl = [JobAccessControlRequest(
             service_principal_name=APP_SERVICE_PRINCIPAL,
-            permission_level=PermissionLevel.CAN_MANAGE_RUN,
+            # CAN_MANAGE (not just CAN_MANAGE_RUN) so the app can edit the job
+            # schedule from the Process Documents UI, not only trigger runs.
+            permission_level=PermissionLevel.CAN_MANAGE,
         )]
         w.jobs.update_permissions(job_id=job_id, access_control_list=acl)
         print(f"  Granted CAN_MANAGE_RUN to app SP ({APP_SERVICE_PRINCIPAL})")

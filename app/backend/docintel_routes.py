@@ -1381,7 +1381,7 @@ def _ensure_proc_cfg_table():
                 doc_types        STRING,    -- JSON array of doc type strings to process
                 job_name         STRING,
                 schedule_cron    STRING,    -- cron expression, e.g. "0 2 * * *"
-                skip_no_schema   BOOLEAN DEFAULT TRUE,
+                skip_no_schema   BOOLEAN,
                 updated_at       TIMESTAMP
             ) USING DELTA
         """, timeout_secs=30)
@@ -2038,7 +2038,7 @@ def _ensure_action_log_table(table_name: str):
                 priority      STRING,
                 incident_ref  STRING,
                 logged_by     STRING,
-                status        STRING DEFAULT 'OPEN'
+                status        STRING
             )
             USING DELTA
             TBLPROPERTIES ('delta.enableChangeDataFeed' = 'false')
@@ -3900,7 +3900,7 @@ def _ensure_attorney_queue_table():
                 response_summary STRING,
                 flagged_reason   STRING,
                 flagged_at    TIMESTAMP,
-                status        STRING DEFAULT 'PENDING',
+                status        STRING,
                 reviewed_by   STRING,
                 reviewed_at   TIMESTAMP
             ) USING DELTA
@@ -4569,7 +4569,7 @@ def _ensure_action_master_table():
             priority             STRING,
             source_doc_ids       STRING,
             incident_ref         STRING,
-            status               STRING  DEFAULT 'OPEN',
+            status               STRING,
             owner                STRING,
             due_date             DATE,
             eta                  DATE,
