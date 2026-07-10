@@ -185,7 +185,7 @@ txt_stream = (
         .option("cloudFiles.format",               "text")
         .option("cloudFiles.includeExistingFiles",  "true")
         .option("cloudFiles.useNotifications",      str(use_notifications).lower())
-        .option("pathGlobFilter",                   "*.txt")
+        .option("cloudFiles.pathGlobFilter",        "*.txt")
         .option("wholetext",                        "true")   # read each file as a single string
         .load(source_volume_path)
 )
