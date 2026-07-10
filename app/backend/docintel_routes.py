@@ -4161,6 +4161,27 @@ async def create_copilot_prompt(req: CopilotPromptCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/copilot-prompts/{prompt_id}/full")
+async def get_copilot_prompt_full(prompt_id: str):
+    """Return the full text of a single prompt (not truncated)."""
+    _ensure_copilot_prompts_table()
+    try:
+        rows = run_sql(f"""
+            SELECT prompt_id, domain_id, name, prompt_text, is_active,
+                   CAST(created_at AS STRING) AS created_at
+            FROM {CATALOG}.platform.copilot_prompts
+            WHERE prompt_id = '{prompt_id}'
+            LIMIT 1
+        """, timeout_secs=20) or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        return rows[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/copilot-prompts/{prompt_id}")
 async def update_copilot_prompt(prompt_id: str, req: CopilotPromptUpdateRequest):
     """Edit the name and/or text of an existing prompt."""
