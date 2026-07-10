@@ -1,5 +1,10 @@
 # Component 3 — Action Management Framework (reuse-aware)
 
+> **Status: IMPLEMENTED in Phase 1.** `platform.escalation_rules` + a deterministic
+> `evaluate_escalations()` / `_apply_escalation_rule()` are in `app/backend/docintel_routes.py`,
+> wired into `POST /action-master` (optional context signals) and exposed via
+> `GET/POST /escalation-rules` and `POST /escalation-evaluate` (for change-detection).
+
 ## Goal
 Add a **deterministic escalation rules engine** to the existing action framework. Do **not** create a new `platform.actions` table.
 

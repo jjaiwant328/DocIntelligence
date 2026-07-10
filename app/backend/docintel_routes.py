@@ -4000,6 +4000,217 @@ async def update_attorney_review(item_id: str, req: AttorneyQueueUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Escalation Rules Engine ───────────────────────────────────────────────────
+# Deterministic rules that turn document/answer signals into escalations. This is
+# the DECISION maker for escalation (replacing the previous LLM-substring
+# "attorney review recommended" heuristic). An LLM hint, if any, is just one
+# optional signal in the context. Backward compatible: with no context signals,
+# no rule fires, so existing callers behave exactly as before.
+
+from datetime import date as _date
+
+_escalation_rules_checked = False
+
+# rule_id, rule_type, params, target
+_DEFAULT_ESCALATION_RULES = [
+    ("low_confidence_default",    "low_confidence",     {"threshold": 0.85}, "attorney_review"),
+    ("deadline_risk_default",     "deadline_risk",      {},                  "priority_bump"),
+    ("requirement_change_default","requirement_change", {},                  "attorney_review"),
+    ("high_value_default",        "high_value",         {},                  "priority_bump"),
+]
+
+
+def _ensure_escalation_rules_table():
+    global _escalation_rules_checked
+    if _escalation_rules_checked:
+        return
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.escalation_rules (
+                rule_id    STRING NOT NULL,
+                domain_id  STRING,           -- '' or NULL = applies to all domains
+                rule_type  STRING,           -- low_confidence | deadline_risk | requirement_change | high_value
+                params     STRING,           -- JSON
+                target     STRING,           -- attorney_review | priority_bump | notify
+                active     BOOLEAN DEFAULT true,
+                created_at TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+        existing = run_sql(
+            f"SELECT COUNT(*) AS c FROM {CATALOG}.platform.escalation_rules", timeout_secs=20) or []
+        if existing and int(existing[0].get("c", 0) or 0) == 0:
+            for rid, rtype, params, target in _DEFAULT_ESCALATION_RULES:
+                p = json.dumps(params).replace("'", "\\'")
+                run_sql(f"""
+                    INSERT INTO {CATALOG}.platform.escalation_rules
+                        (rule_id, domain_id, rule_type, params, target, active, created_at)
+                    VALUES ('{rid}', '', '{rtype}', '{p}', '{target}', true, current_timestamp())
+                """, timeout_secs=20)
+        _escalation_rules_checked = True
+    except Exception:
+        _escalation_rules_checked = True  # don't keep retrying on persistent failures
+
+
+def _load_escalation_rules(domain_id: str) -> list:
+    """Active rules for a domain (plus global rules with empty domain_id)."""
+    _ensure_escalation_rules_table()
+    dom = (domain_id or "").replace("'", "\\'")
+    try:
+        rows = run_sql(f"""
+            SELECT rule_id, domain_id, rule_type, params, target, active
+            FROM {CATALOG}.platform.escalation_rules
+            WHERE active = true
+              AND (domain_id = '' OR domain_id IS NULL OR domain_id = '{dom}')
+        """, timeout_secs=20) or []
+        for r in rows:
+            try:
+                r["params"] = json.loads(r.get("params") or "{}")
+            except Exception:
+                r["params"] = {}
+        return rows
+    except Exception:
+        # In-memory defaults if the table is unreachable
+        return [{"rule_id": rid, "domain_id": "", "rule_type": rtype,
+                 "params": params, "target": target, "active": True}
+                for rid, rtype, params, target in _DEFAULT_ESCALATION_RULES]
+
+
+def _apply_escalation_rule(rule: dict, context: dict, today=None):
+    """Pure, deterministic evaluation of one rule against a context dict.
+    Returns a trigger dict when the rule fires, else None. Unit-testable."""
+    today  = today or _date.today()
+    rtype  = rule.get("rule_type")
+    params = rule.get("params") or {}
+    rid    = rule.get("rule_id")
+    target = rule.get("target")
+
+    if rtype == "low_confidence":
+        conf = context.get("confidence")
+        thr  = float(params.get("threshold", 0.85))
+        if conf is not None and float(conf) < thr:
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": f"Confidence {float(conf):.2f} below threshold {thr:.2f}"}
+
+    elif rtype == "deadline_risk":
+        lead      = context.get("license_lead_time_days")
+        open_date = context.get("expected_open_date")
+        if lead is not None and open_date:
+            try:
+                od         = _date.fromisoformat(str(open_date)[:10])
+                days_until = (od - today).days
+                if int(lead) > days_until:
+                    return {"rule_id": rid, "rule_type": rtype, "target": target,
+                            "reason": (f"License lead time {int(lead)}d exceeds "
+                                       f"{days_until}d until open date {od.isoformat()}")}
+            except Exception:
+                return None
+
+    elif rtype == "requirement_change":
+        if context.get("requirement_change"):
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": context.get("change_summary")
+                              or "Regulatory requirement changed vs prior decision"}
+
+    elif rtype == "high_value":
+        if context.get("high_value"):
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": "High-value / strategic project"}
+
+    return None
+
+
+def evaluate_escalations(domain_id: str, context: dict) -> list:
+    """Deterministically evaluate all active rules for a domain against a context.
+    Returns the list of triggered rule dicts (empty when nothing fires)."""
+    triggered = []
+    for rule in _load_escalation_rules(domain_id):
+        hit = _apply_escalation_rule(rule, context or {})
+        if hit:
+            triggered.append(hit)
+    return triggered
+
+
+def _queue_attorney_review(domain_id: str, query: str, summary: str, reason: str):
+    """Insert a PENDING row into the attorney review queue. Returns id or None."""
+    _ensure_attorney_queue_table()
+    try:
+        import uuid as _uuid
+        item_id = str(_uuid.uuid4())
+        q = (query or "")[:500].replace("'", "\\'")
+        s = (summary or "")[:1000].replace("'", "\\'")
+        r = (reason or "")[:500].replace("'", "\\'")
+        d = (domain_id or "").replace("'", "\\'")
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.attorney_review_queue
+                (id, domain_id, query, response_summary, flagged_reason, flagged_at, status)
+            VALUES ('{item_id}', '{d}', '{q}', '{s}', '{r}', current_timestamp(), 'PENDING')
+        """, timeout_secs=20)
+        return item_id
+    except Exception:
+        return None
+
+
+class EscalationRuleUpsertRequest(BaseModel):
+    rule_id:   str
+    domain_id: str  = ""          # '' = all domains
+    rule_type: str                # low_confidence | deadline_risk | requirement_change | high_value
+    params:    dict = {}
+    target:    str  = "attorney_review"
+    active:    bool = True
+
+
+class EscalationEvaluateRequest(BaseModel):
+    domain_id:     str  = "supply_chain"
+    context:       dict = {}
+    apply_actions: bool = False   # if True, queue attorney reviews for triggered rules
+    query:         str  = ""      # optional label for the queued review
+
+
+@router.get("/escalation-rules")
+async def get_escalation_rules(domain_id: str = ""):
+    rules = _load_escalation_rules(domain_id)
+    return {"rules": rules, "total": len(rules)}
+
+
+@router.post("/escalation-rules")
+async def upsert_escalation_rule(req: EscalationRuleUpsertRequest):
+    _ensure_escalation_rules_table()
+    try:
+        rid    = req.rule_id.replace("'", "\\'")
+        dom    = (req.domain_id or "").replace("'", "\\'")
+        rtype  = req.rule_type.replace("'", "\\'")
+        target = req.target.replace("'", "\\'")
+        p      = json.dumps(req.params or {}).replace("'", "\\'")
+        run_sql(f"DELETE FROM {CATALOG}.platform.escalation_rules WHERE rule_id = '{rid}'",
+                timeout_secs=20)
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.escalation_rules
+                (rule_id, domain_id, rule_type, params, target, active, created_at)
+            VALUES ('{rid}', '{dom}', '{rtype}', '{p}', '{target}',
+                    {str(bool(req.active)).lower()}, current_timestamp())
+        """, timeout_secs=20)
+        return {"ok": True, "rule_id": req.rule_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/escalation-evaluate")
+async def escalation_evaluate(req: EscalationEvaluateRequest):
+    """Deterministically evaluate escalation rules for a context (used by
+    action-create and change-detection). Optionally queues attorney reviews."""
+    triggered = evaluate_escalations(req.domain_id, req.context or {})
+    queued = []
+    if req.apply_actions:
+        for t in triggered:
+            if t.get("target") == "attorney_review":
+                qid = _queue_attorney_review(
+                    req.domain_id, req.query or "escalation", "",
+                    t.get("reason") or t.get("rule_type"))
+                if qid:
+                    queued.append(qid)
+    return {"triggered": triggered, "queued_reviews": queued, "domain_id": req.domain_id}
+
+
 # ── Regulatory Changes Feed ───────────────────────────────────────────────────
 
 @router.get("/regulatory-changes")
@@ -4308,6 +4519,13 @@ class ActionMasterCreateRequest(BaseModel):
     incident_ref:  str  = ""
     logged_by:     str  = "app_user"
     source_doc_ids: str = ""   # JSON array string e.g. '["doc1","doc2"]'
+    # Optional escalation-context signals, evaluated deterministically on create.
+    # Omitted by existing callers → no rule fires → identical behavior.
+    confidence:             Optional[float] = None   # e.g. answer/extraction confidence 0..1
+    license_lead_time_days: Optional[int]   = None
+    expected_open_date:     Optional[str]   = None    # YYYY-MM-DD
+    requirement_change:     Optional[bool]  = None
+    high_value:             Optional[bool]  = None
 
 class ActionMasterUpdateRequest(BaseModel):
     new_status:          str
@@ -4431,7 +4649,42 @@ async def create_action_master(req: ActionMasterCreateRequest):
                 current_timestamp(), current_timestamp())
     """, timeout_secs=30)
     _write_action_history(action_id, "", "OPEN", req.logged_by, "Action created", {})
-    return {"action_id": action_id, "status": "OPEN", "created": True}
+
+    # ── Deterministic escalation evaluation ──
+    context = {
+        "confidence":             req.confidence,
+        "license_lead_time_days": req.license_lead_time_days,
+        "expected_open_date":     req.expected_open_date,
+        "requirement_change":     req.requirement_change,
+        "high_value":             req.high_value,
+    }
+    triggered, escalated, bumped = [], False, False
+    try:
+        triggered = evaluate_escalations(req.domain_id, context)
+    except Exception as _e:
+        print(f"[escalation] evaluate failed: {_e}")
+    for t in triggered:
+        tgt = t.get("target")
+        if tgt == "attorney_review":
+            _queue_attorney_review(
+                req.domain_id, req.description,
+                f"Action {action_id} ({req.action_type})",
+                t.get("reason") or t.get("rule_type"))
+            escalated = True
+        elif tgt == "priority_bump" and not bumped:
+            try:
+                run_sql(f"""
+                    UPDATE {CATALOG}.platform.action_master
+                    SET priority = 'HIGH', updated_at = current_timestamp()
+                    WHERE action_id = '{action_id}' AND priority NOT IN ('HIGH','CRITICAL')
+                """, timeout_secs=20)
+                bumped = True
+            except Exception as _e:
+                print(f"[escalation] priority bump failed: {_e}")
+
+    return {"action_id": action_id, "status": "OPEN", "created": True,
+            "escalations": triggered, "attorney_review": escalated,
+            "priority_bumped": bumped}
 
 
 @router.get("/action-master")
