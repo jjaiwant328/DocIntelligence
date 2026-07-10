@@ -3570,6 +3570,18 @@ async def copilot_query(req: CopilotQueryRequest):
         if "Interpretations" not in system_prompt:
             system_prompt += format_instruction
 
+        # Per-fact source citation (ALWAYS applied) so the UI can align a source link
+        # to each fact. Each Facts line must end with the source filename in square
+        # brackets, copied from the [Source: <filename>] tags in the provided context.
+        system_prompt += (
+            "\n\nFACTS FORMATTING (mandatory): Under the Facts section, put each fact on its own "
+            "line starting with '- ', and END EACH LINE with the single most relevant source "
+            "document filename in square brackets, copied exactly from the [Source: <filename>] "
+            "tags provided — e.g. '- Alcohol license required; lead time ~60 days. "
+            "[dallas_alcohol_permit.pdf]'. If a fact has no supporting document, end it with "
+            "'[no source]'. Do not put filenames anywhere except in these brackets."
+        )
+
         # Retrieve relevant doc context via Vector Search (best-effort)
         context_text = ""
         cited_docs: list = []
@@ -4322,7 +4334,7 @@ def _ensure_copilot_prompts_table():
             domain_id   STRING  NOT NULL,
             name        STRING  NOT NULL,
             prompt_text STRING  NOT NULL,
-            is_active   BOOLEAN DEFAULT FALSE,
+            is_active   BOOLEAN,
             created_at  TIMESTAMP,
             updated_at  TIMESTAMP,
             created_by  STRING
