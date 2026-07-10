@@ -3298,7 +3298,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
   function switchTab(tabId: string) {
     setTab(tabId);
     const t = TABS.find(t=>t.id===tabId);
-    if (t && t.subs.length > 0) setSub(t.subs[0].id);
+    if (t && t.subs && t.subs.length > 0) setSub(t.subs[0].id);
   }
 
   const currentTab = TABS.find(t=>t.id===tab) ?? TABS[0];
@@ -3451,6 +3451,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
         </div>
 
         {/* ── Level 2: Sub-tabs (change with primary tab) ── */}
+        {currentTab.subs && currentTab.subs.length > 0 && (
         <div className="px-8 py-2 flex gap-1 flex-wrap bg-gray-50">
           {currentTab.subs.map(s => (
             <button
@@ -3466,6 +3467,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
             </button>
           ))}
         </div>
+        )}
       </header>
 
       {error && (
