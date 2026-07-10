@@ -74,6 +74,15 @@ spark.sql(f"""
 print(f"Volume '{CATALOG}.{SCHEMA_RAW}.{VOLUME_DOCS}' ready")
 print(f"Upload path: /Volumes/{CATALOG}/{SCHEMA_RAW}/{VOLUME_DOCS}/")
 
+# Streaming checkpoints volume — required by the parse/extract Auto Loader streams,
+# whose checkpoint_location is /Volumes/{catalog}/{schema}/checkpoints/... (see
+# scripts/create_domain_job.py). Must exist before the pipeline runs.
+spark.sql(f"""
+    CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA_RAW}.checkpoints
+    COMMENT 'Structured Streaming checkpoints for the {domain_id} pipeline'
+""")
+print(f"Volume '{CATALOG}.{SCHEMA_RAW}.checkpoints' ready")
+
 # COMMAND ----------
 # MAGIC %md ## 4. Governance Tags
 
