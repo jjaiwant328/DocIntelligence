@@ -1,0 +1,56 @@
+# This is a Databricks asset bundle definition for ai_parse_document_workflow.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+bundle:
+  name: ai_parse_document_app_workflow
+
+variables:
+  catalog:
+    description: The catalog name for the workflow
+    default: jai_docintel
+  schema:
+    description: The schema name for the workflow
+    default: raw
+  clean_pipeline_tables:
+    description: Clean pipeline tables and checkpoints
+    default: "No"
+  source_volume_path:
+    description: Source volume path for PDF files
+    default: /Volumes/jai_docintel/raw/documents/
+  output_volume_path:
+    description: Output volume path for processed images
+    default: /Volumes/jai_docintel/raw/documents/outputs/
+  checkpoint_base_path:
+    description: Base path for Structured Streaming checkpoints
+    default: /Volumes/jai_docintel/raw/checkpoints/ai_parse_document_app_workflow
+  raw_table_name:
+    description: Table name for raw parsed documents
+    default: parsed_documents_raw
+  content_table_name:
+    description: Table name for extracted text
+    default: parsed_documents_content
+  agent_choice:
+    description: Agent choice for extracting key information
+    default: ai_query
+  structured_table_name:
+    description: Table name for structured data
+    default: parsed_documents_structured
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-4101016551133680.0.azuredatabricks.net
+      profile: jai-az-ws
+
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-4101016551133680.0.azuredatabricks.net
+      profile: jai-az-ws
+    permissions:
+      - group_name: users
+        level: CAN_VIEW

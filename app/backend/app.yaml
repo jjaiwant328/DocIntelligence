@@ -1,0 +1,39 @@
+command:
+- uvicorn
+- app:app
+- --host
+- 0.0.0.0
+- --port
+- '8000'
+env:
+- name: DATABRICKS_APP_PORT
+  value: '8000'
+- name: DATABRICKS_WAREHOUSE_ID
+  value: 85a4ed5bcff25c0d
+- name: STATIC_FILES_PATH
+  value: /Workspace/Users/jaiwant.jonathan@databricks.com/docintel-app/static
+- name: DATABRICKS_VOLUME_PATH
+  value: /Volumes/jai_docintel/raw/documents/
+- name: DATABRICKS_DELTA_TABLE_PATH
+  value: jai_docintel.raw.parsed_documents_interactive
+- name: BATCH_INPUT_VOLUME_PATH
+  value: /Volumes/jai_docintel/raw/documents/
+- name: BATCH_JOB_NAME
+  value: "[dev jaiwant_jonathan] ai_parse_document_app_workflow"
+- name: DOCINTEL_CATALOG
+  value: jai_docintel
+- name: DOCINTEL_SCHEMA_RAW
+  value: raw
+- name: DOCINTEL_SCHEMA_ONT
+  value: ontology
+- name: DOCINTEL_SCHEMA_VEC
+  value: vectors
+- name: DOCINTEL_SCHEMA_AGT
+  value: agents
+- name: DOCINTEL_VS_ENDPOINT
+  value: docintel-vs-endpoint
+- name: DOCINTEL_VS_INDEX
+  value: jai_docintel.vectors.docintel_docs_index
+- name: DOCINTEL_AGENT_MODEL
+  value: databricks-claude-sonnet-4-5
+runtime: python_3.10

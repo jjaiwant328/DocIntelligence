@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+databricks-sdk
+python-dotenv
+requests
+python-multipart
+PyYAML
+PyPDF2
+Pillow
+databricks-langchain
+langchain-community
+langchain-core
+# Pin MCP to pre-1.9 to avoid 'streamable_http_client' import breakage
+mcp>=1.0.0,<1.9.0
