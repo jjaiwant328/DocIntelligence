@@ -59,10 +59,20 @@ batch_size      = int(_wparam("batch_size",  "999"))  # 999 = unlimited (interac
 # "true"  — re-process everything (full rebuild)
 force_reprocess = _wparam("force_reprocess", "false").lower() in ("true", "1", "yes")
 
-# Schema strictness
-# "true"  — skip files whose predicted doc_type has no extraction schema configured
-# "false" — parse + search-index them anyway; extraction_data will be null
-skip_no_schema  = _wparam("skip_no_schema",  "false").lower() in ("true", "1", "yes")
+# Schema mode — controls how extraction schemas are resolved per document
+# "hybrid"     (default) — use configured schema when one exists; AI-infer for the rest
+# "configured" — strict: only apply pre-built schemas; skip types with no schema
+# "ai_infer"   — AI discovers fields for every document via universal SCHEMA_DISCOVERY_SCHEMA
+schema_mode     = _wparam("schema_mode", "hybrid").lower().strip()
+if schema_mode not in ("hybrid", "configured", "ai_infer"):
+    schema_mode = "hybrid"
+
+# Backward-compat: skip_no_schema is derived from schema_mode if not overridden
+_skip_param     = _wparam("skip_no_schema", "").lower().strip()
+if _skip_param in ("true", "false"):
+    skip_no_schema = (_skip_param == "true")
+else:
+    skip_no_schema = (schema_mode == "configured")
 
 # Job run tracking
 job_run_id_str  = _wparam("job_run_id",      "0")
@@ -77,7 +87,7 @@ print(f"  volume_path   : {volume_path or '(from domain config)'}")
 print(f"  doc_types     : {doc_types_param or '(all configured)'}")
 print(f"  mode          : {mode}  batch_size={batch_size}")
 print(f"  force_reprocess: {force_reprocess}")
-print(f"  skip_no_schema: {skip_no_schema}")
+print(f"  schema_mode   : {schema_mode}  (skip_no_schema={skip_no_schema})")
 print(f"  job_run_id    : {job_run_id}")
 print(f"  started_at    : {datetime.now(timezone.utc).isoformat()}")
 
@@ -855,15 +865,21 @@ def flatten_extraction(doc_type: str):
 
 gold_dfs = {}
 
-for doc_type in EXTRACTION_CONFIGS:
-    df = flatten_extraction(doc_type)
-    count = df.count()
-    if count > 0:
-        gold_dfs[doc_type] = df
-        print(f"\n{'='*60}")
-        print(f"  {doc_type.replace('_', ' ').title()}  ({count} documents)")
-        print(f"{'='*60}")
-        display(df)
+# In "ai_infer" mode, skip Gold Step 5 (configured schemas) entirely —
+# the universal schema discovery in Gold Step 6 will cover all documents.
+if schema_mode == "ai_infer":
+    print(f"schema_mode=ai_infer → skipping configured-schema extraction (Gold Step 5).")
+    print("All documents will be processed by the universal AI-infer schema in Gold Step 6.")
+else:
+    for doc_type in EXTRACTION_CONFIGS:
+        df = flatten_extraction(doc_type)
+        count = df.count()
+        if count > 0:
+            gold_dfs[doc_type] = df
+            print(f"\n{'='*60}")
+            print(f"  {doc_type.replace('_', ' ').title()}  ({count} documents)")
+            print(f"{'='*60}")
+            display(df)
 
 # COMMAND ----------
 # MAGIC %md ## Gold Step 6 — ai_extract Schema Suggestion (unstructured → structured discovery)
@@ -922,17 +938,24 @@ _all_classified_types = {r.doc_type for r in classified_docs_df.select("doc_type
 _configured_types     = set(EXTRACTION_CONFIGS.keys())
 _unconfigured_types   = _all_classified_types - _configured_types
 
-print(f"\nSchema discovery: {len(_unconfigured_types)} doc types without configured schema")
-if _unconfigured_types:
-    print(f"  Types to discover: {sorted(_unconfigured_types)}")
+if schema_mode == "ai_infer":
+    # AI-Infer All: run universal schema discovery on every document
+    print(f"\nschema_mode=ai_infer → running universal AI inference on ALL {len(_all_classified_types)} doc type(s)")
+    print(f"  Types: {sorted(_all_classified_types)}")
+    _discovery_target = classified_docs_df
+elif schema_mode == "configured":
+    # Strict mode: no discovery needed — configured schemas already ran; skip unknowns
+    print(f"\nschema_mode=configured → skipping schema discovery for unconfigured types ({len(_unconfigured_types)} skipped)")
+    _discovery_target = classified_docs_df.filter(F.lit(False))  # empty DF
 else:
-    print("  All classified doc types have configured schemas — running discovery on all types for schema improvement suggestions")
-
-# Run discovery on unconfigured types (or all types if all are configured).
-# Even for configured types, the `suggested_fields` output can surface additional fields to consider.
-_discovery_target = classified_docs_df
-if _unconfigured_types:
-    _discovery_target = classified_docs_df.filter(F.col("doc_type").isin(list(_unconfigured_types)))
+    # Hybrid: discover only unconfigured types
+    print(f"\nSchema discovery (hybrid): {len(_unconfigured_types)} doc type(s) without configured schema")
+    if _unconfigured_types:
+        print(f"  Types to discover: {sorted(_unconfigured_types)}")
+    else:
+        print("  All classified doc types have configured schemas — running discovery for schema improvement suggestions")
+    _discovery_target = classified_docs_df if not _unconfigured_types else \
+        classified_docs_df.filter(F.col("doc_type").isin(list(_unconfigured_types)))
 
 _discovery_count = _discovery_target.count()
 print(f"Running schema discovery on {_discovery_count} documents...")

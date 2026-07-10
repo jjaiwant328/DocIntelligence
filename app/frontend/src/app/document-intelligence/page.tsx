@@ -1641,6 +1641,11 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     const [docTypeSchemas, setDocTypeSchemas] = useState<DocTypeSchema[]>([]);
     const [selectedTypes, setSelectedTypes]   = useState<string[]>([]);
     const [skipNoSchema, setSkipNoSchema]     = useState(true);
+    // Schema mode: how the pipeline resolves extraction schemas
+    // "configured" = strict — only use pre-built schemas; skip others
+    // "hybrid"     = (default) use configured schema when available, AI-infer for the rest
+    // "ai_infer"   = AI discovers fields for every document using ai_extract + universal schema
+    const [schemaMode, setSchemaMode]         = useState<"configured" | "hybrid" | "ai_infer">("hybrid");
     const [volumePath, setVolumePath]         = useState("");
     const [jobName, setJobName]               = useState("");
     const [schedCron, setSchedCron]           = useState("");
@@ -1951,7 +1956,8 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
             if (selectedTypes.length) params.set("doc_types", JSON.stringify(selectedTypes));
             params.set("mode", mode);
             params.set("batch_size", mode === "interactive" ? String(batchSize) : "999");
-            params.set("skip_no_schema", String(skipNoSchema));
+            params.set("skip_no_schema", String(schemaMode === "configured"));
+            params.set("schema_mode", schemaMode);
             if (jobName) params.set("job_name", jobName);
             if (schedCron && mode === "batch") params.set("schedule_cron", schedCron);
 
@@ -2310,6 +2316,88 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                         Also parse &amp; index files with no matching schema (extraction_data will be null)
                                     </span>
                                 </label>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ── Schema Mode ──────────────────────────────────────── */}
+                    <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h3 className="text-sm font-bold text-gray-800 mb-1 flex items-center gap-2">
+                            <span className="text-blue-500">🧠</span> Schema Mode
+                        </h3>
+                        <p className="text-xs text-gray-500 mb-4">
+                            Choose how the pipeline resolves extraction fields for each document.
+                        </p>
+                        <div className="space-y-3">
+                            {([
+                                {
+                                    id: "hybrid" as const,
+                                    icon: "⚡",
+                                    title: "Hybrid (Recommended)",
+                                    desc: "Use your configured schema when one exists for the document type. For any type with no schema, let the AI infer fields automatically using a universal extraction model.",
+                                    badge: "Default",
+                                    badgeColor: "bg-blue-100 text-blue-700",
+                                },
+                                {
+                                    id: "configured" as const,
+                                    icon: "📋",
+                                    title: "Configured Schemas Only",
+                                    desc: "Strictly apply your pre-built schemas. Documents whose type has no configured schema are skipped — no extraction data is written for them.",
+                                    badge: "Strict",
+                                    badgeColor: "bg-gray-100 text-gray-600",
+                                },
+                                {
+                                    id: "ai_infer" as const,
+                                    icon: "🔍",
+                                    title: "AI-Infer All",
+                                    desc: "Override configured schemas and let ai_extract discover fields for every document using a universal schema. Great for first-run exploration or when you want the AI to propose new fields.",
+                                    badge: "Exploratory",
+                                    badgeColor: "bg-violet-100 text-violet-700",
+                                },
+                            ] as { id: "hybrid"|"configured"|"ai_infer"; icon: string; title: string; desc: string; badge: string; badgeColor: string }[]).map(opt => (
+                                <label
+                                    key={opt.id}
+                                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors
+                                        ${schemaMode === opt.id
+                                            ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300"
+                                            : "border-gray-200 hover:bg-gray-50"}`}
+                                >
+                                    <input
+                                        type="radio"
+                                        name="schemaMode"
+                                        checked={schemaMode === opt.id}
+                                        onChange={() => {
+                                            setSchemaMode(opt.id);
+                                            // Keep skipNoSchema in sync for backward compat
+                                            setSkipNoSchema(opt.id === "configured");
+                                        }}
+                                        className="mt-0.5 accent-blue-600 cursor-pointer"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-0.5">
+                                            <span className="text-sm font-semibold text-gray-800">{opt.icon} {opt.title}</span>
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${opt.badgeColor}`}>{opt.badge}</span>
+                                        </div>
+                                        <p className="text-xs text-gray-500 leading-relaxed">{opt.desc}</p>
+                                    </div>
+                                </label>
+                            ))}
+                        </div>
+
+                        {/* Context-sensitive tip */}
+                        {schemaMode === "ai_infer" && (
+                            <div className="mt-3 text-xs bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-violet-700">
+                                <strong>AI-Infer mode:</strong> The universal extraction schema captures 11 standard fields (title, date, reference number, issuing/receiving parties, amounts, deadlines, actions, status, location) plus a <code>suggested_fields</code> recommendation. Results are written to <code>suggested_extractions</code> — review them in Schema Setup to refine your schemas.
+                            </div>
+                        )}
+                        {schemaMode === "hybrid" && (
+                            <div className="mt-3 text-xs bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-blue-700">
+                                <strong>Hybrid mode:</strong> Configured schemas take priority. Documents whose classified type has no schema are still processed — the AI infers their fields using the universal model and writes them to <code>suggested_extractions</code>.
+                            </div>
+                        )}
+                        {schemaMode === "configured" && (
+                            <div className="mt-3 text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700">
+                                <strong>Strict mode:</strong> Only the {selectedTypes.length || docTypeSchemas.length} configured document type(s) will have extraction data. All other files are skipped entirely after parsing.
                             </div>
                         )}
                     </div>

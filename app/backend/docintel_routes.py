@@ -1059,6 +1059,7 @@ async def trigger_pipeline(
     batch_size:     int  = 999,
     doc_types:      str  = "",
     skip_no_schema: bool = True,
+    schema_mode:    str  = "hybrid",   # "configured" | "hybrid" | "ai_infer"
     schedule_cron:  str  = "",
     job_name:       str  = "",
 ):
@@ -1075,6 +1076,13 @@ async def trigger_pipeline(
         if not job_name:
             job_name = resolved_job_name
 
+        # Validate + normalise schema_mode
+        valid_modes = {"configured", "hybrid", "ai_infer"}
+        if schema_mode not in valid_modes:
+            schema_mode = "hybrid"
+        # Derive skip_no_schema from schema_mode for backward-compat with older notebooks
+        effective_skip = (schema_mode == "configured")
+
         # Forward all processing parameters so notebook widgets pick them up
         job_parameters: dict = {
             "domain_id":      domain_id,
@@ -1082,7 +1090,8 @@ async def trigger_pipeline(
             "mode":           mode,
             "batch_size":     str(batch_size),
             "doc_types":      doc_types or "",
-            "skip_no_schema": str(skip_no_schema).lower(),
+            "skip_no_schema": str(effective_skip).lower(),
+            "schema_mode":    schema_mode,
         }
 
         run = w.jobs.run_now(
