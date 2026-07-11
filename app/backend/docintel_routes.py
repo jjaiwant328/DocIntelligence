@@ -527,6 +527,10 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     if req.incident_ref:
         _base_prompt += f"\n\nACTIVE CONTEXT: {req.incident_ref}. Focus answers on this context when relevant."
 
+    # ── Compliance Due Diligence: four-agent tool-calling agent ──────────────
+    if domain_id == CDD_DOMAIN_ID:
+        return _cdd_agent_query(req, domain_id, _domain, _base_prompt, _domain_vs_index)
+
     # ── Supply chain: full UC function agent ─────────────────────────────────
     if domain_id == "supply_chain":
         try:
@@ -4308,6 +4312,568 @@ async def regulatory_changes(domain_id: str = "supply_chain"):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Compliance Due Diligence (Store Development) — agent tools + change detection
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# domain_id = "compliance_due_diligence" is DISTINCT from the operational
+# "compliance" (RaceTrac) domain. Everything below is additive and gated on this
+# domain_id, so supply_chain / compliance behavior is untouched.
+#
+# The four "agents" from the flagship build are exposed as LangChain tools that
+# agent_query consumes for this domain:
+#   1. Intake    — classify a feasibility request  (ai_classify + ai_extract)
+#   2. Research  — municipality requirements/licenses (Vector Search + DEFINES edges)
+#   3. History   — "have we handled this municipality before?" (VS + prior Responses)
+#   4. Action    — create/track an action (reuses lifecycle + escalation engine)
+#   + Change detection — detect_regulatory_change(municipality, requirement_type)
+
+CDD_DOMAIN_ID = "compliance_due_diligence"
+
+
+def _sql_lit(s, max_len: int = 8000) -> str:
+    """Escape + cap a value for safe inline use in a single-quoted SQL literal."""
+    return str(s or "")[:max_len].replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _unwrap_expr(col: str = "field_value") -> str:
+    """SQL expression that unwraps a `{"value": X}` ai_extract wrapper to a plain
+    string (mirrors the pattern used by the UC-function tools in 06_agent.py)."""
+    return (
+        f"CASE WHEN {col} LIKE '{{\"value\":%' "
+        f"THEN GET_JSON_OBJECT(CAST({col} AS STRING), '$.value') "
+        f"ELSE CAST({col} AS STRING) END"
+    )
+
+
+def _cdd_classification_labels(domain_cfg: dict) -> list:
+    """Return the classification label list for the domain (dict keys or list)."""
+    raw = domain_cfg.get("classification_labels")
+    labels: list = []
+    if raw:
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                labels = list(parsed.keys())
+            elif isinstance(parsed, list):
+                labels = [str(x) for x in parsed]
+        except Exception:
+            labels = []
+    if not labels:
+        labels = [
+            "feasibility_request", "municipal_requirement", "alcohol_license",
+            "tobacco_license", "business_license", "zoning_document", "permit",
+            "historical_response", "regulatory_change", "consultant_correspondence",
+        ]
+    return labels
+
+
+# ── Agent Tool 1: Intake ──────────────────────────────────────────────────────
+def _cdd_intake(domain_id: str, request_text: str) -> dict:
+    """Classify a feasibility request and pull the key structured fields.
+    Reuses Databricks ai_classify (label routing) + ai_extract (field lift)."""
+    dom = _get_domain_schemas(domain_id)
+    labels = _cdd_classification_labels(dom)
+    txt = _sql_lit(request_text, 6000)
+    labels_arr = ", ".join(f"'{_sql_lit(l, 120)}'" for l in labels)
+    fields = ["request_type", "project_id", "store_number", "municipality",
+              "state", "county", "priority", "requester"]
+    fields_arr = ", ".join(f"'{f}'" for f in fields)
+    try:
+        rows = run_sql(f"""
+            SELECT
+                ai_classify('{txt}', ARRAY({labels_arr}))                    AS doc_class,
+                to_json(ai_extract('{txt}', ARRAY({fields_arr})))            AS extracted
+        """, timeout_secs=60) or []
+    except Exception as e:
+        return {"ok": False, "error": str(e), "request_type": None}
+    if not rows:
+        return {"ok": False, "error": "no result", "request_type": None}
+    doc_class = rows[0].get("doc_class")
+    extracted = {}
+    try:
+        raw = rows[0].get("extracted") or "{}"
+        parsed = json.loads(raw)
+        for k, v in (parsed.items() if isinstance(parsed, dict) else []):
+            extracted[k] = _unwrap_value(v)
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "document_class": doc_class,
+        "request_type": extracted.get("request_type") or doc_class,
+        "project": extracted.get("project_id") or extracted.get("store_number"),
+        "store_number": extracted.get("store_number"),
+        "municipality": extracted.get("municipality"),
+        "state": extracted.get("state"),
+        "county": extracted.get("county"),
+        "priority": (extracted.get("priority") or "MEDIUM"),
+        "requester": extracted.get("requester"),
+    }
+
+
+def _cdd_vs_search(vs_index: str, query: str, doc_type_filter=None, k: int = 6):
+    """Vector Search helper → (context_text, cited_docs)."""
+    try:
+        from databricks.vector_search.client import VectorSearchClient
+        vsc = VectorSearchClient()
+        index = vsc.get_index(VS_ENDPOINT, vs_index)
+        results = index.similarity_search(
+            query_text=query,
+            columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
+            filters={"doc_type": doc_type_filter} if doc_type_filter else None,
+            num_results=k,
+        )
+        data = results.get("result", {}).get("data_array", [])
+        cited, chunks = [], []
+        for r in data:
+            if len(r) < 4:
+                continue
+            doc_id = r[1]
+            if doc_id not in cited:
+                cited.append(doc_id)
+            chunks.append(f"[Source: {r[1]} | Type: {r[2]}]\n{r[3]}")
+        return "\n\n---\n\n".join(chunks), cited
+    except Exception:
+        return "", []
+
+
+# ── Agent Tool 2: Research ────────────────────────────────────────────────────
+def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
+                  vs_index: str = None) -> dict:
+    """Retrieve municipality requirements/licenses via Vector Search over the
+    domain index, enriched with the ontology `Municipality DEFINES ...` edges."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    ont = dom.get("schema_ont") or raw
+    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
+    query = f"requirements and licenses to open a store in {municipality} {requirement_type}".strip()
+    context_text, cited = _cdd_vs_search(vs_index, query)
+
+    # Ontology: Municipality DEFINES requirement/license edges
+    defines: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        defines = run_sql(f"""
+            SELECT r.predicate, e.entity_type AS object_type,
+                   e.display_name, e.attributes
+            FROM {CATALOG}.{ont}.relationships r
+            JOIN {CATALOG}.{ont}.entities e ON e.entity_id = r.object_id
+            WHERE r.predicate = 'DEFINES'
+              AND (LOWER(r.subject_id)   LIKE LOWER('%{muni}%')
+                OR LOWER(COALESCE(e.display_name,'')) LIKE LOWER('%{muni}%'))
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        defines = []
+
+    # Structured requirement/license fields from extracted_fields as a fallback
+    reqs: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        uw = _unwrap_expr("ef.field_value")
+        reqs = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'      THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='requirement_type'  THEN {uw} END) AS requirement_type,
+                MAX(CASE WHEN ef.field_name='license_type'      THEN {uw} END) AS license_type,
+                MAX(CASE WHEN ef.field_name='authority'         THEN {uw} END) AS authority,
+                MAX(CASE WHEN ef.field_name='issuing_authority' THEN {uw} END) AS issuing_authority,
+                MAX(CASE WHEN ef.field_name='lead_time'         THEN {uw} END) AS lead_time,
+                MAX(CASE WHEN ef.field_name='effective_date'    THEN {uw} END) AS effective_date
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            ORDER BY effective_date DESC NULLS LAST
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        reqs = []
+
+    return {
+        "ok": True, "municipality": municipality, "requirement_type": requirement_type,
+        "context": context_text, "cited_docs": cited,
+        "defines_edges": defines, "requirements": reqs,
+    }
+
+
+# ── Agent Tool 3: Historical Knowledge ────────────────────────────────────────
+def _cdd_history(domain_id: str, municipality: str, vs_index: str = None) -> dict:
+    """"Have we handled this municipality before?" — VS over prior responses plus
+    `Response`/`HAS_HISTORY_OF` edges, returning cited prior answers with dates."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    ont = dom.get("schema_ont") or raw
+    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
+    query = f"prior feasibility response history for {municipality}"
+    context_text, cited = _cdd_vs_search(vs_index, query, doc_type_filter="historical_response")
+    if not context_text:  # fall back to an unfiltered search
+        context_text, cited = _cdd_vs_search(vs_index, query)
+
+    priors: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        uw = _unwrap_expr("ef.field_value")
+        priors = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'  THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='responder'     THEN {uw} END) AS responder,
+                MAX(CASE WHEN ef.field_name='response_date' THEN {uw} END) AS response_date,
+                MAX(CASE WHEN ef.field_name='request_type'  THEN {uw} END) AS request_type
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              WHERE pd.doc_type IN ('historical_response','consultant_correspondence')
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            ORDER BY response_date DESC NULLS LAST
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        priors = []
+
+    has_history = bool(priors) or bool(context_text)
+    return {
+        "ok": True, "municipality": municipality, "has_history": has_history,
+        "prior_responses": priors, "context": context_text, "cited_docs": cited,
+    }
+
+
+# ── Agent Tool 4: Action (reuses lifecycle + escalation engine) ───────────────
+def _cdd_action(domain_id: str, description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
+                priority: str = "MEDIUM", source_doc_ids=None,
+                requirement_change: bool = None, high_value: bool = None,
+                license_lead_time_days: int = None, expected_open_date: str = None,
+                logged_by: str = "cdd_agent") -> dict:
+    """Create + track an action. Reuses _create_action_master_core, so the Phase-1
+    escalation engine (evaluate_escalations) runs identically."""
+    docs = source_doc_ids or []
+    if isinstance(docs, str):
+        docs = [docs]
+    req = ActionMasterCreateRequest(
+        domain_id=domain_id, action_type=action_type, description=description,
+        priority=priority, logged_by=logged_by,
+        source_doc_ids=json.dumps(docs),
+        requirement_change=requirement_change, high_value=high_value,
+        license_lead_time_days=license_lead_time_days,
+        expected_open_date=expected_open_date,
+    )
+    return _create_action_master_core(req)
+
+
+# ── Change detection ──────────────────────────────────────────────────────────
+def _ensure_regulatory_change_history_table():
+    """Gold persistence for detected regulatory changes (new table, not a dup)."""
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.regulatory_change_history (
+                change_id               STRING NOT NULL,
+                domain_id               STRING,
+                municipality            STRING,
+                requirement_type        STRING,
+                previous_doc_id         STRING,
+                previous_effective_date STRING,
+                previous_summary        STRING,
+                new_doc_id              STRING,
+                new_effective_date      STRING,
+                new_summary             STRING,
+                affected_projects       STRING,   -- JSON array
+                impact                  STRING,
+                escalated               BOOLEAN,
+                action_id               STRING,
+                detected_at             TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+    except Exception as e:
+        print(f"[cdd] ensure regulatory_change_history failed: {e}")
+
+
+def detect_regulatory_change(municipality: str, requirement_type: str = "",
+                             domain_id: str = CDD_DOMAIN_ID,
+                             persist: bool = True) -> dict:
+    """Compare the latest ingested requirement for a municipality/requirement_type
+    against the prior effective_date version. On a material change emit a
+    structured REGULATORY CHANGE DETECTED result, fire the escalation engine
+    (requirement_change) → escalated action, and persist to the Gold history."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    uw = _unwrap_expr("ef.field_value")
+    muni = _sql_lit(municipality, 200)
+    rt = _sql_lit(requirement_type, 200)
+    rt_pred = (
+        f"AND (LOWER(COALESCE(requirement_type,'')) LIKE LOWER('%{rt}%') "
+        f"OR LOWER(COALESCE(license_type,'')) LIKE LOWER('%{rt}%'))"
+    ) if requirement_type else ""
+
+    try:
+        versions = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'      THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='requirement_type'  THEN {uw} END) AS requirement_type,
+                MAX(CASE WHEN ef.field_name='license_type'      THEN {uw} END) AS license_type,
+                MAX(CASE WHEN ef.field_name='authority'         THEN {uw} END) AS authority,
+                MAX(CASE WHEN ef.field_name='issuing_authority' THEN {uw} END) AS issuing_authority,
+                MAX(CASE WHEN ef.field_name='effective_date'    THEN {uw} END) AS effective_date,
+                MAX(CASE WHEN ef.field_name='requirement'       THEN {uw} END) AS requirement,
+                MAX(CASE WHEN ef.field_name='lead_time'         THEN {uw} END) AS lead_time
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            {rt_pred}
+            ORDER BY effective_date DESC NULLS LAST
+            LIMIT 5
+        """, timeout_secs=45) or []
+    except Exception as e:
+        return {"ok": False, "detected": False, "error": str(e),
+                "municipality": municipality, "requirement_type": requirement_type}
+
+    if len(versions) < 2:
+        return {"ok": True, "detected": False, "municipality": municipality,
+                "requirement_type": requirement_type, "versions_found": len(versions),
+                "message": "Not enough versions to compare."}
+
+    latest, prior = versions[0], versions[1]
+
+    def _sig(v: dict) -> str:
+        return " | ".join(str(v.get(f) or "") for f in
+                          ("requirement_type", "license_type", "authority",
+                           "issuing_authority", "requirement", "lead_time"))
+
+    material = (_sig(latest) != _sig(prior)) or \
+               ((latest.get("effective_date") or "") != (prior.get("effective_date") or ""))
+    if not material:
+        return {"ok": True, "detected": False, "municipality": municipality,
+                "requirement_type": requirement_type,
+                "message": "Latest version matches prior — no material change."}
+
+    # Affected projects for this municipality
+    affected: list = []
+    try:
+        affected_rows = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id,
+                MAX(CASE WHEN ef.field_name='municipality'  THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='project_id'    THEN {uw} END) AS project_id,
+                MAX(CASE WHEN ef.field_name='store_number'  THEN {uw} END) AS store_number
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              GROUP BY ef.doc_id
+            )
+            SELECT DISTINCT COALESCE(project_id, store_number) AS project
+            FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+              AND COALESCE(project_id, store_number) IS NOT NULL
+            LIMIT 50
+        """, timeout_secs=30) or []
+        affected = [r["project"] for r in affected_rows if r.get("project")]
+    except Exception:
+        affected = []
+
+    prev_sum = f"{prior.get('requirement_type') or prior.get('license_type') or ''}: " \
+               f"{prior.get('requirement') or prior.get('authority') or ''} " \
+               f"(eff {prior.get('effective_date') or 'n/a'})"
+    new_sum = f"{latest.get('requirement_type') or latest.get('license_type') or ''}: " \
+              f"{latest.get('requirement') or latest.get('authority') or ''} " \
+              f"(eff {latest.get('effective_date') or 'n/a'})"
+    change_summary = (
+        f"Regulatory change in {municipality} "
+        f"({requirement_type or latest.get('requirement_type') or latest.get('license_type') or 'requirement'}): "
+        f"'{prev_sum.strip()}' → '{new_sum.strip()}'"
+    )
+    impact = (f"{len(affected)} project(s) affected: {', '.join(affected)}"
+              if affected else "No active projects currently linked to this municipality.")
+
+    # Fire escalation engine → escalated action (reuses Phase-1 engine)
+    escalations, action_id, escalated = [], None, False
+    try:
+        result = _cdd_action(
+            domain_id=domain_id,
+            action_type="REGULATORY_CHANGE_REVIEW",
+            description=change_summary + " | " + impact,
+            priority="HIGH",
+            source_doc_ids=[latest.get("doc_id"), prior.get("doc_id")],
+            requirement_change=True,
+        )
+        action_id = result.get("action_id")
+        escalations = result.get("escalations", [])
+        escalated = bool(result.get("attorney_review")) or bool(escalations)
+    except Exception as e:
+        print(f"[cdd] change-detection escalation failed: {e}")
+
+    if persist:
+        _ensure_regulatory_change_history_table()
+        try:
+            import uuid as _uuid
+            cid = str(_uuid.uuid4())
+            run_sql(f"""
+                INSERT INTO {CATALOG}.platform.regulatory_change_history
+                    (change_id, domain_id, municipality, requirement_type,
+                     previous_doc_id, previous_effective_date, previous_summary,
+                     new_doc_id, new_effective_date, new_summary,
+                     affected_projects, impact, escalated, action_id, detected_at)
+                VALUES ('{cid}', '{_sql_lit(domain_id,100)}', '{_sql_lit(municipality,200)}',
+                        '{_sql_lit(requirement_type or latest.get('requirement_type') or '',200)}',
+                        '{_sql_lit(prior.get('doc_id'),300)}', '{_sql_lit(prior.get('effective_date'),50)}',
+                        '{_sql_lit(prev_sum,2000)}',
+                        '{_sql_lit(latest.get('doc_id'),300)}', '{_sql_lit(latest.get('effective_date'),50)}',
+                        '{_sql_lit(new_sum,2000)}',
+                        '{_sql_lit(json.dumps(affected),4000)}', '{_sql_lit(impact,2000)}',
+                        {str(bool(escalated)).lower()}, '{_sql_lit(action_id or '',100)}',
+                        current_timestamp())
+            """, timeout_secs=30)
+        except Exception as e:
+            print(f"[cdd] persist regulatory_change_history failed: {e}")
+
+    return {
+        "ok": True, "detected": True, "municipality": municipality,
+        "requirement_type": requirement_type or latest.get("requirement_type"),
+        "previous": prior, "new": latest,
+        "affected_projects": affected, "impact": impact,
+        "change_summary": change_summary,
+        "escalations": escalations, "escalated": escalated, "action_id": action_id,
+        "banner": "REGULATORY CHANGE DETECTED",
+    }
+
+
+class RegulatoryChangeDetectRequest(BaseModel):
+    municipality:     str
+    requirement_type: str  = ""
+    domain_id:        str  = CDD_DOMAIN_ID
+    persist:          bool = True
+
+
+@router.post("/regulatory-change/detect")
+async def regulatory_change_detect(req: RegulatoryChangeDetectRequest):
+    """Detect a material regulatory change for a municipality/requirement_type,
+    escalate via the Phase-1 engine, and persist to the Gold history table."""
+    return detect_regulatory_change(
+        req.municipality, req.requirement_type, req.domain_id, req.persist)
+
+
+@router.get("/regulatory-change/history")
+async def regulatory_change_history(domain_id: str = CDD_DOMAIN_ID, limit: int = 100):
+    """Return persisted regulatory change history (Gold) for the domain."""
+    _ensure_regulatory_change_history_table()
+    try:
+        rows = run_sql(f"""
+            SELECT change_id, domain_id, municipality, requirement_type,
+                   previous_doc_id, previous_effective_date, previous_summary,
+                   new_doc_id, new_effective_date, new_summary,
+                   affected_projects, impact, escalated, action_id,
+                   CAST(detected_at AS STRING) AS detected_at
+            FROM {CATALOG}.platform.regulatory_change_history
+            WHERE domain_id = '{_sql_lit(domain_id,100)}'
+            ORDER BY detected_at DESC
+            LIMIT {int(limit)}
+        """, timeout_secs=30) or []
+        for r in rows:
+            try:
+                r["affected_projects"] = json.loads(r.get("affected_projects") or "[]")
+            except Exception:
+                r["affected_projects"] = []
+        return {"changes": rows, "total": len(rows), "domain_id": domain_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── The CDD agent: four tools orchestrated inside the existing agent_query ─────
+def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
+                     base_prompt: str, vs_index: str) -> dict:
+    """Build a tool-calling agent whose tools ARE the four CDD 'agents'
+    (Intake / Research / History / Action) plus change detection. Falls back to
+    a direct-LLM answer over document context if the agent stack is unavailable."""
+    try:
+        from langchain.agents import AgentExecutor, create_tool_calling_agent
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+        from langchain_core.tools import tool
+
+        @tool
+        def intake_request(request_text: str) -> str:
+            """Classify a feasibility/store-development request and extract its
+            request_type, project/store, municipality, state and priority."""
+            return json.dumps(_cdd_intake(domain_id, request_text))
+
+        @tool
+        def research_municipality(municipality: str, requirement_type: str = "") -> str:
+            """Retrieve the regulatory requirements and licenses for a municipality
+            (e.g. Tampa FL, Dallas TX). Uses Vector Search over the domain document
+            index plus the ontology 'Municipality DEFINES' edges. Cite doc IDs."""
+            return json.dumps(_cdd_research(domain_id, municipality, requirement_type, vs_index))
+
+        @tool
+        def municipality_history(municipality: str) -> str:
+            """Answer 'have we handled this municipality before?'. Returns prior
+            responses/correspondence with their dates and cited document IDs."""
+            return json.dumps(_cdd_history(domain_id, municipality, vs_index))
+
+        @tool
+        def create_tracked_action(description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
+                                  priority: str = "MEDIUM") -> str:
+            """Create and track an action in the platform action register. Runs the
+            escalation engine automatically. Use to log follow-ups or open items."""
+            return json.dumps(_cdd_action(domain_id, description, action_type, priority))
+
+        @tool
+        def detect_change(municipality: str, requirement_type: str = "") -> str:
+            """Detect whether a municipality's regulatory requirement changed vs its
+            prior effective-dated version. Emits REGULATORY CHANGE DETECTED and
+            escalates when material."""
+            return json.dumps(detect_regulatory_change(municipality, requirement_type, domain_id))
+
+        tools = [intake_request, research_municipality, municipality_history,
+                 create_tracked_action, detect_change]
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", base_prompt),
+            MessagesPlaceholder("chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder("agent_scratchpad"),
+        ])
+        llm, _used_model = _get_llm(max_tokens=2048)
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        executor = AgentExecutor(agent=agent, tools=tools, verbose=False, max_iterations=8)
+        result = executor.invoke({
+            "input": req.question,
+            "chat_history": req.chat_history or [],
+        })
+        return {
+            "answer": result.get("output", ""),
+            "question": req.question,
+            "tools_used": len(tools),
+            "vector_search_active": True,
+            "model": AGENT_MODEL,
+            "domain_id": domain_id,
+        }
+    except Exception as e:
+        # Graceful fallback: direct LLM over VS/SQL document context
+        context_text, cited = _cdd_vs_search(vs_index, req.question)
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            human = req.question
+            if context_text:
+                human = (f"Use these document excerpts as your primary source:\n\n"
+                         f"{context_text}\n\n---\n\nQuestion: {req.question}")
+            llm, _used_model = _get_llm(max_tokens=2048)
+            resp = llm.invoke([SystemMessage(content=base_prompt),
+                               HumanMessage(content=human)])
+            return {"answer": resp.content.strip(), "question": req.question,
+                    "tools_used": 0, "vector_search_active": bool(context_text),
+                    "cited_docs": cited, "fallback": True, "error": str(e),
+                    "domain_id": domain_id}
+        except Exception as e2:
+            return {"answer": f"I encountered an error: {e2}", "question": req.question,
+                    "fallback": True, "error": str(e2), "domain_id": domain_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # FMAPI Model Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -4673,6 +5239,17 @@ async def create_action_master(req: ActionMasterCreateRequest):
     """
     Create a new action in the platform-wide action_master table.
     Also writes the initial OPEN history row.
+    """
+    return _create_action_master_core(req)
+
+
+def _create_action_master_core(req: ActionMasterCreateRequest) -> dict:
+    """Synchronous core of POST /action-master.
+
+    Extracted verbatim so in-process callers (CDD Action agent tool, regulatory
+    change detection) can create+track actions and run the SAME Phase-1
+    escalation engine without an HTTP round-trip. Behavior is identical to the
+    original route body — no change for supply_chain / compliance callers.
     """
     _ensure_action_master_table()
     _ensure_action_history_table()
