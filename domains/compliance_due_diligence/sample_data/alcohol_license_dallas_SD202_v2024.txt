@@ -1,0 +1,57 @@
+TEXAS ALCOHOLIC BEVERAGE COMMISSION — LICENSE APPROVAL
+
+Document ID: LIC-TABC-TX-2024-SD202
+Document Type: alcohol_license
+Project ID: SD-2024-202
+Store Number: 5202
+Address: 4210 Lemmon Ave, Dallas, TX 75219
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+License Type: Beer Retailer Off-Premise License (BF)
+Issuing Authority: Texas Alcoholic Beverage Commission (TABC)
+Application Date: 2024-08-05
+Approval Date: 2024-09-16
+Effective Date: 2024-09-16
+Expiration Date: 2026-09-15
+Renewal Period: Biennial (2-year)
+License Number: TX-TABC-BF-DAL-2024-441892
+Lead Time: 42 days
+License Fee Paid: $394
+Requirement Type: alcohol_retail_license
+Responder: TABC Dallas District Office
+Response Date: 2024-09-16
+Source Document: MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024
+
+TABC LICENSE ISSUANCE NOTICE
+
+Licensee: RaceTrac Petroleum, Inc.
+Premises: 4210 Lemmon Ave, Dallas, TX 75219
+License Type: BF — Beer Retailer Off-Premise License
+License Number: TX-TABC-BF-DAL-2024-441892
+Issue Date: September 16, 2024
+Expiration: September 15, 2026
+Status: ACTIVE
+
+LICENSE CONDITIONS
+1. Authorized to sell beer for off-premise consumption only. Cider and malt beverages
+   ≤ 5% ABV also authorized under BF license.
+2. No sales of wine or spirits under this license (wine sales require separate license).
+3. Sales hours: Monday–Sunday 7:00 AM – midnight (City of Dallas general ordinance).
+4. Age verification: No sales to persons under 21 (Texas Alcoholic Beverage Code § 106.03).
+5. All selling employees must have current TABC seller/server training certificate on file.
+6. License must be posted at all times at the licensed premises.
+7. No drive-through alcohol sales.
+
+COMPLIANCE NOTE — STANDARD v2024 PROCESS APPLIED
+This license was obtained under the standard Dallas BF process effective in 2024.
+No city-level distance certification or proximity waiver was required at time of application.
+(See MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024 for process documentation.)
+
+RENEWAL
+License expires: September 15, 2026
+Renewal application must be submitted 30 days prior to expiration.
+Biennial fee: $394.
+
+Issued By: Texas Alcoholic Beverage Commission    Date: September 16, 2024

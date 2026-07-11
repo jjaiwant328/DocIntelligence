@@ -1,0 +1,48 @@
+HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
+
+Document ID: HIST-RESP-2024-SD202
+Document Type: historical_response
+Project ID: SD-2024-202
+Store Number: 5202
+Address: 4210 Lemmon Ave, Dallas, TX 75219
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+Request Type: new_store_feasibility
+Requester: Ryan Holloway
+Responder: Kendra Patel
+Response Date: 2024-12-10
+Source Document: FEASY-EMAIL-2024-SD202; MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024
+Priority: High
+Status: COMPLETED — STORE OPENED 2024-12-05
+
+FEASIBILITY RESPONSE SUMMARY — PROJECT SD-2024-202 (DALLAS TX)
+
+RaceTrac Store #5202 at 4210 Lemmon Ave, Dallas TX opened December 5, 2024.
+All licensing and permitting completed on schedule. 5-month timeline (July → December 2024).
+
+FINAL LICENSING INVENTORY
+1. City of Dallas Zoning Confirmation (CR Community Retail): COMPLETE (2024-07-25)
+   Convenience retail + fuel station: permitted by right under CR.
+2. City of Dallas Certificate of Occupancy: ISSUED (2024-11-22)
+3. Dallas County Assumed Name / Business Registration: FILED (2024-07-30)
+4. TABC BF Beer Retailer Off-Premise License: ACTIVE
+   License #: TX-TABC-BF-DAL-2024-441892 (eff. 2024-09-16, expires 2026-09-15)
+5. Texas Comptroller Tobacco Permit: ACTIVE (eff. 2024-08-20)
+6. TCEQ PST Registration (3 USTs): REGISTERED (2024-10-12)
+7. TCEQ UST Operator Certification (Class A/B/C): CURRENT
+
+PROCESS NOTES — DALLAS TX v2024 (important for future projects)
+- TABC BF license: Straightforward standard process. 42-day lead time (July 2024).
+  No city-level distance certificate required under 2024 Dallas ordinances.
+  300 ft state minimum distance from schools/churches — both easily met at this site.
+- City of Dallas permitting queue: Building permit took 11 weeks (high backlog). Plan for 12 weeks.
+- No distance waiver or special city approval needed for alcohol under current (v2024) rules.
+  IMPORTANT: Verify city ordinances for any future Dallas applications — municipal code
+  changes are possible. This response reflects requirements as of July–December 2024.
+
+MUNICIPALITY PRECEDENT: City of Dallas — MODERATE COMPLEXITY (permitting queue).
+Alcohol process: SIMPLE (v2024 standard track). No city-level alcohol restrictions.
+
+Completed By: Kendra Patel, Senior Development Analyst    Date: December 10, 2024

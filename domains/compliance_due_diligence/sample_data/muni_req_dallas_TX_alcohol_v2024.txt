@@ -1,0 +1,73 @@
+DALLAS DEVELOPMENT SERVICES — ALCOHOL LICENSE REQUIREMENTS SUMMARY
+VERSION: v2024 (Effective through December 31, 2024)
+
+Document ID: MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024
+Document Type: municipal_requirement
+Project ID: SD-2024-202
+Store Number: 5202
+Address: 4210 Lemmon Ave, Dallas, TX 75219
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+Requirement Type: alcohol_license_requirements
+Authority: City of Dallas Development Services; Texas Alcoholic Beverage Commission (TABC)
+Prepared By: Kendra Patel, Senior Development Analyst
+Response Date: 2024-07-19
+Effective Date: 2024-01-01
+Expiration Date: 2024-12-31
+Source Document: FEASY-EMAIL-2024-SD202
+Responder: Kendra Patel
+
+DALLAS ALCOHOL LICENSE REQUIREMENTS — STANDARD PROCESS (v2024)
+
+This document summarizes the requirements for obtaining a TABC Beer Retailer Off-Premise
+License (BF) at a new RaceTrac site in the City of Dallas, Texas, as of January 1, 2024.
+
+SECTION 1 — TABC LICENSE TYPE AND PROCESS
+License Required: Beer Retailer Off-Premise (BF)
+Issuing Authority: Texas Alcoholic Beverage Commission (TABC)
+Applicable Law: Texas Alcoholic Beverage Code § 61 (Beer licenses); TABC Rule 33
+License Fee: $394 biennial (every 2 years)
+Process: Standard TABC Application — online via mytabc.tabc.texas.gov
+  Step 1: File TABC application online ($394 fee)
+  Step 2: TABC posts public notice (sign on property) for 30 days
+  Step 3: TABC approval (if no protests) — standard track
+  Step 4: Local government notification (City of Dallas notified by TABC automatically)
+
+CITY OF DALLAS — ADDITIONAL REQUIREMENTS (v2024)
+As of 2024, the City of Dallas does NOT impose additional city-level distance
+requirements beyond the TABC state minimum:
+  - State minimum distance: 300 ft from a public school (Texas Alcoholic Beverage Code § 109.33)
+  - State minimum distance: 300 ft from a church (TABC § 109.33, absent local ordinance override)
+  - City of Dallas: No additional distance requirements beyond state minimum for BF licenses.
+    No city-level proximity certificate or distance waiver required as of v2024.
+
+DISTANCE COMPLIANCE — SITE 4210 LEMMON AVE
+Nearest school: Thomas Jefferson High School — 0.68 miles — COMPLIANT (> 300 ft)
+Nearest church: St. Thomas Aquinas Catholic Church — 0.31 miles — COMPLIANT (> 300 ft)
+No state or city distance exception required.
+
+PROCESS TIMELINE (v2024 STANDARD)
+Day 1: Submit TABC online application
+Day 1–30: TABC public notice period (30-day sign posting required)
+Day 30–45: TABC review and approval
+Total Lead Time: 5–6 weeks from complete application
+
+RENEWAL
+License Period: Biennial (2-year license)
+First Renewal: 2 years from issue date
+Renewal Fee: $394
+
+SECTION 2 — TABC SELLER/SERVER TRAINING
+All employees who sell or serve alcohol must complete TABC-approved seller/server training.
+Acceptable programs: TABC On the Call (online, ~2 hrs), TIPS, ServSafe Alcohol.
+Training must be completed before employee makes first unsupervised alcohol sale.
+
+SECTION 3 — CITY OF DALLAS CERTIFICATE OF OCCUPANCY
+City of Dallas CO is required before TABC will activate the license.
+CO obtained through Dallas Development Services after final building inspection.
+Lead time for CO: 2–3 weeks after final inspection.
+
+OVERALL ASSESSMENT (v2024): STRAIGHTFORWARD — Standard TABC process. No city-level hurdles.
+Prepared By: Kendra Patel    Date: July 19, 2024

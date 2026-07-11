@@ -1,0 +1,75 @@
+CONSULTANT ADVISORY MEMORANDUM — REGULATORY CHANGE IMPACT
+
+Document ID: CONSULT-MEMO-2025-SD203
+Document Type: consultant_correspondence
+Project ID: SD-2025-203
+Store Number: 5203
+Address: 6800 Greenville Ave, Dallas, TX 75231
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+Requirement Type: alcohol_license_requirements
+Requester: Ryan Holloway
+Responder: Marcus Dawson
+Response Date: 2025-02-18
+Source Document: REGULATORY-CHANGE-DALLAS-ALCOHOL-V2024-V2025; FEASY-EMAIL-2025-SD203
+
+From: Marcus Dawson <m.dawson@storedevelopmentconsulting.com>
+To: Ryan Holloway <r.holloway@racetrac.com>; Kendra Patel <k.patel@racetrac.com>
+Date: February 18, 2025
+Subject: SD-2025-203 — Dallas Greenville Ave — ALERT: New Distance Waiver Required (Ordinance 32891)
+
+Ryan, Kendra —
+
+URGENT advisory regarding Project SD-2025-203 (6800 Greenville Ave, Dallas TX).
+
+After the Lemmon Ave deal (SD-2024-202) closed in December, Dallas passed a new ordinance
+(Ordinance No. 32891, effective January 1, 2025) that materially changes the alcohol
+licensing process for convenience retailers. I want to make sure you are aware before we
+file anything.
+
+WHAT CHANGED
+Previously (through December 31, 2024): Standard TABC BF application, no city-level
+review. We sailed through SD-2024-202 in 42 days with no city approval needed.
+
+Now (January 1, 2025 forward): If the site is within 1,000 feet of a school, church,
+or daycare, you must obtain a "Distance Exception Certificate" (DEC) from Dallas
+Development Services BEFORE filing the TABC application. The DEC process adds
+roughly 8–10 weeks and requires a site survey, neighborhood impact statement, and
+outreach to affected institutions.
+
+IMPACT ON SD-2025-203
+I ran a preliminary distance check on 6800 Greenville Ave:
+  - Sudie L. Williams Elementary School: approximately 820 feet — within 1,000 ft
+  - First United Methodist Dallas: approximately 940 feet — within 1,000 ft
+
+Both trigger the DEC requirement. We need the certificate before we can even touch
+the TABC application.
+
+MY RECOMMENDATIONS
+1. Start the DEC application NOW — I can assist with the site survey and neighborhood
+   impact statement. If we file by March 1, we should have the DEC by mid-April.
+2. Reach out to both institutions early. A letter of non-objection from each makes
+   this administrative (45 days). If either objects, Dallas City Council gets involved
+   and we could lose 2–3 additional months.
+3. I strongly recommend having someone from RaceTrac meet personally with the principals
+   at Sudie L. Williams and the church leadership. Personal outreach is more effective
+   than a form letter for obtaining non-objection letters.
+4. Update your site-selection model. Any future Dallas sites within 1,000 ft of these
+   protected uses should be flagged before option execution. I can help you map the
+   exposure across your pipeline.
+
+REVISED SCHEDULE
+If DEC filed March 1 and both non-objection letters obtained:
+  DEC issued: ~April 15, 2025
+  TABC application filed: April 16, 2025
+  TABC approval: ~May 26, 2025
+  CO + activation: ~July 2025
+  Store opening: Q3–Q4 2025 (likely slips from target Q4 2025 to Q3 2025 if DEC is smooth;
+    or Q1 2026 if City Council involvement needed)
+
+Please confirm how you want to proceed. I am available for a call this week.
+
+Marcus Dawson
+Principal Consultant — Store Development Consulting LLC

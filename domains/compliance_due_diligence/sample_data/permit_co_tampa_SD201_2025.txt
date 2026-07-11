@@ -1,0 +1,61 @@
+CITY OF TAMPA — CERTIFICATE OF OCCUPANCY
+
+Document ID: PERMIT-CO-TAMPA-2025-SD201
+Document Type: permit
+Project ID: SD-2024-201
+Store Number: 5201
+Address: 8820 N Dale Mabry Hwy, Tampa, FL 33614
+Market: Tampa FL
+State: FL
+Municipality: City of Tampa
+County: Hillsborough County
+License Type: Certificate of Occupancy
+Issuing Authority: City of Tampa Construction Services
+Permit Number: TAMPA-CO-2025-004412
+Building Permit Reference: TAMPA-BP-2024-034892
+Application Date: 2024-12-15
+Final Inspection Date: 2025-01-08
+Issue Date: 2025-01-10
+Effective Date: 2025-01-10
+Expiration Date: N/A (permanent)
+Requirement Type: certificate_of_occupancy
+Lead Time: 26 days (final inspection to CO issuance)
+Responder: City of Tampa Construction Services
+Response Date: 2025-01-10
+Source Document: MUNI-REQ-2024-SD201-HILLSBOROUGH
+
+CERTIFICATE OF OCCUPANCY
+
+This is to certify that the building or structure located at:
+8820 N Dale Mabry Hwy, Tampa, FL 33614
+Parcel ID: 076304-0000
+
+has been inspected by the City of Tampa Construction Services Division and found to comply
+with the City of Tampa Building Code, Florida Building Code (2020), and all applicable
+ordinances and regulations for the following use:
+
+USE AND OCCUPANCY
+Occupancy Classification: M — Mercantile (Convenience retail) + S-1 (Fuel canopy)
+Number of Stories: 1
+Gross Floor Area: 4,200 sq ft (store) + 5,400 sq ft (canopy footprint)
+Fire Suppression: NFPA 13 sprinkler system — INSTALLED AND TESTED
+Fire Alarm: Addressable system — INSTALLED AND TESTED
+ADA Compliance: Confirmed per 2010 ADA Standards
+
+INSPECTIONS PASSED
+- Framing inspection: November 14, 2024
+- Electrical rough-in: November 22, 2024
+- Plumbing rough-in: November 22, 2024
+- Mechanical: December 10, 2024
+- UST installation: Hillsborough County EPC inspection — December 5, 2024
+- Fire sprinkler final: December 20, 2024
+- Electrical final: January 3, 2025
+- Building final: January 8, 2025
+
+CONDITIONS
+1. This certificate authorizes occupancy for the stated use only.
+2. Any change of use requires a new Certificate of Occupancy.
+3. Florida DABT alcohol license must be posted before alcohol sales begin.
+
+Building Official: James R. Kowalski, CBO    Date: January 10, 2025
+City of Tampa Construction Services

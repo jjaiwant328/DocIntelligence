@@ -1,0 +1,51 @@
+FULTON COUNTY TAX COMMISSIONER — OCCUPATION TAX CERTIFICATE
+
+Document ID: OTC-FULTON-2024-SD204
+Document Type: business_license
+Project ID: SD-2023-204
+Store Number: 5204
+Address: 4900 Roswell Rd NE, Atlanta, GA 30342
+Market: Atlanta GA
+State: GA
+Municipality: City of Atlanta
+County: Fulton County
+License Type: Occupation Tax Certificate — Convenience Store with Motor Fuel
+Issuing Authority: Fulton County Tax Commissioner
+Certificate Number: FULTON-OTC-2024-008412
+Application Date: 2024-01-15
+Issue Date: 2024-01-29
+Effective Date: 2024-01-29
+Expiration Date: 2024-12-31
+Renewal Period: Annual (January 1)
+License Fee Paid: $275
+Lead Time: 14 days
+Requirement Type: occupation_tax_certificate
+Responder: Fulton County Tax Commissioner Office
+Response Date: 2024-01-29
+Source Document: MUNI-REQ-2023-SD204-FULTON
+
+OCCUPATION TAX CERTIFICATE
+
+Business Name: RaceTrac Petroleum, Inc.
+Trade Name: RaceTrac Store #5204
+Location: 4900 Roswell Rd NE, Atlanta, GA 30342
+Business Classification: Convenience Store with Motor Fuel (SIC 5541)
+Owner/Authorized Agent: Ryan Holloway
+
+Pursuant to Fulton County Code § 22-23, this certificate authorizes the conduct
+of business at the stated location.
+
+CONDITIONS
+1. Certificate must be renewed annually by January 31 of each year.
+2. Certificate is non-transferable; change of ownership requires new application.
+3. City of Atlanta Certificate of Occupancy must remain active.
+4. State licenses (Georgia DOR alcohol, tobacco) must be current and posted.
+5. Any material change in business type requires updated occupation tax application.
+6. Late renewal fee: $50 per month (after January 31).
+
+ASSOCIATED LICENSES ON FILE
+- City of Atlanta Beer & Wine Off-Premise License: ATL-BWO-2024-00291 (active)
+- Georgia DOR Tobacco Dealer License: GA-TOB-2024-SD204-00412 (active)
+- Georgia EPD UST Registration: GA-EPD-UST-2024-SD204 (active)
+
+Issued By: Fulton County Tax Commissioner    Date: January 29, 2024
