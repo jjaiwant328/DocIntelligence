@@ -312,7 +312,10 @@ if domain_id == "compliance_due_diligence":
     )
     RETURNS STRING
     COMMENT 'Intake agent: classifies a feasibility request into the CDD document labels.'
-    RETURN ai_classify(request_text, ARRAY(
+    -- CAST(... AS STRING) drops the param's explicit collation annotation
+    -- (inherited from the schema, e.g. UTF8_BINARY); ai_classify rejects any
+    -- explicitly-collated STRING and requires the bare default collation.
+    RETURN ai_classify(CAST(request_text AS STRING), ARRAY(
         'feasibility_request', 'municipal_requirement', 'alcohol_license',
         'tobacco_license', 'business_license', 'zoning_document', 'permit',
         'historical_response', 'regulatory_change', 'consultant_correspondence'))

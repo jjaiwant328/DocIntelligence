@@ -155,6 +155,12 @@ else:
         if col not in [c.name for c in enriched_df.schema]:
             enriched_df = enriched_df.withColumn(col, F.lit(None).cast("string"))
 
+# A fresh domain's first run has no risk_level yet: 03_idp_pipeline creates
+# document_chunks without it, and the meta join above drops it — so guarantee
+# the column exists before referencing it (no-op once Step 3 has added it).
+if "risk_level" not in enriched_df.columns:
+    enriched_df = enriched_df.withColumn("risk_level", F.lit(None).cast("string"))
+
 enriched_df = enriched_df.withColumn(
     "risk_level",
     F.when(F.col("risk_level").isNotNull(), F.col("risk_level"))

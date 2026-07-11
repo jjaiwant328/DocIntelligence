@@ -1022,8 +1022,9 @@ FULL_PIPELINE_JOB_NAME = "DocIntelligence — Full Pipeline"
 # Known job IDs as a hard fallback when name-based search is unavailable
 # (e.g. service principal lacks jobs:list permission).  Updated by create_domain_job().
 _KNOWN_JOB_IDS: dict[str, int] = {
-    "supply_chain": 1095463829768201,   # DocIntelligence — Process New Documents
-    "compliance":   1096897875306787,   # DocIntelligence — Compliance Pipeline
+    "supply_chain":             1095463829768201,   # DocIntelligence — Process New Documents
+    "compliance":               1096897875306787,   # DocIntelligence — Compliance Pipeline
+    "compliance_due_diligence": 872826521276390,    # DocIntelligence — Compliance Due Diligence Pipeline
 }
 
 def _find_job_id(name_fragment: str) -> int | None:
