@@ -1,0 +1,163 @@
+{
+  "feasibility_request": {
+    "schema": {
+      "project_id":      {"type": "string", "description": "Internal project identifier (e.g. PRJ-2025-0041)."},
+      "store_number":    {"type": "string", "description": "Proposed store number or site code."},
+      "address":         {"type": "string", "description": "Full street address of the proposed site."},
+      "market":          {"type": "string", "description": "Market or region name (e.g. Tampa FL, Dallas TX)."},
+      "state":           {"type": "string", "description": "Two-letter state abbreviation."},
+      "municipality":    {"type": "string", "description": "City or municipality name."},
+      "county":          {"type": "string", "description": "County name."},
+      "request_type":    {"type": "string", "description": "Type of feasibility request (initial, re-evaluation, expedited)."},
+      "requester":       {"type": "string", "description": "Name and title of the person submitting the request."},
+      "priority":        {"type": "string", "description": "Priority level: CRITICAL, HIGH, STANDARD, or LOW."},
+      "source_document": {"type": "string", "description": "Originating document name or email subject line."}
+    },
+    "instructions": "This is a store feasibility request. Extract project identifiers, location details, the requester, priority, and request type. If multiple stores are mentioned, extract the primary store being evaluated."
+  },
+
+  "municipal_requirement": {
+    "schema": {
+      "project_id":       {"type": "string", "description": "Project or store number this requirement applies to."},
+      "store_number":     {"type": "string", "description": "Store number or site code."},
+      "municipality":     {"type": "string", "description": "Municipality imposing the requirement."},
+      "county":           {"type": "string", "description": "County name."},
+      "state":            {"type": "string", "description": "State abbreviation."},
+      "requirement_type": {"type": "string", "description": "Type of requirement (zoning, setback, operational, environmental, etc.)."},
+      "authority":        {"type": "string", "description": "Regulatory authority (e.g. City of Tampa Planning Division)."},
+      "effective_date":   {"type": "string", "description": "Date the requirement became effective."},
+      "lead_time":        {"type": "string", "description": "Estimated lead time to satisfy the requirement (e.g. 90 days)."},
+      "source_document":  {"type": "string", "description": "Name or reference of the source regulation or document."}
+    },
+    "instructions": "This is a municipal regulatory requirement document for a store-development project. Extract the requirement type, the authority that imposes it, effective date, and estimated lead time. Focus on actionable requirements."
+  },
+
+  "alcohol_license": {
+    "schema": {
+      "store_number":      {"type": "string", "description": "Store number the license covers."},
+      "address":           {"type": "string", "description": "Licensed premises address."},
+      "municipality":      {"type": "string", "description": "Municipality of the licensed premises."},
+      "state":             {"type": "string", "description": "State abbreviation."},
+      "license_type":      {"type": "string", "description": "License type (e.g. Beer/Wine Off-Premises, Liquor Retail)."},
+      "issuing_authority": {"type": "string", "description": "State or local ABC authority issuing the license."},
+      "effective_date":    {"type": "string", "description": "License effective/issue date."},
+      "expiration_date":   {"type": "string", "description": "License expiration date."},
+      "renewal_period":    {"type": "string", "description": "Renewal frequency (e.g. annual, biennial)."},
+      "lead_time":         {"type": "string", "description": "Typical processing time for new application."},
+      "source_document":   {"type": "string", "description": "License number or document reference."}
+    },
+    "instructions": "This is an alcohol beverage license document. Extract the license type, issuing authority, validity dates, renewal period, and typical lead time for new applications."
+  },
+
+  "tobacco_license": {
+    "schema": {
+      "store_number":      {"type": "string", "description": "Store number the permit covers."},
+      "address":           {"type": "string", "description": "Licensed premises address."},
+      "municipality":      {"type": "string", "description": "Municipality."},
+      "state":             {"type": "string", "description": "State abbreviation."},
+      "license_type":      {"type": "string", "description": "Permit type (e.g. Tobacco Dealer Permit, Vapor Products Dealer)."},
+      "issuing_authority": {"type": "string", "description": "Issuing authority (state dept of revenue, county, etc.)."},
+      "effective_date":    {"type": "string", "description": "Permit effective date."},
+      "expiration_date":   {"type": "string", "description": "Permit expiration date."},
+      "renewal_period":    {"type": "string", "description": "Renewal cycle (annual, etc.)."},
+      "lead_time":         {"type": "string", "description": "Processing time for new permit."},
+      "source_document":   {"type": "string", "description": "Permit number or reference."}
+    },
+    "instructions": "This is a tobacco dealer permit or license document. Extract permit type, issuing authority, validity dates, renewal schedule, and lead time."
+  },
+
+  "business_license": {
+    "schema": {
+      "store_number":      {"type": "string", "description": "Store number or site code."},
+      "address":           {"type": "string", "description": "Business address."},
+      "municipality":      {"type": "string", "description": "Issuing municipality."},
+      "county":            {"type": "string", "description": "County."},
+      "state":             {"type": "string", "description": "State abbreviation."},
+      "license_type":      {"type": "string", "description": "License type (e.g. Business Tax Receipt, Occupational License)."},
+      "issuing_authority": {"type": "string", "description": "Issuing department or agency."},
+      "effective_date":    {"type": "string", "description": "Issue date."},
+      "expiration_date":   {"type": "string", "description": "Expiration date."},
+      "renewal_period":    {"type": "string", "description": "Renewal cycle."},
+      "lead_time":         {"type": "string", "description": "Processing time for new license."},
+      "source_document":   {"type": "string", "description": "License number."}
+    },
+    "instructions": "This is a business license or occupational license document. Extract the license type, issuing authority, validity dates, and typical lead time."
+  },
+
+  "zoning_document": {
+    "schema": {
+      "project_id":       {"type": "string", "description": "Project or store number."},
+      "store_number":     {"type": "string", "description": "Store number or site code."},
+      "address":          {"type": "string", "description": "Property address."},
+      "municipality":     {"type": "string", "description": "Municipality."},
+      "county":           {"type": "string", "description": "County."},
+      "state":            {"type": "string", "description": "State abbreviation."},
+      "requirement_type": {"type": "string", "description": "Zoning category or use type (e.g. C-2 Commercial, CU Conditional Use)."},
+      "authority":        {"type": "string", "description": "Zoning authority."},
+      "effective_date":   {"type": "string", "description": "Effective date of the zoning classification or approval."},
+      "lead_time":        {"type": "string", "description": "Estimated time to obtain zoning approval."},
+      "source_document":  {"type": "string", "description": "Document reference or case number."}
+    },
+    "instructions": "This is a zoning document, certificate, or variance approval. Extract the zoning classification, authority, effective date, and lead time for approval."
+  },
+
+  "permit": {
+    "schema": {
+      "project_id":        {"type": "string", "description": "Project or store number."},
+      "store_number":      {"type": "string", "description": "Store number or site code."},
+      "address":           {"type": "string", "description": "Permit premises address."},
+      "municipality":      {"type": "string", "description": "Municipality."},
+      "state":             {"type": "string", "description": "State abbreviation."},
+      "requirement_type":  {"type": "string", "description": "Permit type (building, signage, fire, fuel-dispensing, etc.)."},
+      "issuing_authority": {"type": "string", "description": "Permitting agency."},
+      "effective_date":    {"type": "string", "description": "Permit issue date."},
+      "expiration_date":   {"type": "string", "description": "Permit expiration date."},
+      "lead_time":         {"type": "string", "description": "Typical processing time."},
+      "source_document":   {"type": "string", "description": "Permit number."}
+    },
+    "instructions": "This is an operational permit. Extract the permit type, issuing authority, validity dates, and typical lead time for new applications."
+  },
+
+  "historical_response": {
+    "schema": {
+      "project_id":      {"type": "string", "description": "Project or store number this response references."},
+      "store_number":    {"type": "string", "description": "Store number."},
+      "municipality":    {"type": "string", "description": "Municipality the response addressed."},
+      "state":           {"type": "string", "description": "State abbreviation."},
+      "request_type":    {"type": "string", "description": "Type of the original request being answered."},
+      "responder":       {"type": "string", "description": "Name/title of the person who provided the response."},
+      "response_date":   {"type": "string", "description": "Date the response was issued."},
+      "requester":       {"type": "string", "description": "Original requester name/title."},
+      "source_document": {"type": "string", "description": "Document or email reference."}
+    },
+    "instructions": "This is a prior response to a feasibility request or municipal inquiry. Extract who responded, when, for which municipality and project, and the nature of the original request."
+  },
+
+  "regulatory_change": {
+    "schema": {
+      "municipality":     {"type": "string", "description": "Municipality where the regulation changed."},
+      "county":           {"type": "string", "description": "County."},
+      "state":            {"type": "string", "description": "State abbreviation."},
+      "requirement_type": {"type": "string", "description": "Type of requirement that changed (zoning, license, setback, etc.)."},
+      "authority":        {"type": "string", "description": "Regulatory authority that issued the change."},
+      "effective_date":   {"type": "string", "description": "Date the change takes effect."},
+      "source_document":  {"type": "string", "description": "Ordinance number, notice reference, or document name."}
+    },
+    "instructions": "This is a regulatory change notice or ordinance amendment affecting store-development compliance. Extract the municipality, requirement type that changed, effective date, and the issuing authority."
+  },
+
+  "consultant_correspondence": {
+    "schema": {
+      "project_id":      {"type": "string", "description": "Project or store number discussed."},
+      "store_number":    {"type": "string", "description": "Store number."},
+      "municipality":    {"type": "string", "description": "Municipality discussed."},
+      "state":           {"type": "string", "description": "State abbreviation."},
+      "requester":       {"type": "string", "description": "Internal contact who engaged the consultant."},
+      "responder":       {"type": "string", "description": "Consultant or external party responding."},
+      "request_type":    {"type": "string", "description": "Topic of correspondence (zoning, licensing, feasibility, etc.)."},
+      "response_date":   {"type": "string", "description": "Date of the correspondence."},
+      "source_document": {"type": "string", "description": "Email subject, letter reference, or document title."}
+    },
+    "instructions": "This is correspondence between company staff and an external consultant, attorney, or government liaison. Extract the project, municipality, parties, topic, and date."
+  }
+}

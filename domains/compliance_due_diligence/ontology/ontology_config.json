@@ -1,0 +1,43 @@
+{
+  "field_entity_map": {
+      "store_number":     ["Project",              "PROJ"],
+      "project_id":       ["Project",              "PROJ"],
+      "municipality":     ["Municipality",         "MUNI"],
+      "requirement_type": ["RegulatoryRequirement","REQ"],
+      "license_type":     ["License",              "LIC"],
+      "responder":        ["Response",             "RESP"],
+      "requester":        ["FeasibilityRequest",   "FREQ"]
+    },
+    "relationship_rules": [
+      {
+        "subject_field": "store_number",
+        "predicate":     "LOCATED_IN",
+        "object_field":  "municipality",
+        "notes":         "Project (store) is located in a Municipality."
+      },
+      {
+        "subject_field": "municipality",
+        "predicate":     "DEFINES",
+        "object_field":  "requirement_type",
+        "notes":         "Municipality defines a RegulatoryRequirement type."
+      },
+      {
+        "subject_field": "requirement_type",
+        "predicate":     "REQUIRES",
+        "object_field":  "license_type",
+        "notes":         "A RegulatoryRequirement requires a License type."
+      },
+      {
+        "subject_field": "responder",
+        "predicate":     "ANSWERS",
+        "object_field":  "requester",
+        "notes":         "Response ANSWERS FeasibilityRequest — expressed as co-occurrence of responder + requester on the same document."
+      },
+      {
+        "subject_field": "store_number",
+        "predicate":     "HAS_HISTORY_OF",
+        "object_field":  "responder",
+        "notes":         "Project HAS_HISTORY_OF Response — co-occurrence of store_number + responder on historical_response docs."
+      }
+  ]
+}
