@@ -385,15 +385,21 @@ else:
         docs_rows = []
 
     for doc in docs_rows:
-        # Row objects use dict-style access, not .get()
-        doc_id = doc["doc_id"] if "doc_id" in doc else ""
+        # "col" in Row calls tuple.__contains__ (checks VALUES, not field names), so it
+        # always returns False for a field name like "doc_id".  Convert to a plain dict
+        # first so .get() works correctly.
+        doc_dict = doc.asDict()
+        doc_id = (doc_dict.get("doc_id") or doc_dict.get("document_id")
+                  or doc_dict.get("filename") or doc_dict.get("file_path") or "")
         if not doc_id:
-            try: doc_id = doc["filename"] or ""
-            except Exception: doc_id = ""
-        doc_type   = doc["doc_type"]   if "doc_type"   in doc else ""
-        char_count = doc["char_count"] if "char_count" in doc else 0
+            continue
+        doc_type   = doc_dict.get("doc_type") or doc_dict.get("document_type") or ""
+        char_count = doc_dict.get("char_count") or 0
         short_name = re.sub(r"\.pdf$", "", doc_id, flags=re.IGNORECASE)[:50]
         eid = safe_id("DOC", short_name)
+        if eid in seen_entities:
+            continue
+        seen_entities.add(eid)
         entity_records.append((
             eid, "Document", eid,
             json_attr(filename=doc_id, doc_type=doc_type or "",
