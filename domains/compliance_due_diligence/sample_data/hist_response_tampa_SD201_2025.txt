@@ -1,0 +1,52 @@
+HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
+
+Document ID: HIST-RESP-2025-SD201
+Document Type: historical_response
+Project ID: SD-2024-201
+Store Number: 5201
+Address: 8820 N Dale Mabry Hwy, Tampa, FL 33614
+Market: Tampa FL
+State: FL
+Municipality: City of Tampa
+County: Hillsborough County
+Request Type: new_store_feasibility
+Requester: Ryan Holloway
+Responder: Kendra Patel
+Response Date: 2025-01-15
+Source Document: FEASY-EMAIL-2024-SD201; CONSULT-MEMO-2024-SD201
+Priority: High
+Status: COMPLETED — STORE OPENED
+
+FEASIBILITY RESPONSE SUMMARY — PROJECT SD-2024-201 (TAMPA FL)
+
+All licensing and permitting for RaceTrac Store #5201 at 8820 N Dale Mabry Hwy, Tampa FL
+(Hillsborough County) has been completed. Store opened January 15, 2025.
+
+FINAL LICENSING INVENTORY
+1. Zoning Verification (CI — convenience retail): COMPLETE (2024-04-10)
+2. City of Tampa Certificate of Occupancy: ISSUED (2025-01-10)
+3. Hillsborough County Business Tax Receipt: ISSUED (2025-01-02)
+4. Florida DABT 2-APS Beer & Wine License: ACTIVE (eff. 2024-08-14, expires 2025-09-30)
+5. Florida Tobacco Dealer Permit: ACTIVE (eff. 2024-05-28, expires 2025-06-30)
+6. FDEP UST Registration (3 tanks): REGISTERED (2024-10-01)
+7. Hillsborough County EPC UST Operating Permit: ISSUED (2024-10-05)
+8. NFPA 30A fuel dispenser permit: ISSUED (2025-01-08)
+
+TIMELINE SUMMARY
+Feasibility request submitted: 2024-03-15
+Requirements memo completed: 2024-04-03
+All license applications submitted: 2024-05-06
+Final license (CO) issued: 2025-01-10
+Store opened: 2025-01-15
+Total elapsed time: 10.1 months
+
+LESSONS LEARNED FOR FUTURE HILLSBOROUGH / TAMPA SITES
+- Florida DABT 2-APS license: Expect 10–12 weeks (not the stated 8). Plan accordingly.
+- Hillsborough County EPC UST permit: Apply at least 8 weeks before planned installation.
+- Certificate of Use (City of Tampa) must precede BTR application — do not try to parallel.
+- No distance exception issues in CI zone for this site. Confirm for future sites near churches/schools.
+
+Municipality precedent established: City of Tampa / Hillsborough County — LOW COMPLEXITY.
+Recommend this market for future expansion. Prior responses can be used as templates.
+
+Completed By: Kendra Patel, Senior Development Analyst    Date: January 15, 2025

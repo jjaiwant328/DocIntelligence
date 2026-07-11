@@ -1,0 +1,71 @@
+CONSULTANT STATUS MEMORANDUM — STORE DEVELOPMENT FEASIBILITY
+
+Document ID: CONSULT-MEMO-2024-SD201
+Document Type: consultant_correspondence
+Project ID: SD-2024-201
+Store Number: 5201
+Address: 8820 N Dale Mabry Hwy, Tampa, FL 33614
+Market: Tampa FL
+State: FL
+Municipality: City of Tampa
+County: Hillsborough County
+Requirement Type: licensing_status_summary
+Requester: Ryan Holloway
+Responder: Marcus Dawson
+Response Date: 2024-08-20
+Source Document: FEASY-EMAIL-2024-SD201; MUNI-REQ-2024-SD201-HILLSBOROUGH
+
+From: Marcus Dawson <m.dawson@storedevelopmentconsulting.com>
+To: Ryan Holloway <r.holloway@racetrac.com>; Kendra Patel <k.patel@racetrac.com>
+Date: August 20, 2024
+Subject: SD-2024-201 Tampa FL — Licensing Status Update (All Critical Licenses Secured)
+
+Ryan, Kendra —
+
+Project SD-2024-201 (Store #5201 — 8820 N Dale Mabry Hwy, Tampa) licensing is
+substantially complete. Summary below.
+
+LICENSES AND PERMITS — STATUS AS OF AUGUST 20, 2024
+
+1. ZONING VERIFICATION LETTER (City of Tampa)
+   Status: COMPLETE — Received April 10, 2024
+   Finding: CI zoning — convenience retail + fuel station is permitted-by-right.
+   No variance required.
+
+2. FLORIDA DABT 2-APS ALCOHOL LICENSE
+   Status: APPROVED — August 14, 2024
+   License #: FL-DABT-2APS-HILL-2024-55291
+   Distance clearance confirmed (0.72 mi from nearest school).
+   Ready to activate upon Certificate of Occupancy.
+
+3. FLORIDA TOBACCO DEALER PERMIT
+   Status: APPROVED — May 28, 2024
+   Permit #: FL-TOB-TDP-2024-SD201-88214
+   No issues. Annual fee paid.
+
+4. SITE PLAN APPROVAL (City of Tampa DRC)
+   Status: APPROVED — June 18, 2024
+   Canopy setback confirmed at 12 ft from right-of-way (exceeds 10 ft minimum).
+   Landscaping buffer plan approved.
+
+5. BUILDING PERMIT
+   Status: ISSUED — July 8, 2024 (Permit #TAMPA-BP-2024-034892)
+   Construction underway. Target completion: November 2024.
+
+6. UST REGISTRATION (FDEP + Hillsborough County EPC)
+   Status: Application submitted — August 15, 2024. Expected approval: September 2024.
+   Three (3) USTs: 10,000 gal regular, 10,000 gal premium, 8,000 gal diesel.
+
+7. HILLSBOROUGH COUNTY BUSINESS TAX RECEIPT
+   Status: PENDING — will apply after Certificate of Use issued (expected Q4 2024).
+
+OUTSTANDING ITEMS
+- BTR application: Submit after CO issued (targeting November 2024)
+- DABT designated manager update: Update with store manager name 30 days pre-opening
+- RVP training: Schedule all staff for Responsible Vendor Program within 90 days of opening
+
+RISK ASSESSMENT: LOW — No regulatory obstacles. On track for Q1 2025 opening.
+
+Marcus Dawson
+Principal Consultant — Store Development Consulting LLC
+Phone: (404) 555-0187 | m.dawson@storedevelopmentconsulting.com

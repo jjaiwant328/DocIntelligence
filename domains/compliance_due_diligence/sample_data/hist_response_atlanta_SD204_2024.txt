@@ -1,0 +1,53 @@
+HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
+
+Document ID: HIST-RESP-2024-SD204
+Document Type: historical_response
+Project ID: SD-2023-204
+Store Number: 5204
+Address: 4900 Roswell Rd NE, Atlanta, GA 30342
+Market: Atlanta GA
+State: GA
+Municipality: City of Atlanta
+County: Fulton County
+Request Type: new_store_feasibility
+Requester: Ryan Holloway
+Responder: Kendra Patel
+Response Date: 2024-03-08
+Source Document: FEASY-EMAIL-2023-SD204; MUNI-REQ-2023-SD204-FULTON
+Priority: Medium
+Status: COMPLETED — STORE OPENED 2024-02-20
+
+FEASIBILITY RESPONSE SUMMARY — PROJECT SD-2023-204 (ATLANTA GA)
+
+RaceTrac Store #5204 at 4900 Roswell Rd NE, Atlanta GA opened February 20, 2024.
+5.5 month timeline (September 2023 → February 2024).
+
+FINAL LICENSING INVENTORY
+1. City of Atlanta Zoning Confirmation (C-1): COMPLETE (2023-09-28)
+2. City of Atlanta Certificate of Occupancy: ISSUED (2024-02-12)
+3. City of Atlanta Beer & Wine Off-Premise License: ACTIVE
+   License #: ATL-BWO-2024-00291 (eff. 2024-01-10, expires 2024-12-31)
+   Prior-activity check: Former license at site in good standing — no issues.
+4. Georgia DOR Tobacco Dealer License: ACTIVE
+   License #: GA-TOB-2024-SD204-00412 (eff. 2023-10-25, expires 2024-12-31)
+5. Fulton County Occupation Tax Certificate: ISSUED (2024-01-29)
+   Certificate #: FULTON-OTC-2024-008412
+6. Georgia EPD UST Registration (2 USTs, 10,000 gal + 8,000 gal): REGISTERED (2023-11-18)
+7. Phase I ESA: Clean (former UST remediation completed 2019 — no residual contamination)
+
+PROCESS NOTES — ATLANTA / FULTON COUNTY
+- City of Atlanta alcohol license: 11 weeks lead time (slightly longer than estimated 8–12).
+  Designated manager background check took 3 weeks longer than expected.
+  Recommendation: Start background check submission immediately upon site option execution.
+- Prior-activity check (former gas station): Resolved smoothly. Prior operator's license
+  was in good standing. No issues.
+- Phase I ESA on former UST site: Favorable outcome. Saves significant time vs. new UST installation.
+  Always confirm prior remediation status during site selection.
+- C-1 zoning was confirmed — fuel station accessory use approved on first pass.
+- City of Atlanta permitting queue: 11 weeks for building permit. Plan accordingly.
+
+MUNICIPALITY PRECEDENT: City of Atlanta / Fulton County — LOW COMPLEXITY.
+Alcohol process: MODERATE (11 weeks; background check is rate-limiting step).
+No distance waivers or special city approvals needed.
+
+Completed By: Kendra Patel, Senior Development Analyst    Date: March 8, 2024

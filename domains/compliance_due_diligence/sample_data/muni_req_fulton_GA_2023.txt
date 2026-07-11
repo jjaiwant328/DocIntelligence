@@ -1,0 +1,82 @@
+MUNICIPAL REQUIREMENTS SUMMARY — STORE DEVELOPMENT FEASIBILITY
+
+Document ID: MUNI-REQ-2023-SD204-FULTON
+Document Type: municipal_requirement
+Project ID: SD-2023-204
+Store Number: 5204
+Address: 4900 Roswell Rd NE, Atlanta, GA 30342
+Market: Atlanta GA
+State: GA
+Municipality: City of Atlanta
+County: Fulton County
+Requirement Type: municipal_licensing_summary
+Authority: City of Atlanta Office of Planning; Fulton County Tax Commissioner
+Prepared By: Kendra Patel, Senior Development Analyst
+Response Date: 2023-09-20
+Effective Date: 2023-01-01
+Source Document: FEASY-EMAIL-2023-SD204
+Responder: Kendra Patel
+
+EXECUTIVE SUMMARY
+Site at 4900 Roswell Rd NE, Atlanta GA (Fulton County) is feasible. Former gas-station
+use is advantageous — FDEP/EPD remediation clearance may already exist; confirm with
+property owner. C-1 zoning supports convenience retail + fuel (by right). No significant
+licensing obstacles identified. Alcohol license requires prior-activity review on the parcel.
+
+SECTION 1 — ZONING
+Authority: City of Atlanta Planning, (404) 330-6145
+Current Zoning: C-1 (Light Commercial)
+Proposed Use: Convenience retail + motor fuel dispensing
+Compatibility: PERMITTED — fuel stations are accessory to C-1 retail uses when on lots > 0.75 acres.
+  Site at 0.92 acres meets threshold.
+Variance Required: None for principal use. Confirm canopy setbacks in site plan review.
+Lead Time: 2 weeks for written zoning confirmation
+Requirement Type: zoning_clearance
+
+SECTION 2 — ALCOHOL LICENSE (BEER AND WINE OFF-PREMISE)
+Authority: Georgia Department of Revenue — Alcohol and Tobacco Division; City of Atlanta License
+  and Permits Unit
+License Type: Retailer's Beer License (off-premise consumption) + Package Wine Dealer License
+Issuing Authority: Georgia DOR; City of Atlanta (ATL license required in addition)
+Applicable Law: Georgia Code § 3-3; Atlanta Code of Ordinances § 10-36
+Requirements:
+  - City of Atlanta off-premise alcohol license ($175 application fee; $550 annual)
+  - Georgia DOR retailer registration (online; ~$50)
+  - Designated manager background check (City of Atlanta requirement)
+  - Distance: Must be ≥ 100 ft from schools, churches per Atlanta Code § 10-36.6
+    Nearest school: Atlanta International School — 0.38 miles — COMPLIANT
+    Nearest church: Johnson Memorial United Methodist — 0.22 miles — COMPLIANT
+  - Prior-activity check: Site is former gas station. City of Atlanta requires confirmation
+    that prior license at site (if any) was in good standing. Verify with City.
+Lead Time: 8–12 weeks
+Renewal Period: Annual (January 1 renewal deadline)
+License Fee: $550 annual (City of Atlanta)
+
+SECTION 3 — TOBACCO
+Authority: Georgia Department of Revenue — Alcohol and Tobacco Division
+License Type: Retail Tobacco Dealer License
+Applicable Law: Georgia Code § 48-11; Georgia Rule 560-10-1
+Lead Time: 2–3 weeks
+Renewal Period: Annual
+License Fee: $125
+
+SECTION 4 — FULTON COUNTY OCCUPATION TAX
+Authority: Fulton County Tax Commissioner
+License Type: Occupation Tax Certificate
+Applicable Law: Fulton County Code § 22-23 (Occupation Tax)
+Requirements: Completed application; Georgia business registration; Certificate of Occupancy
+Lead Time: 1–2 weeks
+Renewal Period: Annual (January 1)
+Fee: $200–$350 (convenience retail category)
+
+SECTION 5 — BUILDING AND SITE
+Authority: City of Atlanta Office of Buildings
+Key Items:
+  - Site plan review and approval (12–16 weeks)
+  - Building permit for new construction (10–14 weeks after site plan approval)
+  - Georgia EPD UST registration for underground storage tanks
+  - Prior-use Phase I/II environmental clearance from prior UST site: Confirm with real estate.
+
+OVERALL ASSESSMENT: FEASIBLE — LOW COMPLEXITY. Former gas-station site may accelerate UST permitting.
+
+Prepared By: Kendra Patel    Date: September 20, 2023
