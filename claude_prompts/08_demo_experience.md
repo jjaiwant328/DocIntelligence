@@ -29,3 +29,17 @@ Once `compliance_due_diligence` is active, all of the above light up for it with
 
 ## Constraints
 Reuse existing components and the `?domain_id=` pattern. Additive views only; don't fork per-domain pages.
+
+## Fine-tuning (round 2 — user feedback 2026-07-11)
+6. **Genie "Data Questions" mode** in Copilot Studio → Ask: toggle between Documents (`/copilot-query`) and Data Questions (`/genie-query`); gate the toggle on `GET /genie-space`. Backend already built (space `01f17d61d9051dcdb0c80dd20b1f9aa8`).
+7. **Knowledge Graph:**
+   - Fix the shading: unselected entities render in an odd shaded value — correct the dim/opacity logic.
+   - Entity List tab: add a filter + search box.
+   - Graph View tab: move the entity-type filter to the top.
+   - Remove the **Send email** action (duplicates **Request Action**).
+8. **Compliance Map → Coverage Matrix** is empty: define what it demonstrates (jurisdiction × requirement/license-type coverage — which municipalities have which requirements researched/covered vs gaps), generate good synthetic data in line with the store-development use case, and render it.
+9. **Action Digest (Compliance Map):** keep the per-doc links but **summarize the actions** and add a review link per action.
+10. **Regulatory Pulse:** add a **summary**, **effective dates**, and **what action is required by when** for each change.
+11. **Global — key/value display:** wherever extracted key/value pairs are shown (e.g. `field_value` = `{"value":...,"confidence":...}`), parse and show **only the value** for a cleaner read.
+12. **Navigation:** review all navigation — especially **Back** — and ensure it is correct/smooth (URL sync, tab/sub-tab restore).
+13. **Setup & Readiness compliance prompt editor:** it becomes read-only after save, shows only a small portion of the saved prompt, and doesn't scroll. Make it re-editable, show the full prompt, and make it scrollable.

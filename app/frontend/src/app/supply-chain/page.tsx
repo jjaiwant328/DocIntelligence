@@ -437,6 +437,23 @@ const CAT_DOT: Record<string,string> = {
 
 // ── Top-level navigation definition ──────────────────────────────────────────
 
+// Extracted field_value is often JSON like {"value":"X","confidence":0.9};
+// show only the value for a cleaner read (fall back to the raw string).
+function fieldVal(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  const t = s.trim();
+  if (t.startsWith("{") || t.startsWith("[")) {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o === "object" && !Array.isArray(o) && "value" in (o as object)) {
+        return String((o as { value: unknown }).value ?? "");
+      }
+    } catch { /* not JSON — use raw */ }
+  }
+  return s;
+}
+
 function buildTabs(domainId: string) {
   const categories = getDomainCategories(domainId);
   return [
@@ -724,6 +741,36 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
   const [askLoading, setAskLoading] = useState(false);
   const [addToLegal, setAddToLegal] = useState(false);
 
+  // Genie "Data Questions" mode (aggregate SQL via a Genie space)
+  const [askMode,     setAskMode]     = useState<"documents" | "data">("documents");
+  const [genieEnabled, setGenieEnabled] = useState(false);
+  const [genieResult, setGenieResult] = useState<{ answer?: string; sql?: string; columns?: string[] | null; data?: string[][] | null; conversation_id?: string; status?: string; message?: string } | null>(null);
+  const [genieConv,   setGenieConv]   = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setGenieEnabled(false); setAskMode("documents"); setGenieResult(null); setGenieConv(undefined);
+    fetch(`${apiBase}/api/docintel/genie-space?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : { enabled: false })
+      .then(d => setGenieEnabled(!!d.enabled))
+      .catch(() => {});
+  }, [domainId, apiBase]);
+
+  const handleGenieAsk = async () => {
+    if (!askQuery.trim()) return;
+    setAskLoading(true); setGenieResult(null);
+    try {
+      const res = await fetch(`${apiBase}/api/docintel/genie-query`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, query: askQuery, conversation_id: genieConv }),
+      });
+      const d = await res.json();
+      setGenieResult(d);
+      if (d.conversation_id) setGenieConv(d.conversation_id);
+    } catch {
+      setGenieResult({ status: "error", message: "Request failed" });
+    } finally { setAskLoading(false); }
+  };
+
   // Save session state whenever the persisted pieces change.
   useEffect(() => {
     try {
@@ -926,9 +973,12 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
         {loading3 ? (
           <div className="text-xs text-gray-400 py-4 text-center animate-pulse">Loading full prompt text…</div>
         ) : (
-          <textarea rows={10} value={editText} onChange={e => setEditText(e.target.value)}
-            className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400"
-            spellCheck={false} />
+          <>
+            <textarea value={editText} onChange={e => setEditText(e.target.value)}
+              className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 resize-y overflow-auto min-h-[18rem] max-h-[32rem] focus:outline-none focus:ring-1 focus:ring-blue-400"
+              spellCheck={false} />
+            <p className="text-[10px] text-gray-400">{editText.length.toLocaleString()} characters · scroll to see the full prompt · fully editable</p>
+          </>
         )}
         <div className="flex gap-2">
           <button disabled={saving2 || loading3} onClick={async () => { setSaving2(true); await handleUpdatePrompt(promptId, editName, editText); setSaving2(false); onDone(); }}
@@ -1052,7 +1102,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
                       <span className="text-sm font-semibold text-gray-800 flex-1">{p.name}</span>
                       <span className="text-[10px] text-gray-400">{p.created_at ? new Date(p.created_at).toLocaleDateString() : ""}</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 font-mono line-clamp-2">{p.preview}</p>
+                    <pre className="text-[11px] text-gray-500 font-mono whitespace-pre-wrap max-h-24 overflow-auto bg-gray-50 rounded p-2 border border-gray-100">{p.preview}</pre>
                     <div className="flex items-center gap-2 pt-1">
                       {!p.is_active && (
                         <button onClick={() => handleActivatePrompt(p.prompt_id)}
@@ -1316,24 +1366,77 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
         ))}
       </div>
 
+      {/* Mode toggle: Documents (LLM+VectorSearch) vs Data Questions (Genie SQL) */}
+      {genieEnabled && (
+        <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-semibold">
+          <button onClick={() => setAskMode("documents")}
+            className={`px-3 py-1.5 rounded-md ${askMode === "documents" ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            📄 Documents
+          </button>
+          <button onClick={() => setAskMode("data")}
+            className={`px-3 py-1.5 rounded-md ${askMode === "data" ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            📊 Data Questions
+          </button>
+        </div>
+      )}
+      {genieEnabled && askMode === "data" && (
+        <p className="text-[11px] text-gray-400 -mt-2">Data Questions run governed SQL over your compliance tables via a Genie space — best for counts, totals, and “how many / which” questions.</p>
+      )}
+
       {/* Input */}
       <div className="flex gap-2">
         <textarea
           value={askQuery}
           onChange={e => setAskQuery(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(); } }}
-          placeholder="Ask a document intelligence question…"
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askMode === "data" ? handleGenieAsk() : handleAsk(); } }}
+          placeholder={askMode === "data" ? "Ask a data question (e.g. how many open feasibility requests by municipality?)…" : "Ask a document intelligence question…"}
           rows={2}
           className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
         />
         <button
-          onClick={handleAsk}
+          onClick={() => askMode === "data" ? handleGenieAsk() : handleAsk()}
           disabled={!askQuery.trim() || askLoading}
           className="px-5 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed self-start"
         >
           {askLoading ? "…" : "Ask"}
         </button>
       </div>
+
+      {/* Genie (Data Questions) result */}
+      {askMode === "data" && genieResult && (
+        <div className="border border-gray-200 rounded-xl p-4 space-y-3 bg-white">
+          {genieResult.status === "error" ? (
+            <p className="text-sm text-red-500">Genie error: {genieResult.message}</p>
+          ) : (
+            <>
+              {genieResult.answer && <p className="text-sm text-gray-800 whitespace-pre-wrap">{genieResult.answer}</p>}
+              {genieResult.columns && genieResult.data && genieResult.data.length > 0 && (
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200"><tr>
+                      {genieResult.columns.map(c => <th key={c} className="text-left px-3 py-2 text-gray-500 font-semibold">{c}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {genieResult.data.map((row, i) => (
+                        <tr key={i} className="border-b border-gray-100">
+                          {row.map((v, j) => <td key={j} className="px-3 py-2 text-gray-700">{v}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {genieResult.sql && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-gray-400 hover:text-gray-600">View SQL</summary>
+                  <pre className="mt-2 bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">{genieResult.sql}</pre>
+                </details>
+              )}
+              {genieConv && <p className="text-[10px] text-gray-400">Follow-up questions continue this conversation.</p>}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Loading */}
       {askLoading && (
@@ -1612,10 +1715,11 @@ interface RegChangeItem {
 interface JurisdictionMatrix {
   jurisdictions: string[];
   topics: string[];
-  matrix: Record<string, Record<string, { count: number; risk_levels: string[]; has_open: boolean; docs: { doc_id: string; filename: string; risk_level: string; statute_number: string }[] }>>;
+  matrix: Record<string, Record<string, { count: number; risk_levels: string[]; has_open: boolean; status?: string; synthetic?: boolean; docs: { doc_id: string; filename: string; risk_level: string; statute_number: string }[] }>>;
   total_docs_with_jurisdiction: number;
   total_cells: number;
   cells_with_issues: number;
+  cells_gap?: number;
 }
 
 function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: string; apiBase: string }) {
@@ -1675,16 +1779,27 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
     COMPARISON:       "bg-indigo-500",
   };
 
-  // Coverage matrix: color cells
-  const cellColor = (cell: { count: number; has_open: boolean } | undefined) => {
-    if (!cell) return "bg-red-50 text-red-400 border-red-100";
-    if (cell.has_open) return "bg-amber-50 text-amber-700 border-amber-200";
-    return "bg-green-50 text-green-700 border-green-200";
+  // Coverage matrix: color cells by status (covered / in_progress / issues / gap)
+  const cellStatus = (cell: { count: number; has_open: boolean; status?: string } | undefined) => {
+    if (!cell) return "gap";
+    if (cell.has_open) return "issues";
+    return cell.status || (cell.count > 0 ? "covered" : "gap");
   };
-  const cellLabel = (cell: { count: number; has_open: boolean } | undefined) => {
-    if (!cell) return "✗ Gap";
-    if (cell.has_open) return "⚠ Issues";
-    return "✓ Covered";
+  const cellColor = (cell: { count: number; has_open: boolean; status?: string } | undefined) => {
+    switch (cellStatus(cell)) {
+      case "issues":      return "bg-amber-50 text-amber-700 border-amber-200";
+      case "in_progress": return "bg-blue-50 text-blue-700 border-blue-200";
+      case "covered":     return "bg-green-50 text-green-700 border-green-200";
+      default:            return "bg-red-50 text-red-400 border-red-100";
+    }
+  };
+  const cellLabel = (cell: { count: number; has_open: boolean; status?: string } | undefined) => {
+    switch (cellStatus(cell)) {
+      case "issues":      return "⚠ Issues";
+      case "in_progress": return "◐ In progress";
+      case "covered":     return "✓ Covered";
+      default:            return "✗ Gap";
+    }
   };
 
   if (sub === "map") {
@@ -1695,13 +1810,17 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
           {mapData && (
             <div className="flex gap-2 ml-auto flex-wrap">
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{mapData.jurisdictions.length} jurisdictions</span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">{mapData.total_cells - mapData.cells_with_issues} covered</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">{mapData.total_cells - mapData.cells_with_issues - (mapData.cells_gap ?? 0)} covered</span>
+              {(mapData.cells_gap ?? 0) > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-500">{mapData.cells_gap} gaps</span>
+              )}
               {mapData.cells_with_issues > 0 && (
                 <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{mapData.cells_with_issues} with issues</span>
               )}
             </div>
           )}
         </div>
+        <p className="text-xs text-gray-500 -mt-2">Which license &amp; requirement types have been researched for each municipality — spot coverage gaps before a store opens. Click a cell to see the underlying documents.</p>
         {mapLoading && <p className="text-sm text-gray-400">Loading map…</p>}
         {mapErr && <p className="text-sm text-red-500">{mapErr}</p>}
         {mapData && mapData.jurisdictions.length === 0 && (
@@ -1737,7 +1856,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                               className={`text-[10px] font-semibold px-2 py-1 rounded border w-full ${cellColor(cell)}`}
                             >
                               {cellLabel(cell)}
-                              {cell && <span className="ml-1 text-gray-400">({cell.count})</span>}
+                              {cell && cell.count > 0 && <span className="ml-1 text-gray-400">({cell.count})</span>}
                             </button>
                           </td>
                         );
@@ -1791,6 +1910,20 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
             No correspondence or action items found. Process documents with deadline and assigned_owner fields to populate this digest.
           </div>
         )}
+        {digestItems.length > 0 && (() => {
+          const overdue = digestItems.filter(i => i.status === "OVERDUE").length;
+          const dueSoon = digestItems.filter(i => i.status === "DUE_SOON").length;
+          const open    = digestItems.filter(i => i.status === "OPEN").length;
+          return (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600 flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span><strong className="text-gray-800">{digestItems.length}</strong> action items</span>
+              {overdue > 0 && <span className="text-red-600 font-semibold">{overdue} overdue</span>}
+              {dueSoon > 0 && <span className="text-amber-600 font-semibold">{dueSoon} due soon</span>}
+              {open > 0 && <span className="text-blue-600">{open} open</span>}
+              <span className="text-gray-400">· click a row or Review to open the source document</span>
+            </div>
+          );
+        })()}
         {digestItems.length > 0 && (
           <div className="overflow-x-auto rounded-xl border border-gray-200">
             <table className="w-full text-xs">
@@ -1802,6 +1935,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                   <th className="text-left px-3 py-2.5 text-gray-500 font-semibold">Deadline</th>
                   <th className="text-left px-3 py-2.5 text-gray-500 font-semibold">Risk</th>
                   <th className="text-left px-3 py-2.5 text-gray-500 font-semibold">Status</th>
+                  <th className="text-left px-3 py-2.5 text-gray-500 font-semibold">Review</th>
                 </tr>
               </thead>
               <tbody>
@@ -1827,6 +1961,12 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${digestStatusStyle[item.status] ?? "bg-gray-100 text-gray-500"}`}>
                         {(item.status ?? "").replace("_", " ")}
                       </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <button onClick={(e) => { e.stopPropagation(); onDocClick(item.doc_id); }}
+                        className="text-[10px] font-semibold px-2 py-1 rounded-md border border-blue-200 text-blue-600 hover:bg-blue-50">
+                        Review →
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -1887,14 +2027,27 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                 <p className="text-xs font-semibold text-gray-800 mt-1.5">{item.filename}</p>
                 {item.statute_number && <p className="text-[10px] text-gray-500 mt-0.5">{item.statute_number}</p>}
                 {item.enforcement_authority && <p className="text-[10px] text-gray-400">{item.enforcement_authority}</p>}
+                {/* Auto summary */}
+                <p className="text-[11px] text-gray-600 mt-1">
+                  {(ct ? ct.charAt(0) + ct.slice(1).toLowerCase() : "Change")}
+                  {item.jurisdiction ? ` in ${item.jurisdiction}` : ""}
+                  {item.effective_date ? `, effective ${item.effective_date}` : ""}
+                  {". "}
+                  {item.risk_level ? `${item.risk_level} risk — review affected feasibility projects and refresh guidance.` : "Review affected feasibility projects and refresh guidance."}
+                </p>
+                {/* Action required by */}
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    urgency === "OVERDUE" ? "bg-red-100 text-red-700" :
+                    urgency === "IMMINENT" ? "bg-amber-100 text-amber-700" : "bg-blue-50 text-blue-700"}`}>
+                    ⚑ Action required by {item.effective_date || "TBD"}
+                    {item.days_until !== null && item.days_until !== undefined &&
+                      ` (${item.days_until < 0 ? `${Math.abs(item.days_until)}d overdue` : `${item.days_until}d`})`}
+                  </span>
+                </div>
                 <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                   {item.effective_date && (
                     <span className="text-[10px] text-gray-500">Effective: <strong>{item.effective_date}</strong></span>
-                  )}
-                  {item.days_until !== null && item.days_until !== undefined && (
-                    <span className="text-[10px] text-gray-400">
-                      {item.days_until < 0 ? `${Math.abs(item.days_until)}d past` : `in ${item.days_until}d`}
-                    </span>
                   )}
                   {item.confidence_level && (
                     <span className="text-[10px] text-gray-400">Confidence: {item.confidence_level}</span>
@@ -1919,6 +2072,8 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
   const [dragging,    setDragging]    = useState(false);
   const [dragStart,   setDragStart]   = useState({ x: 0, y: 0 });
   const [graphSearch, setGraphSearch] = useState("");
+  const [listSearch,  setListSearch]  = useState("");
+  const [listType,    setListType]    = useState("all");
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
   const toggleType = (t: string) => setHiddenTypes(prev => {
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
@@ -1989,14 +2144,44 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
 
   // ── Entity List sub-view ─────────────────────────────────────────────────────
   if (sub === "entities") {
+    const listTypes = Array.from(new Set(graph.nodes.map(n => n.type))).sort();
+    const lq = listSearch.trim().toLowerCase();
+    const listNodes = graph.nodes.filter(n =>
+      (listType === "all" || n.type === listType) &&
+      (!lq || n.label.toLowerCase().includes(lq) || n.type.toLowerCase().includes(lq))
+    );
     return (
+      <div className="space-y-3">
+        {/* Search + type filter */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px]">
+            <input
+              value={listSearch}
+              onChange={e => setListSearch(e.target.value)}
+              placeholder="Search entities by name or type…"
+              className="w-full text-xs border border-gray-200 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+            />
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300 text-xs">🔍</span>
+          </div>
+          <select
+            value={listType}
+            onChange={e => setListType(e.target.value)}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300"
+          >
+            <option value="all">All types ({graph.nodes.length})</option>
+            {listTypes.map(t => (
+              <option key={t} value={t}>{t} ({graph.nodes.filter(n => n.type === t).length})</option>
+            ))}
+          </select>
+          <span className="text-[11px] text-gray-400">{listNodes.length} shown</span>
+        </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-        {graph.nodes.map(n => (
+        {listNodes.map(n => (
           <div
             key={n.id}
             onClick={() => handleNodeClick(n.id)}
             className={`flex items-center gap-2 text-xs rounded-md px-2.5 py-2 border cursor-pointer transition-colors
-              ${selected===n.id ? "bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200" : "bg-gray-50 border-gray-100 hover:bg-white hover:border-gray-300"}`}
+              ${selected===n.id ? "bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200" : "bg-white border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40"}`}
           >
             <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorForType(n.type) }} />
             <div className="min-w-0">
@@ -2005,6 +2190,9 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
             </div>
           </div>
         ))}
+        {listNodes.length === 0 && (
+          <p className="col-span-full text-xs text-gray-400 text-center py-6">No entities match your search.</p>
+        )}
         {selectedNode && (
           <div className="col-span-full mt-3 bg-white rounded-lg border border-indigo-200 p-4">
             <div className="flex items-start justify-between mb-3">
@@ -2041,6 +2229,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
             )}
           </div>
         )}
+      </div>
       </div>
     );
   }
@@ -2083,7 +2272,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
         <div className="absolute inset-0 bg-black/30" onClick={() => setEmailOpen(false)} />
         <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-2xl mx-4 p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
           <div className="flex items-center justify-between flex-shrink-0">
-            <h3 className="text-base font-bold text-gray-800">Request Action / Send Email</h3>
+            <h3 className="text-base font-bold text-gray-800">Request Action</h3>
             <button onClick={() => setEmailOpen(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
           </div>
 
@@ -2222,7 +2411,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
           <div className="ml-auto">
             <button
               onClick={openEmailModal}
-              title="Send email / request action"
+              title="Request action"
               className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-gray-200 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors text-gray-500 cursor-pointer bg-white"
             >
               <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2230,6 +2419,34 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
               </svg>
               <span className="hidden sm:inline">Request Action</span>
             </button>
+          </div>
+        </div>
+
+        {/* Entity-type filter — at the top of the graph; click a type to show/hide it */}
+        <div className="px-3 py-2.5 border-b border-gray-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Filter by entity type</span>
+            {hiddenTypes.size > 0 && (
+              <button onClick={() => setHiddenTypes(new Set())} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Show all</button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+            {presentTypes.map(type => {
+              const hidden = hiddenTypes.has(type);
+              const count = graph.nodes.filter(n => n.type === type).length;
+              return (
+                <button
+                  key={type}
+                  onClick={() => toggleType(type)}
+                  title={hidden ? "Show this type" : "Hide this type"}
+                  className={`flex items-center gap-1.5 text-[11px] rounded-full border px-2 py-0.5 transition-colors cursor-pointer ${hidden ? "border-gray-200 text-gray-300 line-through bg-gray-50" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+                >
+                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hidden ? "#cbd5e1" : colorForType(type) }} />
+                  {type}
+                  <span className="text-gray-400">({count})</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -2285,7 +2502,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
                 const lx = 0.25 * s.x + 0.5 * cx + 0.25 * t.x;
                 const ly = 0.25 * s.y + 0.5 * cy + 0.25 * t.y;
                 return (
-                  <g key={i} opacity={dimmed ? 0.08 : 1}
+                  <g key={i} opacity={dimmed ? 0.18 : 1} style={{ transition: "opacity 0.2s ease" }}
                     onMouseEnter={() => setHoveredEdge(i)}
                     onMouseLeave={() => setHoveredEdge(null)}>
                     <path d={d} fill="none" stroke="transparent" strokeWidth={12} style={{ cursor: "pointer" }} />
@@ -2319,7 +2536,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
                 const searchDimmed = !!(visibleNodeIds && !visibleNodeIds.has(n.id));
                 const dimmed = searchDimmed || !!(selected && !isSel && !connectedEdges.some(e => e.source === n.id || e.target === n.id));
                 return (
-                  <g key={n.id} style={{ cursor: "pointer" }} opacity={dimmed ? 0.15 : 1}
+                  <g key={n.id} style={{ cursor: "pointer", transition: "opacity 0.2s ease" }} opacity={dimmed ? 0.28 : 1}
                     onClick={() => handleNodeClick(n.id)}
                     onMouseEnter={() => setHovered(n.id)}
                     onMouseLeave={() => setHovered(null)}>
@@ -2361,33 +2578,6 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
           </svg>
         </div>
 
-        {/* Legend / entity-type filter — click a type to show or hide it */}
-        <div className="px-3 py-2.5 border-t border-gray-100">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Filter by entity type</span>
-            {hiddenTypes.size > 0 && (
-              <button onClick={() => setHiddenTypes(new Set())} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Show all</button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-            {presentTypes.map(type => {
-              const hidden = hiddenTypes.has(type);
-              const count = graph.nodes.filter(n => n.type === type).length;
-              return (
-                <button
-                  key={type}
-                  onClick={() => toggleType(type)}
-                  title={hidden ? "Show this type" : "Hide this type"}
-                  className={`flex items-center gap-1.5 text-[11px] rounded-full border px-2 py-0.5 transition-colors cursor-pointer ${hidden ? "border-gray-200 text-gray-300 line-through bg-gray-50" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
-                >
-                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hidden ? "#cbd5e1" : colorForType(type) }} />
-                  {type}
-                  <span className="text-gray-400">({count})</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </div>
 
       {/* Detail panel — light theme */}
@@ -2465,23 +2655,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-            Request Action / Send Email
-          </button>
-        </div>
-      )}
-
-      {/* Email button when no node selected */}
-      {!selectedNode && (
-        <div className="flex-shrink-0 self-start mt-2">
-          <button
-            onClick={openEmailModal}
-            title="Send email / request action"
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border border-gray-200 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors text-gray-500 cursor-pointer bg-white"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Send Email
+            Request Action
           </button>
         </div>
       )}
@@ -3697,7 +3871,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                                 <td className="py-1.5 pr-3 font-mono text-gray-500 text-[10px] max-w-[120px] truncate">{ex.doc_id?.replace(/\.pdf$/i,"")}</td>
                                 <td className="py-1.5 pr-3 text-indigo-600">{ex.doc_type?.replace(/_/g," ")}</td>
                                 <td className="py-1.5 pr-3 font-semibold text-gray-700">{ex.field_name?.replace(/_/g," ")}</td>
-                                <td className="py-1.5 text-gray-600 max-w-xs truncate">{ex.field_value}</td>
+                                <td className="py-1.5 text-gray-600 max-w-xs truncate">{fieldVal(ex.field_value)}</td>
                               </tr>
                             ))}
                           </tbody>

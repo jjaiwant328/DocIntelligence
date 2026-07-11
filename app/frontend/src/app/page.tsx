@@ -245,8 +245,11 @@ export default function Home() {
   };
 
   const switchTab = (tab: string) => {
+    if (tab === activeTab) return;
     setActiveTab(tab);
-    if (activeDomain) syncUrl(activeDomain.domain_id, tab);
+    // push (not replace) so browser Back returns to the previously-open tab
+    // instead of jumping straight out to the landing page.
+    if (activeDomain) pushUrl(activeDomain.domain_id, tab);
   };
 
   // ── Browser back/forward support ────────────────────────────────────────────

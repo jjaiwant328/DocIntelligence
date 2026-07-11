@@ -1027,6 +1027,11 @@ _KNOWN_JOB_IDS: dict[str, int] = {
     "compliance_due_diligence": 872826521276390,    # DocIntelligence — Compliance Due Diligence Pipeline
 }
 
+# Genie space ids per domain — powers the Copilot "Data Questions" (aggregate SQL) mode.
+_GENIE_SPACE_IDS: dict[str, str] = {
+    "compliance_due_diligence": "01f17d61d9051dcdb0c80dd20b1f9aa8",
+}
+
 def _find_job_id(name_fragment: str) -> int | None:
     """Find the first job whose name contains name_fragment (case-insensitive substring)."""
     try:
@@ -2337,6 +2342,74 @@ class CopilotQueryRequest(BaseModel):
     domain_id: str
     query: str
     prompt_override: Optional[str] = None
+
+
+class GenieQueryRequest(BaseModel):
+    domain_id: str
+    query: str
+    conversation_id: Optional[str] = None
+
+
+@router.get("/genie-space")
+async def get_genie_space(domain_id: str = "compliance_due_diligence"):
+    """Whether a Genie 'Data Questions' space is configured for this domain (UI gate)."""
+    sid = _GENIE_SPACE_IDS.get(domain_id)
+    return {"domain_id": domain_id, "enabled": bool(sid), "space_id": sid}
+
+
+@router.post("/genie-query")
+async def genie_query(req: GenieQueryRequest):
+    """
+    Answer an aggregate / structured "Data Question" via the domain's Genie space
+    (Genie Conversation API). Complements /copilot-query (LLM + Vector Search over
+    document text) for questions Genie answers better with governed SQL.
+    """
+    space_id = _GENIE_SPACE_IDS.get(req.domain_id)
+    if not space_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Genie space configured for domain '{req.domain_id}'.",
+        )
+    try:
+        w = WorkspaceClient()
+        if req.conversation_id:
+            msg = w.genie.create_message_and_wait(space_id, req.conversation_id, req.query)
+        else:
+            msg = w.genie.start_conversation_and_wait(space_id, req.query)
+
+        answer_text = None
+        sql = None
+        columns = None
+        data = None
+        for a in (msg.attachments or []):
+            if getattr(a, "text", None) and a.text and a.text.content:
+                answer_text = a.text.content
+            if getattr(a, "query", None) and a.query:
+                sql = a.query.query
+                # Best-effort: pull the result rows so the UI can render a table.
+                try:
+                    res = w.genie.get_message_query_result(space_id, msg.conversation_id, msg.id)
+                    sr = getattr(res, "statement_response", None)
+                    if sr and sr.result and sr.result.data_array is not None:
+                        data = sr.result.data_array
+                        if sr.manifest and sr.manifest.schema and sr.manifest.schema.columns:
+                            columns = [c.name for c in sr.manifest.schema.columns]
+                except Exception:
+                    pass
+
+        return {
+            "domain_id":       req.domain_id,
+            "conversation_id": msg.conversation_id,
+            "message_id":      msg.id,
+            "answer":          answer_text,
+            "sql":             sql,
+            "columns":         columns,
+            "data":            data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @router.get("/copilot-prompt")
@@ -3862,71 +3935,191 @@ async def correspondence_digest(domain_id: str = "supply_chain"):
 @router.get("/jurisdiction-map")
 async def jurisdiction_map(domain_id: str = "supply_chain"):
     """
-    Returns a jurisdiction × doc_type compliance matrix derived from
-    extracted_fields.  Each cell shows document count, risk levels, and
-    whether any open/high-risk items exist.
+    Jurisdiction × requirement/license-type coverage matrix. Shows, per municipality,
+    which license/requirement types have been researched/covered vs. gaps.
+
+    Real cells come from parsed docs (extracted municipality + doc_type) and the
+    document_sources provenance table.  For the store-development demo the grid is
+    then completed with a deterministic synthetic overlay so the matrix reads as a
+    real coverage picture (covered / in-progress / gap) across the demo regions.
     """
     _d = _get_domain_schemas(domain_id)
     raw = _d["schema_raw"]
+
+    # Non-CDD domains keep the ORIGINAL generic jurisdiction × doc_type matrix.
+    # The demo coverage-matrix overlay below is specific to compliance_due_diligence.
+    if domain_id != "compliance_due_diligence":
+        try:
+            rows = run_sql(f"""
+                SELECT
+                    ef.doc_id,
+                    COALESCE(pd.filename, ef.doc_id)          AS filename,
+                    COALESCE(pd.doc_type, 'unknown')          AS doc_type,
+                    MAX(CASE WHEN ef.field_name = 'jurisdiction'     THEN ef.field_value END) AS jurisdiction,
+                    MAX(CASE WHEN ef.field_name = 'risk_level'       THEN ef.field_value END) AS risk_level,
+                    MAX(CASE WHEN ef.field_name = 'deadline'         THEN ef.field_value END) AS deadline,
+                    MAX(CASE WHEN ef.field_name = 'statute_number'   THEN ef.field_value END) AS statute_number,
+                    MAX(CASE WHEN ef.field_name = 'enforcement_authority' THEN ef.field_value END) AS enforcement_authority
+                FROM {CATALOG}.{raw}.extracted_fields ef
+                JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+                GROUP BY ef.doc_id, pd.filename, pd.doc_type
+            """) or []
+            matrix: dict = {}
+            jurisdictions: set = set()
+            topics: set = set()
+            for row in rows:
+                j = (row.get("jurisdiction") or "").strip()
+                t = (row.get("doc_type") or "unknown").strip()
+                if not j or j.lower() in ("", "none", "null", "n/a"):
+                    continue
+                jurisdictions.add(j); topics.add(t)
+                matrix.setdefault(j, {})
+                cell = matrix[j].setdefault(t, {"count": 0, "risk_levels": [], "has_open": False, "docs": []})
+                cell["count"] += 1
+                rl = (row.get("risk_level") or "").upper()
+                if rl:
+                    cell["risk_levels"].append(rl)
+                if rl in ("CRITICAL", "HIGH"):
+                    cell["has_open"] = True
+                cell["docs"].append({
+                    "doc_id": row.get("doc_id", ""), "filename": row.get("filename", ""),
+                    "risk_level": rl, "statute_number": row.get("statute_number", ""),
+                    "enforcement_authority": row.get("enforcement_authority", ""),
+                })
+            total_cells = sum(len(v) for v in matrix.values())
+            cells_with_issues = sum(1 for j in matrix for t in matrix[j] if matrix[j][t]["has_open"])
+            return {
+                "jurisdictions": sorted(jurisdictions),
+                "topics": sorted(topics),
+                "matrix": matrix,
+                "total_docs_with_jurisdiction": len(rows),
+                "total_cells": total_cells,
+                "cells_with_issues": cells_with_issues,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ── compliance_due_diligence coverage matrix (demo) ──────────────────────
+    # requirement/license topics that make up a coverage matrix (not correspondence)
+    REQUIREMENT_TOPICS = [
+        "alcohol_license", "tobacco_license", "business_license",
+        "zoning_document", "permit", "municipal_requirement",
+    ]
     try:
+        # 1. Real coverage from extracted fields (municipality/county, JSON-parsed) + doc_type
         rows = run_sql(f"""
             SELECT
                 ef.doc_id,
                 COALESCE(pd.filename, ef.doc_id)          AS filename,
                 COALESCE(pd.doc_type, 'unknown')          AS doc_type,
-                MAX(CASE WHEN ef.field_name = 'jurisdiction'     THEN ef.field_value END) AS jurisdiction,
-                MAX(CASE WHEN ef.field_name = 'risk_level'       THEN ef.field_value END) AS risk_level,
-                MAX(CASE WHEN ef.field_name = 'deadline'         THEN ef.field_value END) AS deadline,
-                MAX(CASE WHEN ef.field_name = 'statute_number'   THEN ef.field_value END) AS statute_number,
-                MAX(CASE WHEN ef.field_name = 'enforcement_authority' THEN ef.field_value END) AS enforcement_authority
+                MAX(CASE WHEN ef.field_name = 'municipality' THEN CASE WHEN CAST(ef.field_value AS STRING) LIKE '{{%' THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') ELSE CAST(ef.field_value AS STRING) END END) AS municipality,
+                MAX(CASE WHEN ef.field_name = 'county'       THEN CASE WHEN CAST(ef.field_value AS STRING) LIKE '{{%' THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') ELSE CAST(ef.field_value AS STRING) END END) AS county,
+                MAX(CASE WHEN ef.field_name = 'risk_level'   THEN CASE WHEN CAST(ef.field_value AS STRING) LIKE '{{%' THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') ELSE CAST(ef.field_value AS STRING) END END) AS risk_level
             FROM {CATALOG}.{raw}.extracted_fields ef
             JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
             GROUP BY ef.doc_id, pd.filename, pd.doc_type
         """) or []
 
-        # Build matrix: jurisdiction → topic → {count, risk_levels, has_open, docs}
+        # 2. Provenance coverage (multi-format municipal docs)
+        prov = []
+        try:
+            prov = run_sql(f"""
+                SELECT filename, jurisdiction, doc_type FROM {CATALOG}.{raw}.document_sources
+            """) or []
+        except Exception:
+            prov = []
+
         matrix: dict = {}
         jurisdictions: set = set()
         topics: set = set()
 
+        def _cell(j, t):
+            jurisdictions.add(j); topics.add(t)
+            matrix.setdefault(j, {})
+            return matrix[j].setdefault(t, {"count": 0, "risk_levels": [], "has_open": False,
+                                            "status": "gap", "synthetic": False, "docs": []})
+
+        # Canonical demo jurisdictions — collapse label variants (city/county/state) into one.
+        def _norm_juris(muni, county):
+            v = (muni or county or "").strip()
+            if not v or v.lower() in ("none", "null", "n/a") or v.startswith("{"):
+                return ""
+            lo = v.lower()
+            if "tampa" in lo or "hillsborough" in lo:
+                return "Tampa / Hillsborough Co., FL"
+            if "dallas" in lo:
+                return "Dallas, TX"
+            if "atlanta" in lo or "fulton" in lo:
+                return "Atlanta / Fulton Co., GA"
+            return ""  # outside the demo-region scope
+
         for row in rows:
-            j = (row.get("jurisdiction") or "").strip()
             t = (row.get("doc_type") or "unknown").strip()
-            if not j or j.lower() in ("", "none", "null", "n/a"):
+            j = _norm_juris(row.get("municipality"), row.get("county"))
+            if not j:
                 continue
-            jurisdictions.add(j)
-            topics.add(t)
-            if j not in matrix:
-                matrix[j] = {}
-            if t not in matrix[j]:
-                matrix[j][t] = {"count": 0, "risk_levels": [], "has_open": False, "docs": []}
-            cell = matrix[j][t]
+            cell = _cell(j, t)
             cell["count"] += 1
+            cell["status"] = "covered"
             rl = (row.get("risk_level") or "").upper()
             if rl:
                 cell["risk_levels"].append(rl)
             if rl in ("CRITICAL", "HIGH"):
                 cell["has_open"] = True
+                cell["status"] = "issues"
             cell["docs"].append({
-                "doc_id": row.get("doc_id", ""),
-                "filename": row.get("filename", ""),
-                "risk_level": rl,
-                "statute_number": row.get("statute_number", ""),
-                "enforcement_authority": row.get("enforcement_authority", ""),
+                "doc_id": row.get("doc_id", ""), "filename": row.get("filename", ""),
+                "risk_level": rl, "statute_number": "", "enforcement_authority": "",
             })
 
-        # Summary stats
+        for row in prov:
+            j = _norm_juris(row.get("jurisdiction"), "")
+            t = (row.get("doc_type") or "unknown").strip()
+            if not j:
+                continue
+            fn = row.get("filename", "")
+            cell = _cell(j, t)
+            if fn and any(d.get("filename") == fn for d in cell["docs"]):
+                continue  # same doc already counted from extracted rows — avoid double-count
+            cell["count"] += 1
+            cell["status"] = "covered" if not cell["has_open"] else "issues"
+            cell["docs"].append({"doc_id": "", "filename": row.get("filename", ""),
+                                 "risk_level": "", "statute_number": "", "enforcement_authority": ""})
+
+        # 3. Demo synthetic overlay — complete the grid across demo regions × requirement topics
+        DEMO_JURISDICTIONS = ["Tampa / Hillsborough Co., FL", "Dallas, TX", "Atlanta / Fulton Co., GA"]
+        for j in list(jurisdictions) + DEMO_JURISDICTIONS:
+            jurisdictions.add(j)
+        for t in REQUIREMENT_TOPICS:
+            topics.add(t)
+        # deterministic in-progress/gap fill so the matrix is complete and realistic
+        import hashlib
+        for j in sorted(jurisdictions):
+            for t in REQUIREMENT_TOPICS:
+                existing = matrix.get(j, {}).get(t)
+                if existing and existing["count"] > 0:
+                    continue
+                h = int(hashlib.md5(f"{j}:{t}".encode()).hexdigest(), 16) % 10
+                cell = _cell(j, t)
+                if h < 6:
+                    cell["status"] = "covered"; cell["synthetic"] = True; cell["count"] = 1
+                elif h < 8:
+                    cell["status"] = "in_progress"; cell["synthetic"] = True
+                else:
+                    cell["status"] = "gap"; cell["synthetic"] = True
+
         total_cells = sum(len(v) for v in matrix.values())
-        cells_with_issues = sum(
-            1 for j in matrix for t in matrix[j] if matrix[j][t]["has_open"]
-        )
+        cells_with_issues = sum(1 for j in matrix for t in matrix[j] if matrix[j][t]["has_open"])
+        cells_gap = sum(1 for j in matrix for t in matrix[j] if matrix[j][t]["status"] == "gap")
+        show_topics = [t for t in REQUIREMENT_TOPICS if t in topics]
         return {
             "jurisdictions": sorted(jurisdictions),
-            "topics": sorted(topics),
+            "topics": show_topics,
             "matrix": matrix,
             "total_docs_with_jurisdiction": len(rows),
             "total_cells": total_cells,
             "cells_with_issues": cells_with_issues,
+            "cells_gap": cells_gap,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
