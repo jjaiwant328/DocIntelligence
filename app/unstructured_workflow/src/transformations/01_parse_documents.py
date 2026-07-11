@@ -74,8 +74,9 @@ else:
     # Derive a stable checkpoint path adjacent to the source volume
     _ckpt_raw = source_volume_path.rstrip("/").rsplit("/", 2)[0] + "/checkpoints/01_parse_documents"
 
-checkpoint_pdf = _ckpt_raw + "/pdf"
-checkpoint_txt = _ckpt_raw + "/txt"
+checkpoint_pdf    = _ckpt_raw + "/pdf"
+checkpoint_txt    = _ckpt_raw + "/txt"
+checkpoint_office = _ckpt_raw + "/office"   # .eml / .html / .docx branch
 
 # COMMAND ----------
 
@@ -90,6 +91,7 @@ print(f"  Source volume  : {source_volume_path}")
 print(f"  Output table   : {catalog}.{schema}.{table_name}")
 print(f"  Checkpoint PDF : {checkpoint_pdf}")
 print(f"  Checkpoint TXT : {checkpoint_txt}")
+print(f"  Checkpoint OFF : {checkpoint_office}")
 print(f"  Notifications  : {'YES (file-notification mode)' if use_notifications else 'NO (directory-listing mode)'}")
 if mode == "interactive":
     print("  ⚡ Interactive mode: using temp checkpoint — all volume files will be re-parsed")
@@ -242,6 +244,137 @@ txt_parsed = txt_with_meta.withColumn(
         .awaitTermination()
 )
 print("✅ TXT Auto Loader stream finished.")
+
+# COMMAND ----------
+
+# MAGIC %md ## Step 2b — Process EML / HTML / DOCX files (email, web pages, office docs)
+# MAGIC
+# MAGIC Municipal/government sources arrive as feasibility **emails** (`.eml`), municode /
+# MAGIC `.gov` **web pages** (`.html`/`.htm`), and **office docs** (`.docx`). Each is read
+# MAGIC as a binary file, text is extracted with a stdlib-only UDF (no external deps, so it
+# MAGIC runs on serverless), then wrapped in the **same synthetic VARIANT** as the TXT branch
+# MAGIC so the rest of the pipeline is unchanged. Backward-compatible: for domains whose
+# MAGIC volume holds no such files this glob matches nothing and the stream is a no-op.
+
+# COMMAND ----------
+
+from pyspark.sql.types import StringType
+
+
+def _extract_office_web_email(path: str, content: bytes) -> str:
+    """Extract plain text from .eml / .html|.htm / .docx. Stdlib only."""
+    import re, html as _html, io, zipfile, email
+    from email import policy
+
+    def _strip_html(s: str) -> str:
+        if not s:
+            return ""
+        s = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", s)
+        s = re.sub(r"(?i)<br\s*/?>", "\n", s)
+        s = re.sub(r"(?i)</p\s*>", "\n", s)
+        s = re.sub(r"<[^>]+>", " ", s)
+        s = _html.unescape(s)
+        s = re.sub(r"[ \t]+", " ", s)
+        s = re.sub(r"\n\s*\n\s*\n+", "\n\n", s)
+        return s.strip()
+
+    ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+    try:
+        if ext == "eml":
+            msg = email.message_from_bytes(bytes(content), policy=policy.default)
+            headers = [f"{h}: {msg.get(h)}" for h in ("Subject", "From", "To", "Date") if msg.get(h)]
+            plain = htmlpart = None
+            if msg.is_multipart():
+                for part in msg.walk():
+                    ctype = part.get_content_type()
+                    if ctype == "text/plain" and plain is None:
+                        plain = part.get_content()
+                    elif ctype == "text/html" and htmlpart is None:
+                        htmlpart = part.get_content()
+            else:
+                if msg.get_content_type() == "text/html":
+                    htmlpart = msg.get_content()
+                else:
+                    plain = msg.get_content()
+            body = plain if plain else _strip_html(htmlpart or "")
+            return ("\n".join(headers) + "\n\n" + (body or "")).strip()
+        if ext in ("html", "htm"):
+            return _strip_html(bytes(content).decode("utf-8", "ignore"))
+        if ext == "docx":
+            with zipfile.ZipFile(io.BytesIO(bytes(content))) as z:
+                xml = z.read("word/document.xml").decode("utf-8", "ignore")
+            xml = re.sub(r"(?i)<w:tab\b[^>]*/?>", "\t", xml)
+            xml = re.sub(r"(?i)<w:(br|cr)\b[^>]*/?>", "\n", xml)
+            xml = re.sub(r"</w:p>", "\n", xml)
+            xml = re.sub(r"<[^>]+>", "", xml)   # adjacent runs concatenate (correct OOXML)
+            return _html.unescape(xml).strip()
+    except Exception as e:  # keep the pipeline moving; surface the failure in-band
+        return f"[extract_error:{ext}] {e}"
+    return ""
+
+
+_extract_udf = F.udf(_extract_office_web_email, StringType())
+
+print("Reading EML/HTML/DOCX files via Auto Loader …")
+
+office_stream = (
+    spark.readStream
+        .format("cloudFiles")
+        .options(**_base_opts)
+        .option("pathGlobFilter", "*.{eml,html,htm,docx}")
+        .load(source_volume_path)
+)
+
+office_with_text = office_stream.select(
+    F.col("path").alias("path"),
+    _extract_udf(F.col("path"), F.col("content")).alias("_txt_content"),
+    F.current_timestamp().alias("parsed_at"),
+).filter(F.length(F.trim(F.col("_txt_content"))) > 0)   # drop empty extractions
+
+# Same synthetic VARIANT as the TXT branch; version records the source format.
+office_parsed = office_with_text.withColumn(
+    "parsed",
+    F.expr("""
+        parse_json(
+            to_json(
+                named_struct(
+                    'document', named_struct(
+                        'elements', array(
+                            named_struct(
+                                'type',        'NarrativeText',
+                                'content',     _txt_content,
+                                'confidence',  CAST(1.0 AS DOUBLE),
+                                'id',          CAST(0 AS BIGINT),
+                                'bbox',        CAST(array() AS ARRAY<STRING>),
+                                'description', CAST(NULL AS STRING)
+                            )
+                        ),
+                        'pages', CAST(array() AS ARRAY<STRING>)
+                    ),
+                    'metadata', named_struct(
+                        'id',      element_at(split(path, '/'), -1),
+                        'version', concat(lower(element_at(split(path, '.'), -1)), '_direct')
+                    ),
+                    -- surface extraction failures instead of indexing them as clean docs
+                    'error_status', CASE WHEN _txt_content LIKE '[extract_error:%'
+                                         THEN _txt_content ELSE CAST(NULL AS STRING) END
+                )
+            )
+        )
+    """)
+).select("path", "parsed", "parsed_at")
+
+(
+    office_parsed.writeStream
+        .trigger(availableNow=True)
+        .option("checkpointLocation", checkpoint_office)
+        .format("delta")
+        .outputMode("append")
+        .option("mergeSchema", "true")
+        .toTable(f"{catalog}.{schema}.{table_name}")
+        .awaitTermination()
+)
+print("✅ EML/HTML/DOCX Auto Loader stream finished.")
 
 # COMMAND ----------
 
