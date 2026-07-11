@@ -1,6 +1,5 @@
 {
-  "ontology_config": {
-    "field_entity_map": {
+  "field_entity_map": {
       "store_number":     ["Project",              "PROJ"],
       "project_id":       ["Project",              "PROJ"],
       "municipality":     ["Municipality",         "MUNI"],
@@ -40,6 +39,5 @@
         "object_field":  "responder",
         "notes":         "Project HAS_HISTORY_OF Response — co-occurrence of store_number + responder on historical_response docs."
       }
-    ]
-  }
+  ]
 }
