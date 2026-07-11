@@ -190,6 +190,7 @@ def get_extracted_field(doc_id, field_name):
 
 # COMMAND ----------
 
+import hashlib
 import json
 import re
 
@@ -384,16 +385,37 @@ else:
         print(f"Warning: could not read parsed_documents: {_e}")
         docs_rows = []
 
-    for doc in docs_rows:
-        # Row objects use dict-style access, not .get()
-        doc_id = doc["doc_id"] if "doc_id" in doc else ""
-        if not doc_id:
-            try: doc_id = doc["filename"] or ""
-            except Exception: doc_id = ""
-        doc_type   = doc["doc_type"]   if "doc_type"   in doc else ""
-        char_count = doc["char_count"] if "char_count" in doc else 0
-        short_name = re.sub(r"\.pdf$", "", doc_id, flags=re.IGNORECASE)[:50]
-        eid = safe_id("DOC", short_name)
+    for _doc_idx, doc in enumerate(docs_rows):
+        # "col" in Row calls tuple.__contains__ (checks VALUES, not field names), so it
+        # always returns False for a field name like "doc_id".  Convert to a plain dict
+        # first so .get() works correctly.
+        doc_dict = doc.asDict()
+        doc_id = (doc_dict.get("doc_id") or doc_dict.get("document_id")
+                  or doc_dict.get("filename") or doc_dict.get("file_path") or "")
+        doc_type   = doc_dict.get("doc_type") or doc_dict.get("document_type") or ""
+        char_count = doc_dict.get("char_count") or 0
+
+        # Derive entity id from a STABLE UNIQUE key — hash the full doc_id so that
+        # shared basenames, >50-char names with a common prefix, or path differences
+        # never produce the same eid for two distinct documents.
+        # If no id field is present on this row at all, generate a deterministic
+        # fallback from the row content + ordinal position so every parsed document
+        # still produces exactly one Document entity (no silent drops, no junk "DOC-").
+        if doc_id:
+            unique_key = hashlib.sha256(doc_id.encode()).hexdigest()[:12]
+            short_name = re.sub(r"\.pdf$", "", doc_id, flags=re.IGNORECASE)[:50]
+        else:
+            row_fingerprint = json.dumps(sorted(doc_dict.items()), default=str)
+            unique_key = "r%d-%s" % (
+                _doc_idx,
+                hashlib.sha256(row_fingerprint.encode()).hexdigest()[:8],
+            )
+            short_name = f"doc_{_doc_idx}"
+
+        eid = f"DOC-{unique_key}"
+        if eid in seen_entities:
+            continue
+        seen_entities.add(eid)
         entity_records.append((
             eid, "Document", eid,
             json_attr(filename=doc_id, doc_type=doc_type or "",
