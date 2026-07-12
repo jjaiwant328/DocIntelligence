@@ -244,6 +244,13 @@ export default function Home() {
     pushUrl(null, "doc");  // push so browser Forward returns to domain
   };
 
+  // Go to the Subject Areas landing panel — fully clear the active domain AND the
+  // URL (?domain/&tab/&ct/&cs) so nothing re-opens a domain on re-render/reload.
+  const goToAreas = () => {
+    setLandingTab("areas");
+    closeDomain();   // clears activeDomain + URL query
+  };
+
   const switchTab = (tab: string) => {
     if (tab === activeTab) return;
     setActiveTab(tab);
@@ -318,7 +325,7 @@ export default function Home() {
 
         {/* Tab content */}
         {landingTab === "overview" && (
-          <AppOverview onGoToAreas={() => setLandingTab("areas")} liveModelConfig={modelConfig} />
+          <AppOverview onGoToAreas={goToAreas} liveModelConfig={modelConfig} />
         )}
         {landingTab === "areas" && (
           <SubjectAreasPanel
@@ -343,7 +350,7 @@ export default function Home() {
         <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-0 min-h-[48px]">
           {/* Back to landing */}
           <button
-            onClick={() => { setLandingTab("areas"); closeDomain(); }}
+            onClick={goToAreas}
             title="Back to Subject Areas"
             className="flex items-center gap-1.5 mr-3 text-xs font-medium text-gray-400 hover:text-gray-700 py-3 border-r border-gray-100 pr-3 flex-shrink-0"
           >
