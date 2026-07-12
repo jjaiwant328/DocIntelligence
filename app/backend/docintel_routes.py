@@ -1832,7 +1832,7 @@ def _pipeline_table_stats(catalog: str, raw: str, ont: str, vec: str) -> dict:
 
 
 @router.get("/document-library")
-async def document_library(domain_id: str = "supply_chain", filter: str = ""):
+async def document_library(domain_id: str = "supply_chain", filter: str = "", limit: int = 1000, offset: int = 0):
     """
     Returns all processed documents from jai_docintel.raw.parsed_documents
     with metadata and a short text preview.
@@ -1853,7 +1853,7 @@ async def document_library(domain_id: str = "supply_chain", filter: str = ""):
                 LEFT(raw_text, 500)           AS text_preview
             FROM {CATALOG}.{_raw}.parsed_documents
             ORDER BY processed_ts DESC
-            LIMIT 100
+            LIMIT 2000
         """)
 
         if docs:
@@ -1917,7 +1917,14 @@ async def document_library(domain_id: str = "supply_chain", filter: str = ""):
             _pid = filter.split(":", 1)[1].strip()
             docs = [d for d in docs if d.get("universal") or _pid in (d.get("project_tags") or [])]
 
-        return {"documents": docs, "total": len(docs)}
+        # Paginate the FILTERED set (total reflects the filter). Fetch-then-slice is
+        # correct for the current corpus; true SQL-side pagination is future work once
+        # the corpus is very large.
+        _lim = max(1, min(int(limit or 1000), 200))
+        _off = max(0, int(offset or 0))
+        total = len(docs)
+        page = docs[_off:_off + _lim]
+        return {"documents": page, "total": total, "offset": _off, "limit": _lim}
 
     except HTTPException:
         raise

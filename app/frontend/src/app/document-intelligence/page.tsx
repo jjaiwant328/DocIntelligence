@@ -3240,6 +3240,9 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
     const [search, setSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState("all");
     const [projFilter, setProjFilter] = useState("all");   // all | universal | unassigned | project:<id>
+    const PAGE_SIZE = 20;
+    const [offset, setOffset] = useState(0);
+    const [total, setTotal]   = useState(0);
     const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
     const [detailDoc, setDetailDoc] = useState<any | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
@@ -3253,11 +3256,15 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
     const loadDocs = useCallback(() => {
         setLoading(true);
         const fq = projFilter && projFilter !== "all" ? `&filter=${encodeURIComponent(projFilter)}` : "";
-        fetch(`/api/docintel/document-library?domain_id=${encodeURIComponent(domainId)}${fq}`)
+        fetch(`/api/docintel/document-library?domain_id=${encodeURIComponent(domainId)}${fq}&limit=${PAGE_SIZE}&offset=${offset}`)
             .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-            .then(d => { setDocs(d.documents ?? []); setLoading(false); })
+            .then(d => { setDocs(d.documents ?? []); setTotal(d.total ?? (d.documents?.length ?? 0)); setLoading(false); })
             .catch(e => { setError(String(e)); setLoading(false); });
-    }, [domainId, projFilter]);
+    }, [domainId, projFilter, offset]);
+
+    // Reset to the first page whenever the project/Universal/Unassigned filter changes,
+    // so pagination + the "of N" total reflect the current selection.
+    useEffect(() => { setOffset(0); }, [projFilter]);
 
     // Known projects across the domain (for the filter + tag dropdown)
     const [knownProjects, setKnownProjects] = useState<string[]>([]);
@@ -3586,7 +3593,17 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                             <option key={p} value={`project:${p}`}>Project {p}</option>
                         ))}
                     </select>
-                    <span className="self-center text-sm text-gray-400">{filtered.length} document{filtered.length !== 1 ? "s" : ""}</span>
+                    <div className="self-center flex items-center gap-2 text-sm text-gray-500 ml-auto">
+                        <span className="tabular-nums">
+                            {total === 0 ? "No documents" : `Showing ${offset + 1}–${Math.min(offset + docs.length, total)} of ${total} docs`}
+                        </span>
+                        <button disabled={offset <= 0 || loading}
+                            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                            className="px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">← Prev</button>
+                        <button disabled={offset + PAGE_SIZE >= total || loading}
+                            onClick={() => setOffset(offset + PAGE_SIZE)}
+                            className="px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Next →</button>
+                    </div>
                 </div>
 
                 {loading && (
