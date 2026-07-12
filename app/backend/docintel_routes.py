@@ -2135,13 +2135,16 @@ async def action_report(incident_ref: str = "RCL-2024-0012", domain_id: str = "s
     _agt_schema = _get_domain_schemas(domain_id)["schema_agt"]
     _tbl = f"{CATALOG}.{_agt_schema}.action_log"
     _ensure_action_log_table(_tbl)
-    rows = run_sql(f"""
-        SELECT action_id, logged_at, action_type, description,
-               priority, logged_by, status
-        FROM {_tbl}
-        WHERE incident_ref = '{incident_ref}'
-        ORDER BY logged_at ASC
-    """, timeout_secs=30)
+    try:
+        rows = run_sql(f"""
+            SELECT action_id, logged_at, action_type, description,
+                   priority, logged_by, status
+            FROM {_tbl}
+            WHERE incident_ref = '{incident_ref}'
+            ORDER BY logged_at ASC
+        """, timeout_secs=30) or []
+    except Exception:
+        rows = []   # table not yet materialized for this domain — treat as no actions
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -5950,8 +5953,9 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         for r in stats:
             s = r.get("status","?")
             p = r.get("priority","?")
-            by_status[s]    = by_status.get(s,0) + r.get("cnt",0)
-            by_priority[p]  = by_priority.get(p,0) + r.get("cnt",0)
+            _c = int(r.get("cnt") or 0)          # SQL statement API returns counts as strings
+            by_status[s]    = by_status.get(s,0) + _c
+            by_priority[p]  = by_priority.get(p,0) + _c
 
         return {
             "domain_id":    domain_id,
