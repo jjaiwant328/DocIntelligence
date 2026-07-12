@@ -92,6 +92,8 @@ interface LibraryDoc {
     text_preview: string;
     extracted_fields: Record<string, string>;
     entity_count: number;
+    project_tags?: string[];
+    universal?: boolean;
 }
 
 // ── Document Library component ────────────────────────────────────────────────
@@ -3237,6 +3239,7 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState("all");
+    const [projFilter, setProjFilter] = useState("all");   // all | universal | unassigned | project:<id>
     const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
     const [detailDoc, setDetailDoc] = useState<any | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
@@ -3249,11 +3252,34 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
 
     const loadDocs = useCallback(() => {
         setLoading(true);
-        fetch(`/api/docintel/document-library?domain_id=${encodeURIComponent(domainId)}`)
+        const fq = projFilter && projFilter !== "all" ? `&filter=${encodeURIComponent(projFilter)}` : "";
+        fetch(`/api/docintel/document-library?domain_id=${encodeURIComponent(domainId)}${fq}`)
             .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
             .then(d => { setDocs(d.documents ?? []); setLoading(false); })
             .catch(e => { setError(String(e)); setLoading(false); });
+    }, [domainId, projFilter]);
+
+    // Known projects across the domain (for the filter + tag dropdown)
+    const [knownProjects, setKnownProjects] = useState<string[]>([]);
+    useEffect(() => {
+        fetch(`/api/docintel/document-tags?domain_id=${encodeURIComponent(domainId)}`)
+            .then(r => r.ok ? r.json() : null).then(d => { if (d) setKnownProjects(d.projects ?? []); })
+            .catch(() => {});
     }, [domainId]);
+
+    // Add / remove a project tag or the Universal flag, then refresh.
+    const mutateTag = useCallback(async (doc_id: string, opts: { project_id?: string; universal?: boolean; remove?: boolean }) => {
+        try {
+            await fetch(`/api/docintel/document-tags`, {
+                method: opts.remove ? "DELETE" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ domain_id: domainId, doc_id, project_id: opts.project_id, universal: !!opts.universal }),
+            });
+            loadDocs();
+            fetch(`/api/docintel/document-tags?domain_id=${encodeURIComponent(domainId)}`)
+                .then(r => r.ok ? r.json() : null).then(d => { if (d) setKnownProjects(d.projects ?? []); }).catch(() => {});
+        } catch { /* silent */ }
+    }, [domainId, loadDocs]);
 
     const loadUnmatched = useCallback(async () => {
         setUnmatchedLoading(true);
@@ -3335,6 +3361,8 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
 
     if (selectedDoc) {
         const d = detailDoc ?? selectedDoc;
+        const liveDoc = docs.find(x => x.doc_id === selectedDoc.doc_id) ?? selectedDoc;
+        const availToAdd = knownProjects.filter(p => !(liveDoc.project_tags ?? []).includes(p));
         const colorCls = DOC_TYPE_COLORS[d.doc_type] ?? "bg-gray-100 text-gray-800 border-gray-200";
         const fullText: string = d.raw_text ?? d.text_preview ?? "";
         return (
@@ -3356,6 +3384,40 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                                 </div>
                             </div>
                             {detailLoading && <span className="text-xs text-gray-400 animate-pulse">Loading full detail…</span>}
+                        </div>
+
+                        {/* Project tags (document ↔ project association) */}
+                        <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-semibold text-gray-500 mr-1">Projects:</span>
+                                {liveDoc.universal && (
+                                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
+                                        ✦ Universal
+                                        <button title="Remove Universal" onClick={() => mutateTag(liveDoc.doc_id, { universal: true, remove: true })} className="text-purple-500 hover:text-purple-800">×</button>
+                                    </span>
+                                )}
+                                {(liveDoc.project_tags ?? []).map(p => (
+                                    <span key={p} className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                                        📁 {p}
+                                        <button title="Remove tag" onClick={() => mutateTag(liveDoc.doc_id, { project_id: p, remove: true })} className="text-blue-500 hover:text-blue-800">×</button>
+                                    </span>
+                                ))}
+                                {!liveDoc.universal && (liveDoc.project_tags ?? []).length === 0 && (
+                                    <span className="text-xs text-gray-400 italic">Unassigned</span>
+                                )}
+                                {availToAdd.length > 0 && (
+                                    <select value="" onChange={e => { if (e.target.value) mutateTag(liveDoc.doc_id, { project_id: e.target.value }); }}
+                                        className="text-xs border border-gray-300 rounded px-1.5 py-0.5 bg-white text-gray-600">
+                                        <option value="">＋ tag project…</option>
+                                        {availToAdd.map(p => <option key={p} value={p}>{p}</option>)}
+                                    </select>
+                                )}
+                                {!liveDoc.universal && (
+                                    <button onClick={() => mutateTag(liveDoc.doc_id, { universal: true })}
+                                        title="This document applies to every project"
+                                        className="text-xs px-2 py-0.5 rounded-full border border-purple-200 text-purple-700 hover:bg-purple-50">✦ Mark Universal</button>
+                                )}
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -3512,6 +3574,16 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                         <option value="all">All types</option>
                         {docTypes.map(t => (
                             <option key={t} value={t}>{t.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+                        ))}
+                    </select>
+                    <select value={projFilter} onChange={e => setProjFilter(e.target.value)}
+                        title="Filter by project association"
+                        className="text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white">
+                        <option value="all">All projects</option>
+                        <option value="universal">✦ Universal</option>
+                        <option value="unassigned">Unassigned</option>
+                        {knownProjects.map(p => (
+                            <option key={p} value={`project:${p}`}>Project {p}</option>
                         ))}
                     </select>
                     <span className="self-center text-sm text-gray-400">{filtered.length} document{filtered.length !== 1 ? "s" : ""}</span>

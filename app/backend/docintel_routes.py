@@ -1832,11 +1832,12 @@ def _pipeline_table_stats(catalog: str, raw: str, ont: str, vec: str) -> dict:
 
 
 @router.get("/document-library")
-async def document_library(domain_id: str = "supply_chain"):
+async def document_library(domain_id: str = "supply_chain", filter: str = ""):
     """
     Returns all processed documents from jai_docintel.raw.parsed_documents
     with metadata and a short text preview.
-    Falls back to extracted_fields if parsed_documents is unavailable.
+    Each doc carries its project tags (project_tags[] + universal).
+    Optional `filter`: 'project:<id>' | 'universal' | 'unassigned'.
     """
     _d = _get_domain_schemas(domain_id)
     _raw = _d["schema_raw"]; _ont = _d["schema_ont"]
@@ -1884,10 +1885,227 @@ async def document_library(domain_id: str = "supply_chain"):
                 d["entity_count"]     = entity_count_map.get(d["doc_id"], 0)
                 d["doc_type_label"]   = DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"].replace("_", " ").title())
 
-        return {"documents": docs or [], "total": len(docs or [])}
+        # Attach project tags (bootstrapped from derived) + apply optional filter.
+        docs = docs or []
+        _f = (filter or "").strip().lower()
+        _pid_filter = filter.split(":", 1)[1].strip() if _f.startswith("project:") else None
+        # Reject unsupported filters rather than silently returning everything.
+        if _f and _f not in ("universal", "unassigned") and not (_f.startswith("project:") and _pid_filter):
+            raise HTTPException(status_code=400, detail=f"Unsupported filter '{filter}'. Use universal | unassigned | project:<id>.")
+        try:
+            _bootstrap_project_tags(domain_id)
+            _tbd = _tags_by_doc(domain_id, strict=bool(_f))   # strict => surface errors when filtering
+            for d in docs:
+                t = _tbd.get(d["doc_id"], {"projects": [], "universal": False})
+                d["project_tags"] = t["projects"]
+                d["universal"]    = t["universal"]
+        except HTTPException:
+            raise
+        except Exception:
+            # Best-effort for the UNFILTERED library, but an explicit filter must
+            # never be silently ignored (would return wrong results).
+            if _f:
+                raise HTTPException(status_code=500, detail="Failed to load project tags for filtering.")
+            for d in docs:
+                d.setdefault("project_tags", []); d.setdefault("universal", False)
 
+        if _f == "universal":
+            docs = [d for d in docs if d.get("universal")]
+        elif _f == "unassigned":
+            docs = [d for d in docs if not d.get("universal") and not d.get("project_tags")]
+        elif _f.startswith("project:"):
+            _pid = filter.split(":", 1)[1].strip()
+            docs = [d for d in docs if d.get("universal") or _pid in (d.get("project_tags") or [])]
+
+        return {"documents": docs, "total": len(docs)}
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Document ↔ Project tagging  (platform.document_project_tags, M:N + Universal)
+# ═══════════════════════════════════════════════════════════════════════════════
+_dpt_checked = False
+
+def _ensure_document_project_tags_table():
+    global _dpt_checked
+    if _dpt_checked:
+        return
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.document_project_tags (
+                domain_id  STRING,
+                doc_id     STRING,
+                project_id STRING,
+                scope      STRING,   -- 'project' | 'universal'
+                source     STRING,   -- 'derived' | 'manual'
+                tagged_by  STRING,
+                tagged_at  TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+        _dpt_checked = True
+    except Exception:
+        pass
+
+def _bootstrap_project_tags(domain_id: str):
+    """Seed derived (doc, project) tags from extracted store_number/project_id — ONCE per
+    domain. After the first seed, manual add/delete edits are authoritative and we never
+    re-derive, so a user-deleted tag stays deleted (bootstrap is a no-op on later reads)."""
+    _ensure_document_project_tags_table()
+    _did = (domain_id or "").replace("'", "''")
+    try:
+        seeded = run_sql(
+            f"SELECT 1 FROM {CATALOG}.platform.document_project_tags WHERE domain_id='{_did}' AND scope='marker' LIMIT 1",
+            timeout_secs=15) or []
+        if seeded:
+            return   # seed-complete marker present — never re-derive (deletes persist)
+    except Exception:
+        return
+    _raw = _get_domain_schemas(domain_id)["schema_raw"]
+    try:
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.document_project_tags
+            SELECT '{_did}', m.doc_id, trim(m.project_id), 'project', 'derived', 'system', current_timestamp()
+            FROM (
+                SELECT doc_id,
+                       COALESCE(
+                         MAX(CASE WHEN field_name='store_number' THEN {_parse_val_sql("field_value")} END),
+                         MAX(CASE WHEN field_name='project_id'   THEN {_parse_val_sql("field_value")} END)
+                       ) AS project_id
+                FROM {CATALOG}.{_raw}.extracted_fields
+                GROUP BY doc_id
+            ) m
+            WHERE m.project_id IS NOT NULL AND trim(m.project_id) <> ''
+              AND NOT EXISTS (
+                SELECT 1 FROM {CATALOG}.platform.document_project_tags t
+                WHERE t.domain_id='{_did}' AND t.doc_id=m.doc_id
+                  AND t.scope='project' AND t.project_id=trim(m.project_id)
+              )
+        """, timeout_secs=40)
+        # persist a seed-complete marker so we never re-derive for this domain
+        run_sql(f"INSERT INTO {CATALOG}.platform.document_project_tags VALUES "
+                f"('{_did}','__seeded__',NULL,'marker','system','system',current_timestamp())", timeout_secs=15)
+    except Exception:
+        pass
+
+def _tags_by_doc(domain_id: str, strict: bool = False) -> dict:
+    _ensure_document_project_tags_table()
+    _did = (domain_id or "").replace("'", "''")
+    out: dict = {}
+    try:
+        rows = run_sql(f"""
+            SELECT doc_id, project_id, scope FROM {CATALOG}.platform.document_project_tags
+            WHERE domain_id = '{_did}'
+        """, timeout_secs=30) or []
+        for r in rows:
+            did = r.get("doc_id")
+            if not did or r.get("scope") == "marker":
+                continue
+            e = out.setdefault(did, {"projects": [], "universal": False})
+            if r.get("scope") == "universal":
+                e["universal"] = True
+            elif r.get("project_id") and r["project_id"] not in e["projects"]:
+                e["projects"].append(r["project_id"])
+    except Exception:
+        if strict:      # explicit filter must not be silently mis-answered
+            raise
+    return out
+
+def _project_doc_ids(domain_id: str, project_id: str) -> set:
+    """Doc ids tagged to a project (project tags ∪ universal). Used by Phase 2 grounding."""
+    _bootstrap_project_tags(domain_id)   # ensure derived tags exist (no-op after first seed)
+    _did = (domain_id or "").replace("'", "''")
+    _pid = (project_id or "").replace("'", "''")
+    try:
+        rows = run_sql(f"""
+            SELECT DISTINCT doc_id FROM {CATALOG}.platform.document_project_tags
+            WHERE domain_id='{_did}' AND (scope='universal' OR project_id='{_pid}')
+        """, timeout_secs=30) or []
+        return {r["doc_id"] for r in rows if r.get("doc_id")}
+    except Exception:
+        return set()
+
+
+class DocTagRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    doc_id: str
+    project_id: Optional[str] = None
+    universal: bool = False
+
+class DocTagBulkRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    doc_ids: List[str]
+    project_id: Optional[str] = None
+    universal: bool = False
+    op: str = "add"
+
+def _tag_where(req, doc_lit: str) -> str:
+    if req.universal:
+        return f"scope='universal'"
+    _pid = (req.project_id or "").strip().replace("'", "''")
+    return f"scope='project' AND project_id='{_pid}'"
+
+@router.get("/document-tags")
+async def get_document_tags(domain_id: str = "compliance_due_diligence"):
+    _bootstrap_project_tags(domain_id)
+    tbd = _tags_by_doc(domain_id)
+    projects = sorted({p for v in tbd.values() for p in v["projects"]})
+    return {"tags_by_doc": tbd, "projects": projects}
+
+@router.post("/document-tags")
+async def add_document_tag(req: DocTagRequest):
+    if not req.universal and not (req.project_id or "").strip():
+        raise HTTPException(status_code=400, detail="project_id or universal required")
+    _ensure_document_project_tags_table()
+    _did = req.domain_id.replace("'", "''"); _doc = req.doc_id.replace("'", "''")
+    scope = "universal" if req.universal else "project"
+    _pid = "NULL" if req.universal else "'" + (req.project_id or "").strip().replace("'", "''") + "'"
+    try:
+        run_sql(f"DELETE FROM {CATALOG}.platform.document_project_tags WHERE domain_id='{_did}' AND doc_id='{_doc}' AND {_tag_where(req, _doc)}", timeout_secs=30)
+        run_sql(f"INSERT INTO {CATALOG}.platform.document_project_tags VALUES ('{_did}','{_doc}',{_pid},'{scope}','manual','user',current_timestamp())", timeout_secs=30)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/document-tags")
+async def delete_document_tag(req: DocTagRequest):
+    if not req.universal and not (req.project_id or "").strip():
+        raise HTTPException(status_code=400, detail="project_id or universal required")
+    _ensure_document_project_tags_table()
+    _did = req.domain_id.replace("'", "''"); _doc = req.doc_id.replace("'", "''")
+    try:
+        run_sql(f"DELETE FROM {CATALOG}.platform.document_project_tags WHERE domain_id='{_did}' AND doc_id='{_doc}' AND {_tag_where(req, _doc)}", timeout_secs=30)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/document-tags/bulk")
+async def bulk_document_tags(req: DocTagBulkRequest):
+    if req.op not in ("add", "delete", "remove"):
+        raise HTTPException(status_code=400, detail="op must be 'add' or 'delete'")
+    if not req.universal and not (req.project_id or "").strip():
+        raise HTTPException(status_code=400, detail="project_id or universal required")
+    _is_add = req.op == "add"
+    _ensure_document_project_tags_table()
+    _did = req.domain_id.replace("'", "''")
+    scope = "universal" if req.universal else "project"
+    _pid = "NULL" if req.universal else "'" + (req.project_id or "").strip().replace("'", "''") + "'"
+    n = 0
+    for doc in req.doc_ids:
+        _doc = (doc or "").replace("'", "''")
+        if not _doc:
+            continue
+        try:
+            run_sql(f"DELETE FROM {CATALOG}.platform.document_project_tags WHERE domain_id='{_did}' AND doc_id='{_doc}' AND {_tag_where(req, _doc)}", timeout_secs=30)
+            if _is_add:
+                run_sql(f"INSERT INTO {CATALOG}.platform.document_project_tags VALUES ('{_did}','{_doc}',{_pid},'{scope}','manual','user',current_timestamp())", timeout_secs=30)
+            n += 1
+        except Exception:
+            pass
+    return {"ok": True, "count": n}
 
 
 @router.get("/docs-by-type")

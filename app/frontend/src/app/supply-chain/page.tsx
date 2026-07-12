@@ -2314,7 +2314,7 @@ function ComplianceMapTab({ domainId, sub, apiBase, onDocClick }: { domainId: st
   );
 }
 
-function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; sub: string; domainName?: string }) {
+function OntologyMap({ graph, sub, domainName = "Domain", domainId = "supply_chain" }: { graph: OntGraph; sub: string; domainName?: string; domainId?: string }) {
   // ALL hooks must be declared before any early return (React rules of hooks)
   const [hovered,     setHovered]     = useState<string|null>(null);
   const [selected,    setSelected]    = useState<string|null>(null);
@@ -2338,6 +2338,13 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
   const [gmailLoading, setGmailLoading] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // Curated document→project tags (so the graph reflects the Library's associations)
+  const [tagsByDoc, setTagsByDoc] = useState<Record<string, { projects: string[]; universal: boolean }>>({});
+  useEffect(() => {
+    fetch(`/api/docintel/document-tags?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setTagsByDoc(d.tags_by_doc ?? {}); }).catch(() => {});
+  }, [domainId]);
+
   const nodeById = Object.fromEntries(graph.nodes.map(n => [n.id, n]));
   const selectedNode = selected ? nodeById[selected] : null;
   const connectedEdges = selected
@@ -2360,6 +2367,20 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
       graph.edges.forEach(e => {
         if (frontier.includes(e.source)) ids.add(e.target);
         if (frontier.includes(e.target)) ids.add(e.source);
+      });
+    }
+    // Fold in CURATED tags: docs tagged to this project (by the project node's label)
+    // plus Universal docs — match tagged filenames to Document node id/label.
+    const projLabel = (nodeById[focusProject]?.label ?? "").toLowerCase();
+    const wanted = new Set<string>();
+    Object.entries(tagsByDoc).forEach(([docId, t]) => {
+      const inProj = (t.projects ?? []).some(p => projLabel.includes(String(p).toLowerCase()));
+      if (t.universal || inProj) wanted.add(docId.toLowerCase());
+    });
+    if (wanted.size) {
+      graph.nodes.forEach(n => {
+        const key = (n.label || n.id || "").toLowerCase();
+        if ([...wanted].some(w => key.includes(w) || w.includes(key))) ids.add(n.id);
       });
     }
     return ids;
@@ -4243,7 +4264,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                   <span className="text-xs px-2 py-1 bg-amber-50 border border-amber-200 text-amber-700 rounded-full">Fallback graph</span>
                 )}
               </div>
-              {ontGraph ? <OntologyMap graph={ontGraph} sub={sub} domainName={domainName}/> : <p className="text-sm text-gray-400">Loading…</p>}
+              {ontGraph ? <OntologyMap graph={ontGraph} sub={sub} domainName={domainName} domainId={domainId}/> : <p className="text-sm text-gray-400">Loading…</p>}
             </div>
           )}
 
