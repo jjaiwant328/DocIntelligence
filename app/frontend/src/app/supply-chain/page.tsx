@@ -395,6 +395,7 @@ const DEFAULT_PLAYBOOKS: Playbook[] = [
 const CATEGORIES_BY_DOMAIN: Record<string, string[]> = {
   supply_chain: ["All", "Recall", "Supplier", "Carrier", "Investigation", "Financial", "Communication"],
   compliance:   ["All", "Violation", "Permit", "Inspection", "Training", "Vendor", "Filing"],
+  compliance_due_diligence: ["All", "Feasibility Response", "License Filing", "Research", "Escalation"],
 };
 const DEFAULT_CATEGORIES = ["All", "Action", "Review", "Communication", "Filing", "Investigation"];
 
@@ -454,6 +455,16 @@ function fieldVal(v: unknown): string {
   return s;
 }
 
+// Small reusable inline "working…" animation — use anywhere there is a delay.
+function Spinner({ label, className = "" }: { label?: string; className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-2 text-gray-500 ${className}`}>
+      <span className="animate-spin text-blue-500 inline-block">⟳</span>
+      {label && <span className="text-xs">{label}</span>}
+    </span>
+  );
+}
+
 function buildTabs(domainId: string) {
   const categories = getDomainCategories(domainId);
   return [
@@ -496,7 +507,6 @@ function buildTabs(domainId: string) {
       tooltip: "Jurisdiction × document-type coverage matrix — see which regulations apply where and identify gaps",
       subs: [
         { id: "map",    label: "Coverage Matrix" },
-        { id: "digest", label: "Action Digest" },
         { id: "pulse",  label: "Regulatory Pulse" },
       ],
     },
@@ -977,7 +987,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
           className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-blue-400"
           placeholder="Prompt name…" />
         {loading3 ? (
-          <div className="text-xs text-gray-400 py-4 text-center animate-pulse">Loading full prompt text…</div>
+          <div className="py-4 text-center"><Spinner label="Loading full prompt text…" /></div>
         ) : (
           <>
             <textarea value={editText} onChange={e => setEditText(e.target.value.slice(0, 2500))}
@@ -1786,7 +1796,7 @@ function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string
         )}
       </div>
       {loading ? (
-        <div className="text-xs text-gray-400 py-8 text-center animate-pulse">Loading tracker…</div>
+        <div className="py-8 text-center"><Spinner label="Loading tracker…" /></div>
       ) : err ? (
         <div className="text-xs text-red-500 py-4">Could not load tracker: {err}</div>
       ) : rows.length === 0 ? (
@@ -1808,7 +1818,9 @@ function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string
                 <tr key={i} className={`border-t border-gray-100 hover:bg-gray-50 ${r.change_detected ? "bg-red-50/40" : ""}`}>
                   <td className={cell}>
                     {r.doc_id ? (
-                      <button onClick={() => onDocClick?.(r.doc_id!)} className="font-semibold text-blue-600 hover:text-blue-800">{r.project}</button>
+                      <button onClick={() => { const id=(r.doc_id||"").trim(); if(id) onDocClick?.(id); }}
+                        title="Open extracted document details"
+                        className="font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">{r.project}</button>
                     ) : <span className="font-semibold text-gray-800">{r.project}</span>}
                   </td>
                   <td className={cell}>{r.municipality}</td>
@@ -1840,7 +1852,7 @@ function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string
             </div>
             <div className="p-5 overflow-y-auto">
               {draftLoading ? (
-                <div className="text-xs text-gray-400 py-8 text-center animate-pulse">Drafting a grounded reply from the municipality's requirements…</div>
+                <div className="py-8 text-center"><Spinner label="Drafting a grounded reply from the municipality's requirements…" /></div>
               ) : (
                 <>
                   <textarea readOnly value={draft?.draft ?? ""} className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 min-h-[20rem] max-h-[40vh] overflow-auto" />
@@ -1871,7 +1883,7 @@ function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string
   );
 }
 
-function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: string; apiBase: string }) {
+function ComplianceMapTab({ domainId, sub, apiBase, onDocClick }: { domainId: string; sub: string; apiBase: string; onDocClick?: (docId: string) => void }) {
   const [digestItems, setDigestItems] = useState<DigestItem[]>([]);
   const [digestLoading, setDigestLoading] = useState(false);
   const [digestErr, setDigestErr] = useState("");
@@ -1885,7 +1897,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
   const [pulseLoading, setPulseLoading] = useState(false);
   const [pulseErr, setPulseErr] = useState("");
 
-  const onDocClick = (docId: string) => openDocViewer(docId);
+  const openDoc = (docId: string) => { const id = (docId || "").trim(); if (id && onDocClick) onDocClick(id); };
 
   useEffect(() => {
     if (sub === "digest" || sub === undefined || sub === "map") {
@@ -1970,7 +1982,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
           )}
         </div>
         <p className="text-xs text-gray-500 -mt-2">Which license &amp; requirement types have been researched for each municipality — spot coverage gaps before a store opens. Click a cell to see the underlying documents.</p>
-        {mapLoading && <p className="text-sm text-gray-400">Loading map…</p>}
+        {mapLoading && <Spinner label="Loading coverage map…" className="text-sm" />}
         {mapErr && <p className="text-sm text-red-500">{mapErr}</p>}
         {mapData && mapData.jurisdictions.length === 0 && (
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center text-sm text-gray-400">
@@ -2018,9 +2030,13 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                       return (
                         <tr key={`${j}-${t}-expand`}>
                           <td colSpan={mapData.topics.length + 1} className="px-4 py-3 bg-blue-50 border border-blue-200">
-                            <p className="text-xs font-semibold text-blue-800 mb-1.5">{j} — {t.replace(/_/g, " ")}: {cell.count} document(s)</p>
+                            <p className="text-xs font-semibold text-blue-800 mb-1.5">{j} — {t.replace(/_/g, " ")}: {cell.docs.length} document(s)</p>
                             <div className="flex flex-wrap gap-1.5">
-                              {cell.docs.map((d, di) => {
+                              {cell.docs.length === 0 ? (
+                                <span className="text-[11px] text-gray-500 italic">
+                                  {cell.synthetic ? "Projected coverage — no source document yet." : "No documents for this cell."}
+                                </span>
+                              ) : cell.docs.map((d, di) => {
                                 const id = (d.doc_id || d.filename || "").trim();
                                 const label = d.filename.length > 40 ? d.filename.slice(0, 40) + "…" : d.filename;
                                 const risk = d.risk_level ? <span className="ml-1 font-bold">[{d.risk_level}]</span> : null;
@@ -2030,7 +2046,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                                 ) : null;
                                 return id ? (
                                   <span key={`${id}-${di}`} className="inline-flex items-center gap-1">
-                                  <button onClick={() => onDocClick(id)}
+                                  <button onClick={() => openDoc(id)}
                                     className="text-[10px] px-2 py-1 rounded-full bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer">
                                     {label}{risk}
                                   </button>{srcLink}
@@ -2067,7 +2083,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
             onClick={() => { setDigestLoading(true); fetch(`${apiBase}/api/docintel/correspondence-digest?domain_id=${encodeURIComponent(domainId)}`).then(r=>r.json()).then(d=>setDigestItems(d.items??[])).finally(()=>setDigestLoading(false)); }}
             className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">↺ Refresh</button>
         </div>
-        {digestLoading && <p className="text-sm text-gray-400">Loading digest…</p>}
+        {digestLoading && <Spinner label="Loading digest…" className="text-sm" />}
         {digestErr && <p className="text-sm text-red-500">{digestErr}</p>}
         {!digestLoading && digestItems.length === 0 && (
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center text-sm text-gray-400">
@@ -2104,7 +2120,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
               </thead>
               <tbody>
                 {digestItems.map(item => (
-                  <tr key={item.doc_id} className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => onDocClick(item.doc_id)}>
+                  <tr key={item.doc_id} className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => openDoc(item.doc_id)}>
                     <td className="px-3 py-2.5 text-blue-600 hover:underline max-w-[180px] truncate">{item.filename}</td>
                     <td className="px-3 py-2.5 text-gray-600">{item.jurisdiction || "—"}</td>
                     <td className="px-3 py-2.5 text-gray-600">{item.assigned_owner || "—"}</td>
@@ -2127,7 +2143,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                       </span>
                     </td>
                     <td className="px-3 py-2.5">
-                      <button onClick={(e) => { e.stopPropagation(); onDocClick(item.doc_id); }}
+                      <button onClick={(e) => { e.stopPropagation(); openDoc(item.doc_id); }}
                         className="text-[10px] font-semibold px-2 py-1 rounded-md border border-blue-200 text-blue-600 hover:bg-blue-50">
                         Review →
                       </button>
@@ -2152,7 +2168,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
           onClick={() => { setPulseLoading(true); fetch(`${apiBase}/api/docintel/regulatory-changes?domain_id=${encodeURIComponent(domainId)}`).then(r=>r.json()).then(d=>setPulseItems(d.changes??[])).finally(()=>setPulseLoading(false)); }}
           className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">↺ Refresh</button>
       </div>
-      {pulseLoading && <p className="text-sm text-gray-400">Loading regulatory changes…</p>}
+      {pulseLoading && <Spinner label="Loading regulatory changes…" className="text-sm" />}
       {pulseErr && <p className="text-sm text-red-500">{pulseErr}</p>}
       {!pulseLoading && pulseItems.length === 0 && (
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center text-sm text-gray-400">
@@ -2167,7 +2183,7 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
             ? (item.days_until < 0 ? "OVERDUE" : item.days_until <= 30 ? "IMMINENT" : item.days_until <= 90 ? "UPCOMING" : "FUTURE")
             : null;
           return (
-            <div key={item.doc_id} className="flex gap-3 bg-white border border-gray-200 rounded-xl p-4 hover:shadow-sm cursor-pointer" onClick={() => onDocClick(item.doc_id)}>
+            <div key={item.doc_id} className="flex gap-3 bg-white border border-gray-200 rounded-xl p-4 hover:shadow-sm cursor-pointer" onClick={() => openDoc(item.doc_id)}>
               <div className={`w-1.5 rounded-full flex-shrink-0 self-stretch ${barColor}`} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-start gap-2 flex-wrap">
@@ -2593,9 +2609,14 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
         <div className="px-3 py-2.5 border-b border-gray-100">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Filter by entity type</span>
-            {hiddenTypes.size > 0 && (
-              <button onClick={() => setHiddenTypes(new Set())} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Show all</button>
-            )}
+            <div className="flex items-center gap-2">
+              {hiddenTypes.size > 0 && (
+                <button onClick={() => setHiddenTypes(new Set())} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Show all</button>
+              )}
+              {hiddenTypes.size < presentTypes.length && (
+                <button onClick={() => setHiddenTypes(new Set(presentTypes))} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Hide all</button>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1.5">
             {presentTypes.map(type => {
@@ -3454,7 +3475,7 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
 
   const STATUS_ORDER = ["OPEN","INITIATED","IN_PROGRESS","PENDING_VERIFICATION","COMPLETED","IGNORED","CANCELLED"];
 
-  if (loading) return <div className="text-center text-sm text-gray-400 py-10 animate-pulse">Loading action reports…</div>;
+  if (loading) return <div className="py-10 text-center"><Spinner label="Loading action reports…" /></div>;
   if (error)   return (
     <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700 space-y-2">
       <p className="font-semibold">Failed to load action reports</p>
@@ -4130,7 +4151,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
 
           {/* ── COMPLIANCE MAP TAB ── */}
           {tab === "compliance_map" && (
-            <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} />
+            <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} />
           )}
 
           {/* ── COMPLIANCE TRACKER TAB ── */}

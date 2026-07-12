@@ -51,6 +51,23 @@ interface DocViewerPanelProps {
     onClose: () => void;
 }
 
+// Extracted field values are often JSON like {"value":"X","confidence":0.9};
+// show only the value for a cleaner read (fall back to the raw string).
+function fieldVal(v: unknown): string {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    const t = s.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+        try {
+            const o = JSON.parse(t);
+            if (o && typeof o === "object" && !Array.isArray(o) && "value" in (o as object)) {
+                return String((o as { value: unknown }).value ?? "");
+            }
+        } catch { /* not JSON — use raw */ }
+    }
+    return s;
+}
+
 export function DocViewerPanel({ docId, domainId, initialData, onClose }: DocViewerPanelProps) {
     const [doc, setDoc]               = useState<DocDetail | null>(null);
     const [loading, setLoading]       = useState(true);
@@ -133,7 +150,7 @@ export function DocViewerPanel({ docId, domainId, initialData, onClose }: DocVie
                                 {Object.entries(d.extracted_fields!).map(([k, v]) => (
                                     <div key={k} className="flex gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
                                         <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide w-32 shrink-0 pt-0.5">{k.replace(/_/g, " ")}</span>
-                                        <span className="text-xs text-gray-800 break-words">{String(v)}</span>
+                                        <span className="text-xs text-gray-800 break-words">{fieldVal(v)}</span>
                                     </div>
                                 ))}
                             </div>
