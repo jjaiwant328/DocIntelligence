@@ -360,6 +360,67 @@ const COMPLIANCE_PLAYBOOKS: Playbook[] = [
 ];
 
 // Generic playbooks for any other domain
+// Compliance Due Diligence (store development) playbooks — recommended actions
+// per category, tied to the feasibility / licensing workflow.
+const CDD_PLAYBOOKS: Playbook[] = [
+  { id:"cdd-feas-draft",  category:"Feasibility Response", priority:"HIGH",     action_type:"FEASIBILITY_RESPONSE",
+    name:"Draft Feasibility Response",
+    description:"Draft a response to an inbound feasibility/due-diligence request for a new store location.",
+    what_it_does:"Pulls the municipality requirements and prior responses and drafts a ready-to-send reply answering licensing, zoning, and distance questions.",
+    next_steps:["Confirm the parcel/municipality","Generate the grounded draft reply","Route for review and send"],
+    default_logged_by:"Feasibility Analyst",
+    source_doc_types:["feasibility_request","municipal_requirement","historical_response"] },
+  { id:"cdd-feas-eligibility", category:"Feasibility Response", priority:"HIGH", action_type:"ELIGIBILITY_CHECK",
+    name:"Confirm Alcohol/Tobacco Eligibility",
+    description:"Confirm whether alcohol and tobacco sales are permitted at the proposed parcel.",
+    what_it_does:"Checks municipal distance rules (schools/churches) and wet/dry status against the parcel location and flags restrictions.",
+    next_steps:["Verify distance to schools/churches","Check wet/dry designation","Record eligibility determination"],
+    default_logged_by:"Feasibility Analyst",
+    source_doc_types:["alcohol_license","tobacco_license","municipal_requirement","zoning_document"] },
+  { id:"cdd-lic-alcohol", category:"License Filing", priority:"HIGH", action_type:"LICENSE_FILING",
+    name:"File Alcohol License Application",
+    description:"Initiate the alcohol license application, accounting for the jurisdiction's lead time.",
+    what_it_does:"Assembles the application package and sets a deadline backward from the target opening date using the license lead time.",
+    next_steps:["Confirm issuing authority and lead time","Assemble application package","Submit and track approval"],
+    default_logged_by:"Licensing Coordinator",
+    source_doc_types:["alcohol_license","municipal_requirement"] },
+  { id:"cdd-lic-business", category:"License Filing", priority:"MEDIUM", action_type:"LICENSE_FILING",
+    name:"File Business/Occupational License",
+    description:"File the business/occupational tax certificate required before opening.",
+    what_it_does:"Prepares and submits the occupational tax certificate application for the jurisdiction.",
+    next_steps:["Confirm processing time","Submit application","Retain certificate for the project file"],
+    default_logged_by:"Licensing Coordinator",
+    source_doc_types:["business_license","municipal_requirement"] },
+  { id:"cdd-res-requirements", category:"Research", priority:"MEDIUM", action_type:"RESEARCH",
+    name:"Research Municipality Requirements",
+    description:"Research licensing, zoning, and distance requirements for the jurisdiction.",
+    what_it_does:"Retrieves the municipality's requirements (distance rules, zoning, lead times) from ingested municipal documents.",
+    next_steps:["Identify the jurisdiction","Pull requirement documents","Summarize applicable rules"],
+    default_logged_by:"Research Analyst",
+    source_doc_types:["municipal_requirement","zoning_document","alcohol_license"] },
+  { id:"cdd-res-code", category:"Research", priority:"MEDIUM", action_type:"RESEARCH",
+    name:"Pull Municipal Code / Ordinance",
+    description:"Pull the authoritative municipal code or ordinance for the jurisdiction.",
+    what_it_does:"Fetches the municode/.gov ordinance for the jurisdiction and attaches it as a cited source.",
+    next_steps:["Locate the code section","Attach the source with its URL","Note the effective date"],
+    default_logged_by:"Research Analyst",
+    source_doc_types:["municipal_requirement","regulatory_change"] },
+  { id:"cdd-esc-change", category:"Escalation", priority:"CRITICAL", action_type:"ESCALATION",
+    name:"Escalate Regulatory Change to Legal",
+    description:"Escalate a detected regulatory change to Legal / attorney review.",
+    what_it_does:"Creates an attorney-review-queue item with the previous vs. new requirement and affected projects.",
+    next_steps:["Attach the change detection detail","Assign to Legal","Track resolution in the Legal Queue"],
+    default_logged_by:"Compliance Lead",
+    source_doc_types:["regulatory_change","municipal_requirement"] },
+  { id:"cdd-esc-deadline", category:"Escalation", priority:"HIGH", action_type:"ESCALATION",
+    name:"Flag Deadline Risk",
+    description:"Flag a project where the license lead time exceeds the target opening date.",
+    what_it_does:"Raises a deadline-risk alert when the required license lead time cannot be met before opening.",
+    next_steps:["Compare lead time vs. opening date","Notify the project owner","Propose an expedited path or revised date"],
+    default_logged_by:"Compliance Lead",
+    source_doc_types:["feasibility_request","alcohol_license","municipal_requirement"] },
+];
+
 const DEFAULT_PLAYBOOKS: Playbook[] = [
   { id:"dflt-review",  category:"Review",         priority:"HIGH",     action_type:"ROOT_CAUSE_ANALYSIS",
     name:"Initiate Document Review",
@@ -402,6 +463,7 @@ const DEFAULT_CATEGORIES = ["All", "Action", "Review", "Communication", "Filing"
 function getDomainPlaybooks(domainId: string): Playbook[] {
   if (domainId === "supply_chain") return SC_PLAYBOOKS;
   if (domainId === "compliance")   return COMPLIANCE_PLAYBOOKS;
+  if (domainId === "compliance_due_diligence") return CDD_PLAYBOOKS;
   return DEFAULT_PLAYBOOKS;
 }
 function getDomainCategories(domainId: string): string[] {
@@ -2017,7 +2079,7 @@ function ComplianceMapTab({ domainId, sub, apiBase, onDocClick }: { domainId: st
                               className={`text-[10px] font-semibold px-2 py-1 rounded border w-full ${cellColor(cell)}`}
                             >
                               {cellLabel(cell)}
-                              {cell && cell.count > 0 && <span className="ml-1 text-gray-400">({cell.count})</span>}
+                              {cell && cell.status !== "gap" && <span className="ml-1 text-gray-400">({(cell.docs || []).filter(d => d.doc_id).length})</span>}
                             </button>
                           </td>
                         );

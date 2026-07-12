@@ -10,6 +10,24 @@ import { FloatingTooltip } from "@/components/ui/floating-tooltip";
 import { useDomain, DomainInfo } from "@/context/DomainContext";
 import { usePipelineRun } from "@/context/PipelineRunContext";
 
+// Show only the clean value for extracted fields — strips the {"value":…} JSON
+// wrapper (and braces/quotes) that ai_extract stores, falling back to the raw string.
+function fieldVal(v: unknown): string {
+    if (v == null) return "";
+    const s = typeof v === "string" ? v : String(v);
+    const t = s.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+        try {
+            const o = JSON.parse(t);
+            if (o && typeof o === "object" && !Array.isArray(o) && "value" in o) {
+                const val = (o as Record<string, unknown>).value;
+                return val == null ? "" : String(val);
+            }
+        } catch { /* not JSON — fall through to raw */ }
+    }
+    return s;
+}
+
 // Helper function to format state names for better UX
 const formatStateName = (state: string): string => {
     const stateMap: Record<string, string> = {
@@ -1142,7 +1160,7 @@ function DomainSchemaWizard({
                           {Object.entries(analysisResult.extracted_fields).map(([k, v]) => (
                             <div key={k} className="flex gap-1.5">
                               <span className="text-gray-400 font-mono">{k}:</span>
-                              <span className="text-gray-700 truncate">{v ?? <em className="text-gray-300">null</em>}</span>
+                              <span className="text-gray-700 truncate">{v != null ? fieldVal(v) : <em className="text-gray-300">null</em>}</span>
                             </div>
                           ))}
                         </div>
@@ -3351,7 +3369,7 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                                         {Object.entries(d.extracted_fields).map(([k, v]) => (
                                             <div key={k} className="bg-gray-50 rounded-md px-3 py-2 border border-gray-100">
                                                 <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">{k.replace(/_/g, " ")}</p>
-                                                <p className="text-sm text-gray-800">{String(v)}</p>
+                                                <p className="text-sm text-gray-800">{fieldVal(v)}</p>
                                             </div>
                                         ))}
                                     </div>
@@ -3653,7 +3671,7 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                                             {fieldKeys.slice(0, 3).map(k => (
                                                 <div key={k} className="flex gap-1.5 text-[10px]">
                                                     <span className="text-gray-400 font-medium shrink-0">{k.replace(/_/g, " ")}:</span>
-                                                    <span className="text-gray-700 truncate">{String(doc.extracted_fields[k])}</span>
+                                                    <span className="text-gray-700 truncate">{fieldVal(doc.extracted_fields[k])}</span>
                                                 </div>
                                             ))}
                                             {fieldKeys.length > 3 && <p className="text-[10px] text-gray-400">+{fieldKeys.length - 3} more fields</p>}
