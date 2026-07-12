@@ -4946,6 +4946,34 @@ async def generate_draft_reply(req: DraftReplyRequest):
         except Exception:
             pass
 
+        # 2c. Project-scoped grounding (Phase 2) — the CURATED docs tagged to this
+        #     request's project (∪ Universal), so the reply uses exactly the docs the
+        #     team associated with the project (not just filename heuristics).
+        try:
+            _didq = req.domain_id.replace("'", "''")
+            _prow = run_sql(f"""
+                SELECT MIN(project_id) AS project_id FROM {CATALOG}.platform.document_project_tags
+                WHERE domain_id='{_didq}' AND doc_id='{_doc_id}'
+                  AND scope='project' AND project_id IS NOT NULL
+            """, timeout_secs=15) or []
+            _proj = _prow[0].get("project_id") if _prow else None
+            if _proj:
+                _pdocs = [d for d in _project_doc_ids(req.domain_id, _proj) if d and d != req.doc_id]
+                if _pdocs:
+                    _in = ", ".join("'" + str(d).replace("'", "''") + "'" for d in _pdocs[:8])
+                    for d in (run_sql(f"""
+                        SELECT DISTINCT pd.doc_id, pd.filename, pd.doc_type,
+                               SUBSTRING(CAST(pd.parsed_content AS STRING), 1, 700) AS body
+                        FROM {CATALOG}.{raw}.parsed_documents pd
+                        WHERE pd.doc_id IN ({_in}) LIMIT 8
+                    """, timeout_secs=20) or []):
+                        fn = d.get("filename", "")
+                        context_text += f"\n\n[project {_proj} · {d.get('doc_type','')} · {fn}]\n{d.get('body','')}"
+                        if fn and fn not in [s["filename"] for s in sources]:
+                            sources.append({"doc_id": d.get("doc_id", ""), "filename": fn})
+        except Exception:
+            pass
+
         # 3. Attach source URLs (provenance)
         try:
             src = run_sql(f"SELECT filename, source_url FROM {CATALOG}.{raw}.document_sources", timeout_secs=15) or []
@@ -6178,18 +6206,20 @@ async def get_action_reports(domain_id: str = "supply_chain"):
             by_status[s]    = by_status.get(s,0) + _c
             by_priority[p]  = by_priority.get(p,0) + _c
 
-        # Attach the owning project to each action (source_doc_ids -> doc's store/project id).
+        # Attach the owning project to each action from the CURATED doc->project tags
+        # (Phase 2) so manual re-tagging in the Library flows through; the tags table is
+        # seeded from the same derived store/project id, so behaviour is unchanged by default.
         doc_proj: dict = {}
         try:
-            _raw = _get_domain_schemas(domain_id)["schema_raw"]
-            _p_store = _parse_val_sql("CASE WHEN field_name='store_number' THEN field_value END")
-            _p_proj  = _parse_val_sql("CASE WHEN field_name='project_id' THEN field_value END")
-            prows = run_sql(f"""
-                SELECT doc_id, COALESCE(MAX({_p_store}), MAX({_p_proj})) AS project
-                FROM {CATALOG}.{_raw}.extracted_fields
+            _bootstrap_project_tags(domain_id)   # ensure derived tags exist (no-op after first seed)
+            _didq = (domain_id or "").replace("'", "''")
+            trows = run_sql(f"""
+                SELECT doc_id, MIN(project_id) AS project
+                FROM {CATALOG}.platform.document_project_tags
+                WHERE domain_id='{_didq}' AND scope='project' AND project_id IS NOT NULL
                 GROUP BY doc_id
             """, timeout_secs=30) or []
-            doc_proj = {r["doc_id"]: r.get("project") for r in prows if r.get("project")}
+            doc_proj = {r["doc_id"]: r.get("project") for r in trows if r.get("project")}
         except Exception:
             doc_proj = {}
 
