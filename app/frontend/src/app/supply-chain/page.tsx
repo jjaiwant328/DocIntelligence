@@ -463,6 +463,12 @@ function buildTabs(domainId: string) {
       label: "Overview",
       tooltip: "Document processing stats, entity distribution, and key extractions",
     },
+    ...(domainId === "compliance_due_diligence" ? [{
+      id: "tracker",
+      icon: "📋",
+      label: "Tracker",
+      tooltip: "Shared compliance tracker — every project/store with status, owner, deadline, last response, and whether a regulatory change was detected.",
+    }] : []),
     {
       id: "ontology",
       icon: "🕸",
@@ -1713,16 +1719,156 @@ interface RegChangeItem {
   risk_level?: string;
   confidence_level?: string;
   days_until?: number | null;
+  source_url?: string | null;
 }
 
 interface JurisdictionMatrix {
   jurisdictions: string[];
   topics: string[];
-  matrix: Record<string, Record<string, { count: number; risk_levels: string[]; has_open: boolean; status?: string; synthetic?: boolean; docs: { doc_id: string; filename: string; risk_level: string; statute_number: string }[] }>>;
+  matrix: Record<string, Record<string, { count: number; risk_levels: string[]; has_open: boolean; status?: string; synthetic?: boolean; docs: { doc_id: string; filename: string; risk_level: string; statute_number: string; source_url?: string | null }[] }>>;
   total_docs_with_jurisdiction: number;
   total_cells: number;
   cells_with_issues: number;
   cells_gap?: number;
+}
+
+interface TrackerRow {
+  project: string; municipality: string; request_type: string | null;
+  status: string; owner: string | null; due_date: string | null;
+  last_response: string | null; change_detected: boolean;
+  doc_id: string | null; filename: string | null;
+}
+interface DraftSource { doc_id?: string; filename?: string; source_url?: string | null; }
+
+function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string; apiBase: string; onDocClick?: (docId: string) => void }) {
+  const [rows, setRows] = useState<TrackerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [changedCount, setChangedCount] = useState(0);
+  const [draftFor, setDraftFor] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ draft: string; sources: DraftSource[] } | null>(null);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setLoading(true); setErr(null);
+    fetch(`${apiBase}/api/docintel/compliance-tracker?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.json())
+      .then(d => { setRows(d.rows ?? []); setChangedCount(d.changed_count ?? 0); setLoading(false); })
+      .catch(e => { setErr(String(e)); setLoading(false); });
+  }, [domainId, apiBase]);
+
+  const genDraft = async (docId: string) => {
+    setDraftFor(docId); setDraft(null); setDraftLoading(true); setCopied(false);
+    try {
+      const r = await fetch(`${apiBase}/api/docintel/generate-draft-reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, doc_id: docId }),
+      });
+      const d = await r.json();
+      setDraft({ draft: d.draft ?? d.message ?? "(no draft returned)", sources: d.sources ?? [] });
+    } catch (e) { setDraft({ draft: "Error generating draft: " + String(e), sources: [] }); }
+    setDraftLoading(false);
+  };
+
+  const cell = "px-3 py-2 text-xs align-top";
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-base font-bold text-gray-900">📋 Compliance Tracker</h3>
+          <p className="text-xs text-gray-500">Shared status of every store-development feasibility project — the single source everyone works from.</p>
+        </div>
+        {changedCount > 0 && (
+          <span className="text-[11px] font-semibold bg-red-50 text-red-600 border border-red-200 rounded-full px-3 py-1">
+            ⚑ {changedCount} project{changedCount !== 1 ? "s" : ""} with a regulatory change
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <div className="text-xs text-gray-400 py-8 text-center animate-pulse">Loading tracker…</div>
+      ) : err ? (
+        <div className="text-xs text-red-500 py-4">Could not load tracker: {err}</div>
+      ) : rows.length === 0 ? (
+        <div className="text-xs text-gray-400 py-8 text-center">No tracked projects yet.</div>
+      ) : (
+        <div className="overflow-x-auto border border-gray-100 rounded-lg">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-gray-50 text-left text-[10px] uppercase tracking-wide text-gray-500">
+                <th className={cell}>Project</th><th className={cell}>Municipality</th>
+                <th className={cell}>Request</th><th className={cell}>Status</th>
+                <th className={cell}>Owner</th><th className={cell}>Due</th>
+                <th className={cell}>Last Response</th><th className={cell}>Change</th>
+                <th className={cell}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className={`border-t border-gray-100 hover:bg-gray-50 ${r.change_detected ? "bg-red-50/40" : ""}`}>
+                  <td className={cell}>
+                    {r.doc_id ? (
+                      <button onClick={() => onDocClick?.(r.doc_id!)} className="font-semibold text-blue-600 hover:text-blue-800">{r.project}</button>
+                    ) : <span className="font-semibold text-gray-800">{r.project}</span>}
+                  </td>
+                  <td className={cell}>{r.municipality}</td>
+                  <td className={cell}>{(r.request_type || "—").replace(/_/g, " ")}</td>
+                  <td className={cell}><span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${r.status === "Open" ? "bg-gray-100 text-gray-600" : "bg-green-100 text-green-700"}`}>{r.status}</span></td>
+                  <td className={cell}>{r.owner || "—"}</td>
+                  <td className={cell}>{r.due_date || "—"}</td>
+                  <td className={cell}>{r.last_response || "—"}</td>
+                  <td className={cell}>{r.change_detected ? <span className="text-[10px] font-semibold text-red-600">⚑ Change</span> : <span className="text-gray-300">—</span>}</td>
+                  <td className={cell}>
+                    {r.doc_id && (
+                      <button onClick={() => genDraft(r.doc_id!)} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap">✉️ Draft Reply</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Draft reply modal */}
+      {draftFor && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setDraftFor(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <h4 className="text-sm font-bold text-gray-900">✉️ Draft Reply</h4>
+              <button onClick={() => setDraftFor(null)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">×</button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              {draftLoading ? (
+                <div className="text-xs text-gray-400 py-8 text-center animate-pulse">Drafting a grounded reply from the municipality's requirements…</div>
+              ) : (
+                <>
+                  <textarea readOnly value={draft?.draft ?? ""} className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 min-h-[20rem] max-h-[40vh] overflow-auto" />
+                  {draft?.sources && draft.sources.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Sources</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {draft.sources.map((s, i) => (
+                          <span key={i} className="text-[11px] bg-gray-100 rounded px-2 py-0.5 flex items-center gap-1">
+                            {s.filename || s.doc_id}
+                            {s.source_url && <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">🔗</a>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => { if (draft) { navigator.clipboard?.writeText(draft.draft); setCopied(true); } }} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">{copied ? "✓ Copied" : "Copy"}</button>
+                    <button onClick={() => setDraftFor(null)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Close</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: string; apiBase: string }) {
@@ -1878,11 +2024,17 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                                 const id = (d.doc_id || d.filename || "").trim();
                                 const label = d.filename.length > 40 ? d.filename.slice(0, 40) + "…" : d.filename;
                                 const risk = d.risk_level ? <span className="ml-1 font-bold">[{d.risk_level}]</span> : null;
+                                const srcLink = d.source_url ? (
+                                  <a href={d.source_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                    className="text-[10px] text-blue-600 hover:text-blue-800" title="Authoritative source">🔗</a>
+                                ) : null;
                                 return id ? (
-                                  <button key={`${id}-${di}`} onClick={() => onDocClick(id)}
+                                  <span key={`${id}-${di}`} className="inline-flex items-center gap-1">
+                                  <button onClick={() => onDocClick(id)}
                                     className="text-[10px] px-2 py-1 rounded-full bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer">
                                     {label}{risk}
-                                  </button>
+                                  </button>{srcLink}
+                                  </span>
                                 ) : (
                                   <span key={`syn-${di}`} title="Projected coverage (no source document)"
                                     className="text-[10px] px-2 py-1 rounded-full bg-gray-50 border border-gray-200 text-gray-400">
@@ -2063,6 +2215,9 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                   )}
                   {item.confidence_level && (
                     <span className="text-[10px] text-gray-400">Confidence: {item.confidence_level}</span>
+                  )}
+                  {item.source_url && (
+                    <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] font-medium text-blue-600 hover:text-blue-800">🔗 source</a>
                   )}
                 </div>
               </div>
@@ -3976,6 +4131,11 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
           {/* ── COMPLIANCE MAP TAB ── */}
           {tab === "compliance_map" && (
             <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} />
+          )}
+
+          {/* ── COMPLIANCE TRACKER TAB ── */}
+          {tab === "tracker" && (
+            <ComplianceTracker domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} />
           )}
 
           {/* ── COPILOT STUDIO TAB ── */}

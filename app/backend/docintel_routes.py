@@ -4026,7 +4026,7 @@ async def jurisdiction_map(domain_id: str = "supply_chain"):
         prov = []
         try:
             prov = run_sql(f"""
-                SELECT filename, jurisdiction, doc_type FROM {CATALOG}.{raw}.document_sources
+                SELECT filename, jurisdiction, doc_type, source_url FROM {CATALOG}.{raw}.document_sources
             """) or []
         except Exception:
             prov = []
@@ -4089,7 +4089,8 @@ async def jurisdiction_map(domain_id: str = "supply_chain"):
             # source chip in the UI can open the document.
             _fn = row.get("filename") or ""
             cell["docs"].append({"doc_id": _fn, "filename": _fn,
-                                 "risk_level": "", "statute_number": "", "enforcement_authority": ""})
+                                 "risk_level": "", "statute_number": "", "enforcement_authority": "",
+                                 "source_url": row.get("source_url")})
 
         # 3. Demo synthetic overlay — complete the grid across demo regions × requirement topics
         DEMO_JURISDICTIONS = ["Tampa / Hillsborough Co., FL", "Dallas, TX", "Atlanta / Fulton Co., GA"]
@@ -4505,9 +4506,252 @@ async def regulatory_changes(domain_id: str = "supply_chain"):
             else:
                 row["days_until"] = None
 
+        # Attach the authoritative municipal/gov source URL (provenance) — best-effort.
+        # document_sources only exists for compliance_due_diligence, so guard by domain.
+        if domain_id == "compliance_due_diligence":
+            try:
+                src = run_sql(f"SELECT filename, source_url FROM {CATALOG}.{raw}.document_sources", timeout_secs=15) or []
+                url_map = {s["filename"]: s.get("source_url") for s in src if s.get("filename")}
+                for row in rows:
+                    row["source_url"] = url_map.get(row.get("filename"))
+            except Exception:
+                for row in rows:
+                    row.setdefault("source_url", None)
+        else:
+            for row in rows:
+                row.setdefault("source_url", None)
+
         return {"changes": rows, "total": len(rows)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_val_sql(col: str) -> str:
+    """SQL snippet: JSON-parse a field_value ({"value":..}) else raw string."""
+    c = f"CAST({col} AS STRING)"
+    return f"CASE WHEN {c} LIKE '{{%' THEN GET_JSON_OBJECT({c},'$.value') ELSE {c} END"
+
+
+@router.get("/compliance-tracker")
+async def compliance_tracker(domain_id: str = "compliance_due_diligence"):
+    """
+    Shared compliance tracker (the "Smartsheet replacement"): one row per
+    feasibility project/store — municipality, request type, status/owner/due
+    (from action_master), last response, and whether a regulatory change was
+    detected for that municipality.
+    """
+    if domain_id != "compliance_due_diligence":
+        raise HTTPException(status_code=404, detail="Compliance tracker is available only for compliance_due_diligence.")
+    _d = _get_domain_schemas(domain_id)
+    raw = _d["schema_raw"]
+    try:
+        pv_store = _parse_val_sql("CASE WHEN field_name='store_number' THEN field_value END")
+        pv_proj  = _parse_val_sql("CASE WHEN field_name='project_id' THEN field_value END")
+        pv_muni  = _parse_val_sql("CASE WHEN field_name='municipality' THEN field_value END")
+        pv_cnty  = _parse_val_sql("CASE WHEN field_name='county' THEN field_value END")
+        pv_state = _parse_val_sql("CASE WHEN field_name='state' THEN field_value END")
+        pv_rtype = _parse_val_sql("CASE WHEN field_name='request_type' THEN field_value END")
+        pv_reqty = _parse_val_sql("CASE WHEN field_name='requirement_type' THEN field_value END")
+        pv_resp  = _parse_val_sql("CASE WHEN field_name='responder' THEN field_value END")
+        pv_rdate = _parse_val_sql("CASE WHEN field_name='response_date' THEN field_value END")
+        pv_lead  = _parse_val_sql("CASE WHEN field_name='lead_time' THEN field_value END")
+        rows = run_sql(f"""
+            WITH ef AS (
+                SELECT doc_id,
+                    MAX({pv_store}) AS store_number,
+                    MAX({pv_proj})  AS project_id,
+                    MAX({pv_muni})  AS municipality,
+                    MAX({pv_cnty})  AS county,
+                    MAX({pv_state}) AS state,
+                    MAX({pv_rtype}) AS request_type,
+                    MAX({pv_reqty}) AS requirement_type,
+                    MAX({pv_resp})  AS responder,
+                    MAX({pv_rdate}) AS response_date,
+                    MAX({pv_lead})  AS lead_time
+                FROM {CATALOG}.{raw}.extracted_fields GROUP BY doc_id
+            )
+            SELECT pd.doc_id, pd.filename, pd.doc_type,
+                   ef.store_number, ef.project_id, ef.municipality, ef.county, ef.state,
+                   ef.request_type, ef.requirement_type, ef.responder, ef.response_date, ef.lead_time
+            FROM {CATALOG}.{raw}.parsed_documents pd
+            JOIN ef ON pd.doc_id = ef.doc_id
+            WHERE pd.doc_type IN ('feasibility_request','historical_response')
+        """, timeout_secs=40) or []
+
+        # municipalities with a detected regulatory change
+        changed = set()
+        try:
+            crows = run_sql(f"""
+                SELECT DISTINCT {_parse_val_sql("ef.field_value")} AS muni
+                FROM {CATALOG}.{raw}.extracted_fields ef
+                JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+                WHERE pd.doc_type = 'regulatory_change' AND ef.field_name IN ('municipality','jurisdiction')
+            """, timeout_secs=20) or []
+            changed = {(_c.get("muni") or "").strip().lower() for _c in crows if _c.get("muni")}
+        except Exception:
+            pass
+
+        # action_master rows (status/owner/due) keyed by doc_id
+        act_by_doc: dict = {}
+        try:
+            arows = run_sql(f"""
+                SELECT source_doc_ids, status, owner, due_date
+                FROM {CATALOG}.platform.action_master
+                WHERE domain_id = '{domain_id}'
+            """, timeout_secs=20) or []
+            for a in arows:
+                for did in str(a.get("source_doc_ids") or "").replace("[","").replace("]","").replace('"',"").split(","):
+                    did = did.strip()
+                    if did:
+                        act_by_doc[did] = a
+        except Exception:
+            pass
+
+        # Build tracker rows, keyed by (project/store + municipality)
+        tracker: dict = {}
+        for r in rows:
+            proj = (r.get("store_number") or r.get("project_id") or "").strip()
+            muni = (r.get("municipality") or r.get("county") or "").strip()   # fall back to county
+            if not proj and not muni:
+                continue
+            key = f"{proj}|{muni}".lower()
+            row = tracker.get(key)
+            if not row:
+                _st = (r.get("state") or "").strip()
+                muni_disp = f"{muni}, {_st}" if (muni and _st) else (muni or "—")
+                _ml = muni.lower()
+                changed_hit = bool(_ml) and any(c and (c in _ml or _ml in c) for c in changed)
+                row = {
+                    "project": proj or "—",
+                    "municipality": muni_disp,
+                    "request_type": None, "status": "Open", "owner": None, "due_date": None,
+                    "last_response": None, "change_detected": changed_hit,
+                    "doc_id": r.get("doc_id"), "filename": r.get("filename"),
+                }
+                tracker[key] = row
+            rt = r.get("request_type") or r.get("requirement_type")
+            if rt and not row["request_type"]:
+                row["request_type"] = rt
+            if r.get("doc_type") == "feasibility_request":
+                row["doc_id"] = r.get("doc_id"); row["filename"] = r.get("filename")
+            if r.get("doc_type") == "historical_response" and (r.get("responder") or r.get("response_date")):
+                lr = " · ".join([x for x in [r.get("responder"), r.get("response_date")] if x])
+                if lr:
+                    row["last_response"] = lr
+            a = act_by_doc.get(r.get("doc_id"))
+            if a:
+                row["status"] = a.get("status") or row["status"]
+                row["owner"]  = a.get("owner") or row["owner"]
+                row["due_date"] = str(a.get("due_date")) if a.get("due_date") else row["due_date"]
+
+        out = sorted(tracker.values(), key=lambda x: (not x["change_detected"], x["project"]))
+        return {"rows": out, "total": len(out),
+                "changed_count": sum(1 for x in out if x["change_detected"])}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DraftReplyRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    doc_id: str
+
+
+@router.post("/generate-draft-reply")
+async def generate_draft_reply(req: DraftReplyRequest):
+    """
+    Generate a ready-to-send draft email reply to a feasibility request, grounded
+    in the municipality's requirements (Vector Search + extracted fields) and any
+    prior response. Returns {draft, sources}.
+    """
+    if req.domain_id != "compliance_due_diligence":
+        raise HTTPException(status_code=404, detail="Draft reply is available only for compliance_due_diligence.")
+    _d = _get_domain_schemas(req.domain_id)
+    raw = _d["schema_raw"]; vec = _d["schema_vec"]
+    _doc_id = (req.doc_id or "").replace("'", "''")   # escape for the SQL literal below
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        # 1. The request text
+        rows = run_sql(f"""
+            SELECT SUBSTRING(CAST(parsed_content AS STRING), 1, 4000) AS body, filename, doc_type
+            FROM {CATALOG}.{raw}.parsed_documents WHERE doc_id = '{_doc_id}' LIMIT 1
+        """, timeout_secs=20) or []
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"Document '{req.doc_id}' not found.")
+        request_text = rows[0].get("body") or ""
+
+        # 2. Retrieve municipality requirements via Vector Search (best-effort)
+        context_text = ""; sources: list = []
+        try:
+            from databricks.vector_search.client import VectorSearchClient
+            vsc = VectorSearchClient()
+            index = vsc.get_index(VS_ENDPOINT, f"{CATALOG}.{vec}.{req.domain_id}_docs_index")
+            res = index.similarity_search(
+                query_text=request_text[:800],
+                columns=["doc_id", "doc_type", "chunk_to_retrieve"], num_results=6)
+            for r in res.get("result", {}).get("data_array", []):
+                did = r[0] if len(r) > 0 else ""
+                context_text += f"\n\n[{r[1] if len(r)>1 else ''} · {did}]\n{r[2] if len(r)>2 else ''}"
+                if did and did not in [s['doc_id'] for s in sources]:
+                    sources.append({"doc_id": did, "filename": did})
+        except Exception:
+            pass
+
+        # 2b. Deterministic SQL grounding — pull THIS municipality's requirement/license/
+        #     change docs directly (filenames encode the city), so the draft is grounded
+        #     and cited even when Vector Search misses on this small corpus.
+        try:
+            mrow = run_sql(f"""
+                SELECT {_parse_val_sql("field_value")} AS v
+                FROM {CATALOG}.{raw}.extracted_fields
+                WHERE doc_id = '{_doc_id}' AND field_name = 'municipality' LIMIT 1
+            """, timeout_secs=15) or []
+            muni = ((mrow[0].get("v") if mrow else "") or "").lower()
+            token = next((t for t in ["dallas", "hillsborough", "tampa", "atlanta", "fulton"] if t in muni), "")
+            if token:
+                docs = run_sql(f"""
+                    SELECT DISTINCT pd.doc_id, pd.filename, pd.doc_type,
+                           SUBSTRING(CAST(pd.parsed_content AS STRING), 1, 700) AS body
+                    FROM {CATALOG}.{raw}.parsed_documents pd
+                    WHERE pd.doc_type IN ('municipal_requirement','alcohol_license','tobacco_license',
+                          'business_license','zoning_document','regulatory_change','permit','historical_response')
+                      AND LOWER(pd.filename) LIKE '%{token}%'
+                    LIMIT 6
+                """, timeout_secs=20) or []
+                for d in docs:
+                    fn = d.get("filename", "")
+                    context_text += f"\n\n[{d.get('doc_type','')} · {fn}]\n{d.get('body','')}"
+                    if fn and fn not in [s["filename"] for s in sources]:
+                        sources.append({"doc_id": d.get("doc_id", ""), "filename": fn})
+        except Exception:
+            pass
+
+        # 3. Attach source URLs (provenance)
+        try:
+            src = run_sql(f"SELECT filename, source_url FROM {CATALOG}.{raw}.document_sources", timeout_secs=15) or []
+            umap = {s["filename"]: s.get("source_url") for s in src if s.get("filename")}
+            for s in sources:
+                s["source_url"] = umap.get(s["filename"])
+        except Exception:
+            pass
+
+        # 4. Draft the reply
+        llm, _m = _get_llm(max_tokens=1400)
+        system = (
+            "You are a store-development compliance analyst. Draft a professional, ready-to-send "
+            "EMAIL REPLY to the feasibility/due-diligence request below. Answer the specific questions "
+            "(alcohol/tobacco/business licensing, zoning, distance restrictions, lead times) using ONLY "
+            "the provided requirement excerpts; where the excerpts are silent, say what still needs to be "
+            "confirmed. Keep it concise and business-appropriate: greeting, a short summary answer, a "
+            "bulleted requirements/next-steps list with lead times, and a sign-off. End with a 'Sources:' "
+            "line listing the document names used. Do not invent regulations."
+        )
+        human = f"FEASIBILITY REQUEST:\n{request_text}\n\nREQUIREMENT EXCERPTS:{context_text or ' (none retrieved)'}"
+        resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=human)])
+        return {"draft": resp.content.strip(), "sources": sources, "doc_id": req.doc_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
