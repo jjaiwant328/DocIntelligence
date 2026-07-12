@@ -373,6 +373,17 @@ zoning documents, operational permits, historical responses, regulatory changes,
 correspondence for fuel/convenience retail store development.
 """
 
+# Prefer the canonical prompt file (source of truth) over the inline copy above,
+# so the stored agent_system_prompt never drifts or gets truncated on re-provision.
+_asp_md = Path(__file__).resolve().parent.parent / "domains" / "compliance_due_diligence" / "prompts" / "agent_system_prompt.md"
+try:
+    if _asp_md.exists():
+        _asp_txt = _asp_md.read_text(encoding="utf-8")
+        if _asp_txt.strip():            # never overwrite the inline prompt with an empty file
+            AGENT_SYSTEM_PROMPT = _asp_txt
+except Exception:
+    pass
+
 # ── Suggested questions ───────────────────────────────────────────────────────
 
 SUGGESTED_QUESTIONS = json.dumps([

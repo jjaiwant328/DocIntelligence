@@ -1871,13 +1871,22 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                           <td colSpan={mapData.topics.length + 1} className="px-4 py-3 bg-blue-50 border border-blue-200">
                             <p className="text-xs font-semibold text-blue-800 mb-1.5">{j} — {t.replace(/_/g, " ")}: {cell.count} document(s)</p>
                             <div className="flex flex-wrap gap-1.5">
-                              {cell.docs.map(d => (
-                                <button key={d.doc_id} onClick={() => onDocClick(d.doc_id)}
-                                  className="text-[10px] px-2 py-1 rounded-full bg-white border border-blue-200 text-blue-700 hover:bg-blue-100">
-                                  {d.filename.length > 40 ? d.filename.slice(0, 40) + "…" : d.filename}
-                                  {d.risk_level && <span className="ml-1 font-bold">[{d.risk_level}]</span>}
-                                </button>
-                              ))}
+                              {cell.docs.map((d, di) => {
+                                const id = (d.doc_id || d.filename || "").trim();
+                                const label = d.filename.length > 40 ? d.filename.slice(0, 40) + "…" : d.filename;
+                                const risk = d.risk_level ? <span className="ml-1 font-bold">[{d.risk_level}]</span> : null;
+                                return id ? (
+                                  <button key={`${id}-${di}`} onClick={() => onDocClick(id)}
+                                    className="text-[10px] px-2 py-1 rounded-full bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer">
+                                    {label}{risk}
+                                  </button>
+                                ) : (
+                                  <span key={`syn-${di}`} title="Projected coverage (no source document)"
+                                    className="text-[10px] px-2 py-1 rounded-full bg-gray-50 border border-gray-200 text-gray-400">
+                                    {label}{risk}
+                                  </span>
+                                );
+                              })}
                             </div>
                           </td>
                         </tr>
@@ -2764,7 +2773,7 @@ function ActionCard({ pb, onLogged, domainId = "supply_chain", incidentRef = "RC
               {sourceDocs.map(doc => (
                 <button
                   key={doc.doc_id}
-                  onClick={() => onDocClick?.(doc.doc_id)}
+                  onClick={() => { const id = (doc.doc_id || doc.filename || "").trim(); if (id) onDocClick?.(id); }}
                   title={`${doc.doc_type} · ${doc.processed_ts ? new Date(doc.processed_ts).toLocaleDateString() : ""}`}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-medium hover:bg-blue-100 hover:border-blue-400 transition-colors cursor-pointer max-w-[180px]"
                 >

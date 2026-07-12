@@ -4083,7 +4083,10 @@ async def jurisdiction_map(domain_id: str = "supply_chain"):
                 continue  # same doc already counted from extracted rows — avoid double-count
             cell["count"] += 1
             cell["status"] = "covered" if not cell["has_open"] else "issues"
-            cell["docs"].append({"doc_id": "", "filename": row.get("filename", ""),
+            # For these multi-format docs the doc_id equals the filename, so the
+            # source chip in the UI can open the document.
+            _fn = row.get("filename") or ""
+            cell["docs"].append({"doc_id": _fn, "filename": _fn,
                                  "risk_level": "", "statute_number": "", "enforcement_authority": ""})
 
         # 3. Demo synthetic overlay — complete the grid across demo regions × requirement topics
