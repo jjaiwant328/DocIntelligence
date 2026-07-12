@@ -3508,21 +3508,52 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string|null>(null);
 
-  // Two-level nav: tab + sub — reset when domain changes
-  const [tab, setTab]   = useState<string>("overview");
-  const [sub, setSub]   = useState<string>("summary");
+  // Two-level nav: tab + sub — URL-backed (?ct=<tab>&cs=<sub>) so browser
+  // Back/Forward and deep-links restore the Control-Tower sub-view.
+  const _initParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const [tab, setTab]   = useState<string>(_initParams?.get("ct") || "overview");
+  const [sub, setSub]   = useState<string>(_initParams?.get("cs") || "summary");
+  const _navFirst    = useRef(true);   // skip the URL write on initial mount
+  const _domainFirst = useRef(true);   // preserve a deep-linked view on first mount
+  const _navSuppress = useRef(false);  // don't re-push when popstate/reset drives the change
 
   // Overview accordion sections (expanded by default)
   const [accDocTypes,   setAccDocTypes]   = useState(true);
   const [accEntities,   setAccEntities]   = useState(true);
   const [accExtractions, setAccExtractions] = useState(true);
 
-  // Reset sub-tab when domain switches
+  // Reset sub-tab when domain switches — but keep a deep-linked view on first mount.
   useEffect(() => {
-    setSub("summary");
+    if (_domainFirst.current) { _domainFirst.current = false; return; }
+    _navSuppress.current = true;   // a domain reset shouldn't create a stray history entry
     setTab("overview");
+    setSub("summary");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domainId]);
+
+  // Persist tab/sub to the URL (pushState) so Back cycles through the sub-views.
+  useEffect(() => {
+    if (_navFirst.current)    { _navFirst.current = false; return; }
+    if (_navSuppress.current) { _navSuppress.current = false; return; }
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("ct", tab); params.set("cs", sub);
+    const st = { domainId: params.get("domain"), tab: params.get("tab") || "tower", ct: tab, cs: sub };
+    window.history.pushState(st, "", `?${params.toString()}`);
+  }, [tab, sub]);
+
+  // Browser Back/Forward → restore tab/sub from the URL.
+  useEffect(() => {
+    const onPop = () => {
+      if (typeof window === "undefined") return;
+      const p = new URLSearchParams(window.location.search);
+      _navSuppress.current = true;
+      setTab(p.get("ct") || "overview");
+      setSub(p.get("cs") || "summary");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [pageLoadedAt]  = useState(()=>new Date().toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"}));
 
   const loadActions = useCallback(async () => {
