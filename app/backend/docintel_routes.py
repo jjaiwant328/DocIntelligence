@@ -5906,6 +5906,7 @@ async def get_action_reports(domain_id: str = "supply_chain"):
     _ensure_action_master_table()
     _ensure_action_history_table()
     from datetime import date
+    _did = (domain_id or "").replace("'", "''")   # escape for the SQL literals below
     try:
         # Aggregate stats
         stats = run_sql(f"""
@@ -5914,7 +5915,7 @@ async def get_action_reports(domain_id: str = "supply_chain"):
                 priority,
                 COUNT(*) AS cnt
             FROM {CATALOG}.platform.action_master
-            WHERE domain_id = '{domain_id}'
+            WHERE domain_id = '{_did}'
             GROUP BY status, priority
             ORDER BY status, priority
         """, timeout_secs=30) or []
@@ -5923,9 +5924,10 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         today = date.today().isoformat()
         overdue = run_sql(f"""
             SELECT action_id, action_type, description, priority,
-                   CAST(due_date AS STRING) AS due_date, owner, status
+                   CAST(due_date AS STRING) AS due_date, owner, status,
+                   CAST(source_doc_ids AS STRING) AS source_doc_ids
             FROM {CATALOG}.platform.action_master
-            WHERE domain_id = '{domain_id}'
+            WHERE domain_id = '{_did}'
               AND due_date < DATE '{today}'
               AND status NOT IN ('COMPLETED','CANCELLED','IGNORED')
             ORDER BY due_date ASC
@@ -5940,9 +5942,10 @@ async def get_action_reports(domain_id: str = "supply_chain"):
                    CAST(completed_date AS STRING) AS completed_date,
                    logged_by, incident_ref, verified_by,
                    cancel_reason, ignore_reason,
+                   CAST(source_doc_ids AS STRING) AS source_doc_ids,
                    CAST(updated_at AS STRING) AS updated_at
             FROM {CATALOG}.platform.action_master
-            WHERE domain_id = '{domain_id}'
+            WHERE domain_id = '{_did}'
             ORDER BY created_at DESC
             LIMIT 500
         """, timeout_secs=30) or []
@@ -5957,6 +5960,46 @@ async def get_action_reports(domain_id: str = "supply_chain"):
             by_status[s]    = by_status.get(s,0) + _c
             by_priority[p]  = by_priority.get(p,0) + _c
 
+        # Attach the owning project to each action (source_doc_ids -> doc's store/project id).
+        doc_proj: dict = {}
+        try:
+            _raw = _get_domain_schemas(domain_id)["schema_raw"]
+            _p_store = _parse_val_sql("CASE WHEN field_name='store_number' THEN field_value END")
+            _p_proj  = _parse_val_sql("CASE WHEN field_name='project_id' THEN field_value END")
+            prows = run_sql(f"""
+                SELECT doc_id, COALESCE(MAX({_p_store}), MAX({_p_proj})) AS project
+                FROM {CATALOG}.{_raw}.extracted_fields
+                GROUP BY doc_id
+            """, timeout_secs=30) or []
+            doc_proj = {r["doc_id"]: r.get("project") for r in prows if r.get("project")}
+        except Exception:
+            doc_proj = {}
+
+        import json as _json
+        def _proj_for(src) -> str | None:
+            # source_doc_ids may be a JSON list, a JSON scalar, or a plain/CSV string.
+            ids = []
+            if isinstance(src, (list, tuple)):
+                ids = list(src)
+            elif src:
+                s = str(src).strip()
+                try:
+                    parsed = _json.loads(s)
+                    ids = parsed if isinstance(parsed, list) else [parsed]
+                except Exception:
+                    ids = s.strip("[]").replace('"', "").split(",")
+            for did in ids:
+                did = str(did).strip()
+                if did and did in doc_proj:
+                    return doc_proj[did]
+            return None
+
+        for _r in overdue:
+            _r["project"] = _proj_for(_r.get("source_doc_ids"))
+        for _r in all_actions:
+            _r["project"] = _proj_for(_r.get("source_doc_ids"))
+        projects = sorted({_r["project"] for _r in all_actions if _r.get("project")})
+
         return {
             "domain_id":    domain_id,
             "by_status":    by_status,
@@ -5965,6 +6008,7 @@ async def get_action_reports(domain_id: str = "supply_chain"):
             "overdue":      overdue,
             "overdue_count": len(overdue),
             "actions":      all_actions,
+            "projects":     projects,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

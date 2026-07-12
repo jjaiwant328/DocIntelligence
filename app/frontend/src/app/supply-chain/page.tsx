@@ -1812,7 +1812,7 @@ interface TrackerRow {
 }
 interface DraftSource { doc_id?: string; filename?: string; source_url?: string | null; }
 
-function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string; apiBase: string; onDocClick?: (docId: string) => void }) {
+function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions }: { domainId: string; apiBase: string; onDocClick?: (docId: string) => void; onOpenProjectActions?: (project: string) => void }) {
   const [rows, setRows] = useState<TrackerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -1893,9 +1893,16 @@ function ComplianceTracker({ domainId, apiBase, onDocClick }: { domainId: string
                   <td className={cell}>{r.last_response || "—"}</td>
                   <td className={cell}>{r.change_detected ? <span className="text-[10px] font-semibold text-red-600">⚑ Change</span> : <span className="text-gray-300">—</span>}</td>
                   <td className={cell}>
-                    {r.doc_id && (
-                      <button onClick={() => genDraft(r.doc_id!)} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap">✉️ Draft Reply</button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {r.doc_id && (
+                        <button onClick={() => genDraft(r.doc_id!)} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap">✉️ Draft Reply</button>
+                      )}
+                      {onOpenProjectActions && r.project && r.project !== "—" && (
+                        <button onClick={() => onOpenProjectActions(r.project!)}
+                          title="See all tracked actions for this project"
+                          className="text-[11px] font-medium text-gray-500 hover:text-gray-800 whitespace-nowrap">Actions →</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2323,6 +2330,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
   const toggleType = (t: string) => setHiddenTypes(prev => {
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
   });
+  const [focusProject, setFocusProject] = useState<string>("");   // Project entity id to spotlight
   const [emailOpen,    setEmailOpen]    = useState(false);
   const [emailTo,      setEmailTo]      = useState("");
   const [emailCopied,  setEmailCopied]  = useState(false);
@@ -2342,6 +2350,20 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
     connCount[e.source] = (connCount[e.source] ?? 0) + 1;
     connCount[e.target] = (connCount[e.target] ?? 0) + 1;
   });
+
+  // Project focus — spotlight a Project entity and everything within 2 hops of it.
+  const projectNodes = graph.nodes.filter(n => n.type === "Project");
+  const focusIds: Set<string> | null = focusProject ? (() => {
+    const ids = new Set<string>([focusProject]);
+    for (let hop = 0; hop < 2; hop++) {
+      const frontier = Array.from(ids);
+      graph.edges.forEach(e => {
+        if (frontier.includes(e.source)) ids.add(e.target);
+        if (frontier.includes(e.target)) ids.add(e.source);
+      });
+    }
+    return ids;
+  })() : null;
 
   // Search filter — nodes whose id, label, or type match the query
   const q = graphSearch.trim().toLowerCase();
@@ -2667,6 +2689,22 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
           </div>
         </div>
 
+        {/* Focus project — spotlight one store project and everything connected to it */}
+        {projectNodes.length > 0 && (
+          <div className="px-3 py-2.5 border-b border-gray-100 flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Focus project</span>
+            <select value={focusProject} onChange={e => setFocusProject(e.target.value)}
+              title="Spotlight a project and its related documents, municipality, licenses, and history"
+              className="text-[11px] px-2 py-1 rounded-md border border-gray-200 text-gray-600 bg-white cursor-pointer">
+              <option value="">— none —</option>
+              {projectNodes.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+            {focusProject && (
+              <button onClick={() => setFocusProject("")} className="text-[10px] text-blue-600 hover:underline cursor-pointer">clear focus</button>
+            )}
+          </div>
+        )}
+
         {/* Entity-type filter — at the top of the graph; click a type to show/hide it */}
         <div className="px-3 py-2.5 border-b border-gray-100">
           <div className="flex items-center justify-between mb-1.5">
@@ -2744,7 +2782,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
                 const isEHov = hoveredEdge === i;
                 const highlight = isSel || isHov || isEHov;
                 const srcColor  = colorForType(s.type);
-                const dimmed    = !!(selected && !isSel);
+                const dimmed    = !!(selected && !isSel) || !!(focusIds && !(focusIds.has(e.source) && focusIds.has(e.target)));
                 const d = edgePath(s.x, s.y, t.x, t.y);
                 const dx = t.x - s.x, dy = t.y - s.y;
                 const cx = s.x + dx * 0.5 + (dy !== 0 ? dy * 0.15 : 40);
@@ -2784,7 +2822,8 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
                 const degree = connCount[n.id] ?? 0;
                 const r      = isSel ? 28 : isHov ? 26 : Math.min(22, 16 + degree * 1.5);
                 const searchDimmed = !!(visibleNodeIds && !visibleNodeIds.has(n.id));
-                const dimmed = searchDimmed || !!(selected && !isSel && !connectedEdges.some(e => e.source === n.id || e.target === n.id));
+                const focusDimmed  = !!(focusIds && !focusIds.has(n.id));
+                const dimmed = searchDimmed || focusDimmed || !!(selected && !isSel && !connectedEdges.some(e => e.source === n.id || e.target === n.id));
                 return (
                   <g key={n.id} style={{ cursor: "pointer", transition: "opacity 0.2s ease" }} opacity={dimmed ? 0.28 : 1}
                     onClick={() => handleNodeClick(n.id)}
@@ -3066,7 +3105,7 @@ function ActionCard({ pb, onLogged, domainId = "supply_chain", incidentRef = "RC
   );
 }
 
-function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain", incidentRef = "", onDocClick, apiBase = "" }: { catFilter: string; onLogged: () => void; actions: ActionEntry[]; domainId?: string; incidentRef?: string; onDocClick?: (docId: string) => void; apiBase?: string }) {
+function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain", incidentRef = "", onDocClick, apiBase = "", selectedProject = "" }: { catFilter: string; onLogged: () => void; actions: ActionEntry[]; domainId?: string; incidentRef?: string; onDocClick?: (docId: string) => void; apiBase?: string; selectedProject?: string }) {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportText, setReportText] = useState<string|null>(null);
   const [docsByType, setDocsByType] = useState<Record<string, ActionDocRef[]>>({});
@@ -3102,7 +3141,7 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
   if (catFilter === "reports") {
     return (
       <PanelErrorBoundary label="Action Reports">
-        <ActionReportsView domainId={domainId} apiBase={apiBase} />
+        <ActionReportsView domainId={domainId} apiBase={apiBase} initialProject={selectedProject} />
       </PanelErrorBoundary>
     );
   }
@@ -3513,12 +3552,14 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
 }
 
 /** Action Reports sub-tab */
-function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: string }) {
+function ActionReportsView({ domainId, apiBase, initialProject }: { domainId: string; apiBase: string; initialProject?: string }) {
   const [data, setData]       = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState("ALL");
+  const [filterProject, setFilterProject] = useState<string>(initialProject || "ALL");
   const [histExpanded, setHistExpanded] = useState<string | null>(null);
+  useEffect(() => { if (initialProject) setFilterProject(initialProject); }, [initialProject]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -3555,9 +3596,10 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
   const overdue:    ActionMasterRecord[]   = Array.isArray(data.overdue)  ? (data.overdue  as ActionMasterRecord[]) : [];
   const allActions: ActionMasterRecord[]   = Array.isArray(data.actions)  ? (data.actions  as ActionMasterRecord[]) : [];
 
-  const filtered = filterStatus === "ALL"
-    ? allActions
-    : allActions.filter(a => (a.status ?? "OPEN") === filterStatus);
+  const projects: string[] = Array.isArray(data.projects) ? (data.projects as string[]) : [];
+  const filtered = allActions
+    .filter(a => filterStatus === "ALL" || (a.status ?? "OPEN") === filterStatus)
+    .filter(a => filterProject === "ALL" || ((a as Record<string, unknown>).project as string) === filterProject);
 
   return (
     <div className="space-y-5">
@@ -3603,6 +3645,14 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
       {/* Refresh + filter */}
       <div className="flex items-center gap-2 flex-wrap">
         <p className="text-xs font-semibold text-gray-600">All Actions ({allActions.length})</p>
+        {projects.length > 0 && (
+          <select value={filterProject} onChange={e => setFilterProject(e.target.value)}
+            title="Filter actions by project / store"
+            className="text-[11px] px-2 py-1 rounded-md border border-gray-200 text-gray-600 bg-white cursor-pointer">
+            <option value="ALL">All projects</option>
+            {projects.map(p => <option key={p} value={p}>Project {p}</option>)}
+          </select>
+        )}
         <div className="flex gap-1 ml-auto flex-wrap">
           {["ALL", ...STATUS_ORDER].filter(s => s === "ALL" || byStatus[s]).map(s => (
             <button key={s} onClick={() => setFilterStatus(s)}
@@ -3644,6 +3694,9 @@ function ActionReportsView({ domainId, apiBase }: { domainId: string; apiBase: s
                 </div>
                 <div className="col-span-4 pr-2">
                   <p className="text-gray-600 line-clamp-2">{a.description ?? "—"}</p>
+                  {(a as Record<string, unknown>).project ? (
+                    <span className="inline-block mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">📁 {String((a as Record<string, unknown>).project)}</span>
+                  ) : null}
                 </div>
                 <div className="col-span-2">
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[a.status ?? "OPEN"] ?? ""}`}>
@@ -3763,6 +3816,13 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
   const _initParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   const [tab, setTab]   = useState<string>(_initParams?.get("ct") || "overview");
   const [sub, setSub]   = useState<string>(_initParams?.get("cs") || "summary");
+  // Tracker → Action Center drill-down: which project to pre-filter the Reports view.
+  const [selectedProject, setSelectedProject] = useState<string>("");
+  const openProjectActions = (project: string) => {
+    setSelectedProject(project || "");
+    setTab("actions");
+    setSub("reports");
+  };
   const _navFirst    = useRef(true);   // skip the URL write on initial mount
   const _domainFirst = useRef(true);   // preserve a deep-linked view on first mount
   const _navSuppress = useRef(false);  // don't re-push when popstate/reset drives the change
@@ -4206,6 +4266,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                   incidentRef={activeIncidentId}
                   onDocClick={openDocViewer}
                   apiBase={getApiBaseUrl()}
+                  selectedProject={selectedProject}
                 />
               </PanelErrorBoundary>
             </div>
@@ -4218,7 +4279,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
 
           {/* ── COMPLIANCE TRACKER TAB ── */}
           {tab === "tracker" && (
-            <ComplianceTracker domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} />
+            <ComplianceTracker domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} onOpenProjectActions={openProjectActions} />
           )}
 
           {/* ── COPILOT STUDIO TAB ── */}
