@@ -2435,6 +2435,8 @@ async def get_copilot_prompt(domain_id: str = "compliance"):
 @router.post("/copilot-prompt")
 async def save_copilot_prompt(req: CopilotPromptSaveRequest):
     """Persist the user's guiding prompt into platform.domain_configs."""
+    if len(req.prompt or "") > 2500:
+        raise HTTPException(status_code=400, detail="Copilot prompt exceeds the 2500-character limit.")
     try:
         escaped = req.prompt.replace("'", "''")
         run_sql(f"""
@@ -5169,6 +5171,8 @@ async def list_copilot_prompts(domain_id: str = "compliance"):
 @router.post("/copilot-prompts")
 async def create_copilot_prompt(req: CopilotPromptCreateRequest):
     """Create a new named prompt for a domain."""
+    if len(req.prompt_text or "") > 2500:
+        raise HTTPException(status_code=400, detail="Copilot prompt exceeds the 2500-character limit.")
     _ensure_copilot_prompts_table()
     import uuid as _uuid
     try:

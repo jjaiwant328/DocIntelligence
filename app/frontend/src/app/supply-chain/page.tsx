@@ -974,10 +974,11 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
           <div className="text-xs text-gray-400 py-4 text-center animate-pulse">Loading full prompt text…</div>
         ) : (
           <>
-            <textarea value={editText} onChange={e => setEditText(e.target.value)}
+            <textarea value={editText} onChange={e => setEditText(e.target.value.slice(0, 2500))}
+              maxLength={2500}
               className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 resize-y overflow-auto min-h-[18rem] max-h-[32rem] focus:outline-none focus:ring-1 focus:ring-blue-400"
               spellCheck={false} />
-            <p className="text-[10px] text-gray-400">{editText.length.toLocaleString()} characters · scroll to see the full prompt · fully editable</p>
+            <p className={`text-[10px] ${editText.length >= 2500 ? "text-red-500 font-semibold" : "text-gray-400"}`}>{editText.length.toLocaleString()} / 2,500 characters{editText.length >= 2500 ? " · limit reached" : ""} · scroll to see the full prompt · fully editable</p>
           </>
         )}
         <div className="flex gap-2">
@@ -1154,11 +1155,13 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
             />
             <textarea
               value={draftPrompt}
-              onChange={e => { setDraftPrompt(e.target.value); setGapReport(null); }}
+              onChange={e => { setDraftPrompt(e.target.value.slice(0, 2500)); setGapReport(null); }}
+              maxLength={2500}
               placeholder={"# Copilot Instructions\n\nYou are a compliance intelligence assistant...\n\n## Core Responsibilities\n- Surface violations and risks\n- Recommend corrective actions\n- Cross-reference relevant regulations"}
               className="w-full h-56 text-xs font-mono border border-gray-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
               spellCheck={false}
             />
+            <p className={`text-[10px] ${draftPrompt.length >= 2500 ? "text-red-500 font-semibold" : "text-gray-400"}`}>{draftPrompt.length.toLocaleString()} / 2,500 characters{draftPrompt.length >= 2500 ? " · limit reached" : ""}</p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <button
                 onClick={() => handleSave(true)}
