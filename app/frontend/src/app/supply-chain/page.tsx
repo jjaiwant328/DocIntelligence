@@ -536,6 +536,17 @@ function buildTabs(domainId: string) {
       label: "Overview",
       tooltip: "Document processing stats, entity distribution, and key extractions",
     },
+    {
+      id: "copilot",
+      icon: "🧠",
+      label: "Copilot Studio",
+      tooltip: "Define the guiding prompt (the driver for recommended actions), analyze data readiness, and run AI queries.",
+      subs: [
+        { id: "setup",     label: "Setup & Readiness" },
+        { id: "ask",       label: "Ask Copilot" },
+        { id: "legal",     label: "Legal Queue" },
+      ],
+    },
     ...(domainId === "compliance_due_diligence" ? [{
       id: "tracker",
       icon: "📋",
@@ -570,17 +581,6 @@ function buildTabs(domainId: string) {
       subs: [
         { id: "map",    label: "Coverage Matrix" },
         { id: "pulse",  label: "Regulatory Pulse" },
-      ],
-    },
-    {
-      id: "copilot",
-      icon: "🧠",
-      label: "Copilot Studio",
-      tooltip: "Paste your guiding instructions, analyze data readiness, and run AI-powered intelligence queries against your documents",
-      subs: [
-        { id: "setup",     label: "Setup & Readiness" },
-        { id: "ask",       label: "Ask Copilot" },
-        { id: "legal",     label: "Legal Queue" },
       ],
     },
   ];
@@ -774,11 +774,12 @@ interface PromptRecord {
   created_by: string;
 }
 
-function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, onDocClick }: {
+function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, onDocClick, onDirtyChange }: {
   domainId: string; sub: string; apiBase: string;
   onSwitchToSetup?: () => void;
   onSwitchSub?: (s: string) => void;
   onDocClick?: (docId: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   // Persist key UI state to sessionStorage so it survives tab navigation (per domain).
   const _skey = `docintel_copilot_${domainId}`;
@@ -960,6 +961,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
       setShowAddNew(false);
       setDraftName("");
       setGapReport(null);
+      onDirtyChange?.(false);   // saved — no longer dirty
       setBriefings(briefingQueries.map(() => null));
       setSaveSuccess(name);
       await loadPromptLibrary();
@@ -982,6 +984,14 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
     const res = await fetch(`${apiBase}/api/docintel/copilot-prompts/${promptId}`, { method: "DELETE" });
     if (!res.ok) { const e = await res.json(); alert(e.detail || "Delete failed"); return; }
     loadPromptLibrary();
+  };
+
+  const handleDeleteActivePrompt = async () => {
+    if (!confirm("Delete the active guiding prompt for this domain? Recommended actions will fall back to defaults.")) return;
+    try {
+      await fetch(`${apiBase}/api/docintel/copilot-prompt?domain_id=${encodeURIComponent(domainId)}`, { method: "DELETE" });
+      setSavedPrompt(null); setDraftPrompt(""); onDirtyChange?.(false);
+    } catch { alert("Delete failed"); }
   };
 
   const handleUpdatePrompt = async (promptId: string, name: string, text: string) => {
@@ -1193,12 +1203,21 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
                         className="text-[11px] font-semibold px-2.5 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-100">
                         Edit
                       </button>
-                      {!p.is_active && (
-                        <button onClick={() => handleDeletePrompt(p.prompt_id)}
-                          className="text-[11px] px-2.5 py-1 rounded-md border border-red-100 text-red-500 hover:bg-red-50">
-                          Delete
-                        </button>
-                      )}
+                      <button onClick={async () => {
+                          if (p.is_active) {
+                            if (!confirm(`Delete the ACTIVE prompt "${p.name}"? Recommended actions will fall back to defaults. This cannot be undone.`)) return;
+                            try { await fetch(`${apiBase}/api/docintel/copilot-prompt?domain_id=${encodeURIComponent(domainId)}`, { method: "DELETE" }); } catch { /* ignore */ }
+                            setSavedPrompt(null); setDraftPrompt(""); onDirtyChange?.(false);
+                            const res = await fetch(`${apiBase}/api/docintel/copilot-prompts/${p.prompt_id}`, { method: "DELETE" });
+                            if (!res.ok) alert("Delete failed");
+                            loadPromptLibrary();
+                          } else {
+                            handleDeletePrompt(p.prompt_id);
+                          }
+                        }}
+                        className="text-[11px] px-2.5 py-1 rounded-md border border-red-100 text-red-500 hover:bg-red-50">
+                        Delete
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1233,7 +1252,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
             />
             <textarea
               value={draftPrompt}
-              onChange={e => { setDraftPrompt(e.target.value.slice(0, 2500)); setGapReport(null); }}
+              onChange={e => { setDraftPrompt(e.target.value.slice(0, 2500)); setGapReport(null); onDirtyChange?.(true); }}
               maxLength={2500}
               placeholder={"# Copilot Instructions\n\nYou are a compliance intelligence assistant...\n\n## Core Responsibilities\n- Surface violations and risks\n- Recommend corrective actions\n- Cross-reference relevant regulations"}
               className="w-full h-56 text-xs font-mono border border-gray-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
@@ -1261,6 +1280,14 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
               >
                 Cancel
               </button>
+              {savedPrompt && (
+                <button
+                  onClick={handleDeleteActivePrompt}
+                  className="ml-auto text-xs font-semibold text-red-600 hover:text-red-800 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50 cursor-pointer"
+                >
+                  🗑 Delete prompt
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1812,7 +1839,7 @@ interface TrackerRow {
 }
 interface DraftSource { doc_id?: string; filename?: string; source_url?: string | null; }
 
-function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions }: { domainId: string; apiBase: string; onDocClick?: (docId: string) => void; onOpenProjectActions?: (project: string) => void }) {
+function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions, activeProject = "" }: { domainId: string; apiBase: string; onDocClick?: (docId: string) => void; onOpenProjectActions?: (project: string) => void; activeProject?: string }) {
   const [rows, setRows] = useState<TrackerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -1821,6 +1848,8 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
   const [draft, setDraft] = useState<{ draft: string; sources: DraftSource[] } | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Scope to the Control Tower's active project (fall back to all if none set).
+  const rowsShown = activeProject ? rows.filter(r => String((r as {project?:string}).project ?? "") === activeProject) : rows;
 
   useEffect(() => {
     setLoading(true); setErr(null);
@@ -1861,8 +1890,8 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
         <div className="py-8 text-center"><Spinner label="Loading tracker…" /></div>
       ) : err ? (
         <div className="text-xs text-red-500 py-4">Could not load tracker: {err}</div>
-      ) : rows.length === 0 ? (
-        <div className="text-xs text-gray-400 py-8 text-center">No tracked projects yet.</div>
+      ) : rowsShown.length === 0 ? (
+        <div className="text-xs text-gray-400 py-8 text-center">{activeProject ? `No tracked rows for project ${activeProject}.` : "No tracked projects yet."}</div>
       ) : (
         <div className="overflow-x-auto border border-gray-100 rounded-lg">
           <table className="w-full border-collapse">
@@ -1876,7 +1905,7 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {rowsShown.map((r, i) => (
                 <tr key={i} className={`border-t border-gray-100 hover:bg-gray-50 ${r.change_detected ? "bg-red-50/40" : ""}`}>
                   <td className={cell}>
                     {r.doc_id ? (
@@ -1952,7 +1981,8 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
   );
 }
 
-function ComplianceMapTab({ domainId, sub, apiBase, onDocClick }: { domainId: string; sub: string; apiBase: string; onDocClick?: (docId: string) => void }) {
+function ComplianceMapTab({ domainId, sub, apiBase, onDocClick, focusProjectDefault = "" }: { domainId: string; sub: string; apiBase: string; onDocClick?: (docId: string) => void; focusProjectDefault?: string }) {
+  void focusProjectDefault;  // coverage is jurisdiction-based; project focus surfaces via Tracker/KG
   const [digestItems, setDigestItems] = useState<DigestItem[]>([]);
   const [digestLoading, setDigestLoading] = useState(false);
   const [digestErr, setDigestErr] = useState("");
@@ -2314,7 +2344,7 @@ function ComplianceMapTab({ domainId, sub, apiBase, onDocClick }: { domainId: st
   );
 }
 
-function OntologyMap({ graph, sub, domainName = "Domain", domainId = "supply_chain" }: { graph: OntGraph; sub: string; domainName?: string; domainId?: string }) {
+function OntologyMap({ graph, sub, domainName = "Domain", domainId = "supply_chain", focusProjectDefault = "" }: { graph: OntGraph; sub: string; domainName?: string; domainId?: string; focusProjectDefault?: string }) {
   // ALL hooks must be declared before any early return (React rules of hooks)
   const [hovered,     setHovered]     = useState<string|null>(null);
   const [selected,    setSelected]    = useState<string|null>(null);
@@ -2330,7 +2360,14 @@ function OntologyMap({ graph, sub, domainName = "Domain", domainId = "supply_cha
   const toggleType = (t: string) => setHiddenTypes(prev => {
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
   });
-  const [focusProject, setFocusProject] = useState<string>("");   // Project entity id to spotlight
+  const [focusProject, setFocusProject] = useState<string>("");   // Project entity NODE id to spotlight
+  // Default the focus to the Control Tower's active project (map its store/SD id → the Project node).
+  useEffect(() => {
+    if (!focusProjectDefault) { setFocusProject(""); return; }
+    const m = graph.nodes.find(n => n.type === "Project" && String(n.label || "").toLowerCase().includes(String(focusProjectDefault).toLowerCase()));
+    setFocusProject(m ? m.id : "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusProjectDefault, graph]);
   const [emailOpen,    setEmailOpen]    = useState(false);
   const [emailTo,      setEmailTo]      = useState("");
   const [emailCopied,  setEmailCopied]  = useState(false);
@@ -2360,7 +2397,7 @@ function OntologyMap({ graph, sub, domainName = "Domain", domainId = "supply_cha
 
   // Project focus — spotlight a Project entity and everything within 2 hops of it.
   const projectNodes = graph.nodes.filter(n => n.type === "Project");
-  const focusIds: Set<string> | null = focusProject ? (() => {
+  const focusIds: Set<string> | null = (focusProject && nodeById[focusProject]) ? (() => {
     const ids = new Set<string>([focusProject]);
     for (let hop = 0; hop < 2; hop++) {
       const frontier = Array.from(ids);
@@ -3146,6 +3183,53 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
 
   useEffect(() => { loadMasterActions(); }, [loadMasterActions]);
 
+  // ── Project scope (dropdown drives run-for-project + tracker filter + reports) ──
+  const [projScope, setProjScope] = useState<string>(selectedProject || "ALL");
+  useEffect(() => { if (selectedProject) setProjScope(selectedProject); }, [selectedProject]);
+  const [projList, setProjList] = useState<{project_id:string;name?:string;municipality?:string;state?:string}[]>([]);
+  useEffect(() => {
+    fetch(`${apiBase}/api/docintel/projects?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : {projects:[]})
+      .then(d => setProjList(d.projects ?? []))
+      .catch(() => {});
+  }, [domainId, apiBase]);
+  // Recommended actions are GENERATED from the domain's Copilot prompt (cached server-side),
+  // with a curated fallback so the grid is never empty.
+  const [recActions, setRecActions] = useState<Playbook[]>([]);
+  const [recLoading, setRecLoading] = useState(true);
+  const [recSource, setRecSource] = useState<string>("");
+  useEffect(() => {
+    setRecLoading(true);
+    fetch(`${apiBase}/api/docintel/recommended-actions?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : { actions: [], source: "" })
+      .then(d => {
+        const items: Playbook[] = (d.actions ?? []).map((a: Record<string, unknown>, i: number) => ({
+          id: `rec-${i}-${String(a.action_type)}`, category: String(a.category), priority: String(a.priority) as Playbook["priority"],
+          action_type: String(a.action_type), name: String(a.title), description: String(a.what_it_does ?? ""),
+          what_it_does: String(a.what_it_does ?? ""), next_steps: (a.next_steps as string[]) ?? [],
+          source_doc_types: (a.source_doc_types as string[]) ?? [],
+        }));
+        setRecActions(items.length ? items : getDomainPlaybooks(domainId)); setRecSource(d.source ?? "");
+      })
+      .catch(() => { setRecActions(getDomainPlaybooks(domainId)); setRecSource("fallback"); })
+      .finally(() => setRecLoading(false));
+  }, [domainId, apiBase]);
+
+  const [runningId, setRunningId] = useState<string>("");
+  async function runForProject(pb: Playbook) {
+    if (!projScope || projScope === "ALL") return;
+    setRunningId(pb.id);
+    try {
+      await fetch(`${apiBase}/api/docintel/action-master`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, action_type: pb.action_type,
+          description: `${pb.name} — Project ${projScope}`, priority: pb.priority,
+          project_id: projScope }),
+      });
+      loadMasterActions(); onLogged?.();
+    } catch { /* ignore */ } finally { setRunningId(""); }
+  }
+
   // Collect all unique doc types needed by playbooks — must run unconditionally (hooks rules)
   useEffect(() => {
     if (catFilter === "reports") return; // skip when not needed, but hook is always called
@@ -3162,15 +3246,21 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
   if (catFilter === "reports") {
     return (
       <PanelErrorBoundary label="Action Reports">
-        <ActionReportsView domainId={domainId} apiBase={apiBase} initialProject={selectedProject} onDocClick={onDocClick} />
+        <ActionReportsView domainId={domainId} apiBase={apiBase} initialProject={projScope === "ALL" ? (selectedProject || "") : projScope} onDocClick={onDocClick} />
       </PanelErrorBoundary>
     );
   }
 
-  const domainPlaybooks = getDomainPlaybooks(domainId);
+  const domainPlaybooks = recActions.length ? recActions : getDomainPlaybooks(domainId);
   const filtered = catFilter==="all"
     ? domainPlaybooks
     : domainPlaybooks.filter(p=>p.category.toLowerCase()===catFilter);
+  // action_types already actioned (active, non-deleted) for the scoped project → hide "Run"
+  const takenTypes = new Set(
+    masterActions
+      .filter(a => a.project_id === projScope && !["COMPLETED","CANCELLED","IGNORED"].includes(a.status ?? ""))
+      .map(a => a.action_type)
+  );
 
   const openCount = actions.filter(a=>a.status==="OPEN").length;
   const critCount = actions.filter(a=>a.priority==="CRITICAL"||a.priority==="HIGH").length;
@@ -3189,13 +3279,28 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
       {/* Summary */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="text-xs text-gray-500">
-          Showing <strong className="text-gray-800">{filtered.length}</strong> action{filtered.length!==1?"s":""}
+          Showing <strong className="text-gray-800">{filtered.length}</strong> recommended action{filtered.length!==1?"s":""}
+          {recLoading && <span className="ml-2 text-[10px] text-gray-400 animate-pulse">⟳ generating…</span>}
+          {!recLoading && recSource === "prompt" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">✨ generated from your Copilot prompt</span>}
           {incidentRef && <> · Ref: <span className="font-mono font-semibold text-red-700">{incidentRef}</span></>}
         </div>
         <div className="flex gap-2 ml-auto">
           {openCount>0&&<span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">{openCount} open logged</span>}
           {critCount>0&&<span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700 animate-pulse">{critCount} require action</span>}
         </div>
+      </div>
+
+      {/* Project scope selector */}
+      <div className="flex items-center gap-2 flex-wrap text-xs bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+        <span className="font-semibold text-indigo-800">📁 Project scope</span>
+        <select value={projScope} onChange={e => setProjScope(e.target.value)}
+          className="border border-indigo-200 rounded px-2 py-1 bg-white text-gray-700">
+          <option value="ALL">All projects</option>
+          {projList.map(p => <option key={p.project_id} value={p.project_id}>{p.project_id}{p.municipality ? ` · ${p.municipality}` : ""}</option>)}
+        </select>
+        {projScope !== "ALL"
+          ? <span className="text-indigo-700">Recommended actions run against <strong>{projScope}</strong>; tracker + reports scoped to it.</span>
+          : <span className="text-gray-400">Pick a project to run an action for it.</span>}
       </div>
 
       {/* Playbook grid */}
@@ -3207,26 +3312,43 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
           const seen = new Set<string>();
           const uniqueDocs = cardDocs.filter(d => { if (seen.has(d.doc_id)) return false; seen.add(d.doc_id); return true; });
           return (
-            <ActionCard key={pb.id} pb={pb} onLogged={onLogged} domainId={domainId} incidentRef={incidentRef}
-              sourceDocs={uniqueDocs} onDocClick={onDocClick} apiBase={apiBase} />
+            <div key={pb.id} className="flex flex-col gap-1.5">
+              {projScope !== "ALL" && (
+                takenTypes.has(pb.action_type)
+                  ? <span className="self-start text-[11px] font-semibold px-2.5 py-1 rounded-md bg-green-50 text-green-700 border border-green-200" title="A tracked action of this type already exists for this project (see the Active Action Tracker below)">✓ Added to tracker</span>
+                  : <button disabled={runningId === pb.id} onClick={() => runForProject(pb)}
+                      title={`Create a tracked action for Project ${projScope} from this recommendation — it appears in the Active Action Tracker below with an owner, due date and lifecycle. (Does not change the prompt.)`}
+                      className="self-start text-[11px] font-semibold px-2.5 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 cursor-pointer">
+                      {runningId === pb.id ? "Adding…" : `➕ Add to tracker (Project ${projScope})`}
+                    </button>
+              )}
+              <ActionCard pb={pb} onLogged={onLogged} domainId={domainId} incidentRef={incidentRef}
+                sourceDocs={uniqueDocs} onDocClick={onDocClick} apiBase={apiBase} />
+            </div>
           );
         })}
       </div>
 
-      {/* Action Master — lifecycle tracker */}
-      {masterActions.length > 0 && (
-        <div className="border-t border-gray-200 pt-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-gray-800">Active Action Tracker</h3>
-            <button onClick={loadMasterActions} className="text-[11px] text-gray-500 hover:text-gray-800 border border-gray-200 px-2.5 py-1 rounded-md">↺ Refresh</button>
+      {/* Action Master — lifecycle tracker (scoped to the selected project) */}
+      {(() => {
+        const shown = projScope === "ALL" ? masterActions : masterActions.filter(a => a.project_id === projScope);
+        return (masterActions.length > 0) ? (
+          <div className="border-t border-gray-200 pt-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-800">
+                Active Action Tracker{projScope !== "ALL" ? ` · Project ${projScope}` : ""}
+              </h3>
+            </div>
+            {shown.length === 0
+              ? <p className="text-xs text-gray-400">No tracked actions for this project yet — use “➕ Add to tracker” on a recommended action above.</p>
+              : <div className="space-y-2">
+                  {shown.map(a => (
+                    <ActionLifecycleRow key={a.action_id} action={a} apiBase={apiBase} onRefresh={loadMasterActions} onDocClick={onDocClick} domainId={domainId} />
+                  ))}
+                </div>}
           </div>
-          <div className="space-y-2">
-            {masterActions.map(a => (
-              <ActionLifecycleRow key={a.action_id} action={a} apiBase={apiBase} onRefresh={loadMasterActions} onDocClick={onDocClick} />
-            ))}
-          </div>
-        </div>
-      )}
+        ) : null;
+      })()}
 
       {/* History section */}
       {actions.length > 0 && (
@@ -3370,6 +3492,7 @@ interface ActionMasterRecord {
   next_update_date?: string; completed_date?: string; verified_by?: string;
   ignore_reason?: string; cancel_reason?: string; logged_by?: string;
   created_at?: string; updated_at?: string; incident_ref?: string; source_doc_ids?: string;
+  project_id?: string; projects?: string[];
 }
 
 /** Modal dialog for collecting transition-specific fields */
@@ -3415,12 +3538,58 @@ function TransitionModal({ title, fields, onConfirm, onCancel, submitting }: {
 }
 
 /** Inline lifecycle badge + transition buttons for an action_master record */
-function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick }: {
-  action: ActionMasterRecord; apiBase: string; onRefresh: () => void; onDocClick?: (docId: string) => void;
+function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick, domainId = "compliance_due_diligence" }: {
+  action: ActionMasterRecord; apiBase: string; onRefresh: () => void; onDocClick?: (docId: string) => void; domainId?: string;
 }) {
   const [modal, setModal] = useState<string | null>(null);  // transition key
   const [submitting, setSubmitting] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
+  // Attach-for-review state
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [libDocs, setLibDocs] = useState<{doc_id:string;filename:string;doc_type?:string}[]>([]);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [attaching, setAttaching] = useState(false);
+  const _dom = (action as Record<string, unknown>).domain_id as string || domainId;
+
+  async function openAttach() {
+    setAttachOpen(true);
+    try {
+      const d = await fetch(`${apiBase}/api/docintel/document-library?domain_id=${encodeURIComponent(_dom)}&limit=200`).then(r => r.json());
+      setLibDocs((d.documents ?? []).map((x: Record<string, unknown>) => ({ doc_id: String(x.doc_id), filename: String(x.filename ?? x.doc_id), doc_type: String(x.doc_type ?? "") })));
+    } catch { setLibDocs([]); }
+  }
+  async function attachSelected() {
+    const ids = Object.keys(picked).filter(k => picked[k]);
+    if (!ids.length) { setAttachOpen(false); return; }
+    setAttaching(true);
+    try {
+      await fetch(`${apiBase}/api/docintel/action-master/${action.action_id}/attach`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: _dom, doc_ids: ids }),
+      });
+      setAttachOpen(false); setPicked({}); onRefresh();
+    } catch { /* surfaced via no refresh */ } finally { setAttaching(false); }
+  }
+  async function attachUpload(file: File) {
+    setAttaching(true);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      await fetch(`${apiBase}/api/docintel/action-master/${action.action_id}/attach-upload?domain_id=${encodeURIComponent(_dom)}`, { method: "POST", body: fd });
+      setAttachOpen(false); onRefresh();
+    } catch { /* surfaced via no refresh */ } finally { setAttaching(false); }
+  }
+  const [deleting, setDeleting] = useState(false);
+  async function doDelete() {
+    if (typeof window !== "undefined" && !window.confirm("Delete this action? It disappears from the tracker but is retained (and shown as Deleted) in Action Reports.")) return;
+    setDeleting(true);
+    try {
+      await fetch(`${apiBase}/api/docintel/action-master/${action.action_id}/delete`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: _dom }),
+      });
+      onRefresh();   // auto-refresh → the soft-deleted row drops out of the tracker
+    } catch { /* ignore */ } finally { setDeleting(false); }
+  }
   const [history, setHistory] = useState<{old_status:string;new_status:string;changed_by:string;changed_at:string;comments:string}[]>([]);
 
   const TRANSITION_CONFIG: Record<string, {
@@ -3580,10 +3749,10 @@ function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick }: {
           })}
         </div>
       )}
-      {/* Origin — the documents this action was built from */}
+      {/* Documents for review — origin docs + any attached during progression */}
       {srcDocs.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 pt-1">
-          <span className="text-[10px] text-gray-400">Origin:</span>
+          <span className="text-[10px] text-gray-400">Documents for review:</span>
           {srcDocs.map(fn => (
             <button key={fn} onClick={() => onDocClick?.(fn)} title="Open source document"
               className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-blue-600 hover:bg-blue-50 hover:underline max-w-[16rem] truncate">
@@ -3592,11 +3761,21 @@ function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick }: {
           ))}
         </div>
       )}
-      {/* History — always available (also for terminal actions) */}
-      <div className="pt-1">
+      {/* History (always available) + Attach-for-review (while active) */}
+      <div className="pt-1 flex gap-2">
         <button onClick={loadHistory}
           className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50">
           {histOpen ? "Hide History" : "History"}
+        </button>
+        {allowedTransitions.length > 0 && (
+          <button onClick={openAttach}
+            className="text-[11px] px-2.5 py-1 rounded-md border border-blue-200 text-blue-600 hover:bg-blue-50">
+            📎 Attach for review
+          </button>
+        )}
+        <button onClick={doDelete} disabled={deleting}
+          className="text-[11px] px-2.5 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 ml-auto">
+          {deleting ? "Deleting…" : "🗑 Delete"}
         </button>
       </div>
       {histOpen && (
@@ -3622,6 +3801,36 @@ function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick }: {
           onConfirm={(vals) => doTransition(modal, vals)}
         />
       )}
+      {/* Attach-for-review modal */}
+      {attachOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setAttachOpen(false)}>
+          <div className="bg-white rounded-lg p-4 w-[32rem] max-h-[80vh] overflow-y-auto text-xs" onClick={e => e.stopPropagation()}>
+            <p className="font-semibold text-gray-800 mb-1">Attach documents for review</p>
+            <p className="text-[10px] text-gray-400 mb-2">Select existing documents, or upload a new one (ingested into this project via the pipeline). Attached docs are tagged to the project and logged on the action.</p>
+            <div className="border border-gray-200 rounded max-h-56 overflow-y-auto mb-3">
+              {libDocs.length === 0 && <p className="text-gray-400 p-2">Loading…</p>}
+              {libDocs.map(d => (
+                <label key={d.doc_id} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
+                  <input type="checkbox" checked={!!picked[d.doc_id]} onChange={e => setPicked(p => ({ ...p, [d.doc_id]: e.target.checked }))} />
+                  <span className="truncate">{d.filename}</span>
+                  <span className="text-[9px] text-gray-400 ml-auto">{d.doc_type}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 mb-3">
+              <label className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer">
+                ⬆ Upload new
+                <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) attachUpload(f); }} />
+              </label>
+              <span className="text-[10px] text-gray-400">processed against this project</span>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setAttachOpen(false)} className="text-[11px] px-3 py-1 rounded-md border border-gray-200 text-gray-500">Cancel</button>
+              <button disabled={attaching} onClick={attachSelected} className="text-[11px] px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50">{attaching ? "Attaching…" : "Attach selected"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3635,6 +3844,14 @@ function ActionReportsView({ domainId, apiBase, initialProject, onDocClick }: { 
   const [filterProject, setFilterProject] = useState<string>(initialProject || "ALL");
   const [histExpanded, setHistExpanded] = useState<string | null>(null);
   useEffect(() => { if (initialProject) setFilterProject(initialProject); }, [initialProject]);
+  // Authoritative project list from platform.projects (not just projects-with-actions)
+  const [projList, setProjList] = useState<string[]>([]);
+  useEffect(() => {
+    fetch(`${apiBase}/api/docintel/projects?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : { projects: [] })
+      .then(d => setProjList((d.projects ?? []).map((p: Record<string, unknown>) => String(p.project_id)).filter(Boolean)))
+      .catch(() => {});
+  }, [domainId, apiBase]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -3670,8 +3887,12 @@ function ActionReportsView({ domainId, apiBase, initialProject, onDocClick }: { 
   const overdueCount: number               = Number(data.overdue_count ?? 0);
   const overdue:    ActionMasterRecord[]   = Array.isArray(data.overdue)  ? (data.overdue  as ActionMasterRecord[]) : [];
   const allActions: ActionMasterRecord[]   = Array.isArray(data.actions)  ? (data.actions  as ActionMasterRecord[]) : [];
+  const deletedActions: ActionMasterRecord[] = Array.isArray(data.deleted_actions) ? (data.deleted_actions as ActionMasterRecord[]) : [];
 
-  const projects: string[] = Array.isArray(data.projects) ? (data.projects as string[]) : [];
+  const projects: string[] = Array.from(new Set([
+    ...projList,
+    ...(Array.isArray(data.projects) ? (data.projects as string[]) : []),
+  ])).sort();
   const filtered = allActions
     .filter(a => filterStatus === "ALL" || (a.status ?? "OPEN") === filterStatus)
     .filter(a => {
@@ -3707,6 +3928,23 @@ function ActionReportsView({ domainId, apiBase, initialProject, onDocClick }: { 
           </div>
         ))}
       </div>
+
+      {/* Deleted actions — removed from the tracker but retained/reported here */}
+      {deletedActions.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 mb-1">🗑 Deleted actions ({deletedActions.length})</h4>
+          <div className="space-y-1">
+            {deletedActions.map(a => (
+              <div key={a.action_id} className="flex items-center gap-2 text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-600 border border-red-200">DELETED</span>
+                <span className="line-through">{(a.action_type ?? "").replace(/_/g," ")}</span>
+                <span className="truncate">{a.description}</span>
+                {(a as Record<string, unknown>).project_id ? <span className="ml-auto text-[9px] text-gray-400">📁 {String((a as Record<string, unknown>).project_id)}</span> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Overdue actions */}
       {overdue.length > 0 && (
@@ -3924,6 +4162,36 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
     setTab("actions");
     setSub("reports");
   };
+  // ── Single-project focus: the whole Control Tower works on ONE project ────────
+  const [projects, setProjects] = useState<{project_id:string;name?:string;municipality?:string;state?:string}[]>([]);
+  const [activeProject, setActiveProject] = useState<string>("");
+  const [dirty, setDirty] = useState(false);   // unsaved edits (e.g. Setup prompt draft)
+  useEffect(() => {
+    if (domainId !== "compliance_due_diligence") return;
+    fetch(`${getApiBaseUrl()}/api/docintel/projects?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : { projects: [] })
+      .then(d => {
+        const ps = (d.projects ?? []) as {project_id:string;name?:string;municipality?:string;state?:string}[];
+        setProjects(ps);
+        setActiveProject(prev => prev || (ps[0]?.project_id ?? ""));
+        setSelectedProject(prev => prev || (ps[0]?.project_id ?? ""));
+      })
+      .catch(() => {});
+  }, [domainId]);
+  // switch the active project, warning if there are unsaved edits
+  const switchActiveProject = (pid: string) => {
+    if (pid === activeProject) return;
+    if (dirty && !window.confirm("You have unsaved changes — switching projects will lose them. Continue?")) return;
+    setDirty(false);
+    setActiveProject(pid);
+    setSelectedProject(pid);
+  };
+  // warn on leaving/reloading the page with unsaved edits
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
   const _navFirst    = useRef(true);   // skip the URL write on initial mount
   const _domainFirst = useRef(true);   // preserve a deep-linked view on first mount
   const _navSuppress = useRef(false);  // don't re-push when popstate/reset drives the change
@@ -4118,6 +4386,21 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
         {/* Compact title row */}
         <div className="px-6 pt-3 pb-0 flex items-center gap-3">
           <span className="text-sm font-semibold text-gray-700">{domainName} Control Tower</span>
+          {domainId === "compliance_due_diligence" && (
+            <div className="flex items-center gap-1.5 ml-auto">
+              <span className="text-[11px] text-gray-400">Working on project:</span>
+              {projects.length > 0 ? (
+                <select value={activeProject} onChange={e => switchActiveProject(e.target.value)}
+                  title="The whole Control Tower is scoped to this project"
+                  className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white font-semibold text-blue-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                  {projects.map(p => <option key={p.project_id} value={p.project_id}>{(p.name || p.project_id)}{p.municipality ? ` · ${p.municipality}` : ""}</option>)}
+                </select>
+              ) : (
+                <span className="text-[11px] text-gray-400 italic">no projects — add one under Docs → 📁 Projects</span>
+              )}
+              {dirty && <span className="text-[10px] text-amber-600 font-semibold" title="You have unsaved changes">● unsaved</span>}
+            </div>
+          )}
         </div>
 
         {/* ── Level 1: Primary tabs (always visible, with tooltips) ── */}
@@ -4344,7 +4627,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                   <span className="text-xs px-2 py-1 bg-amber-50 border border-amber-200 text-amber-700 rounded-full">Fallback graph</span>
                 )}
               </div>
-              {ontGraph ? <OntologyMap graph={ontGraph} sub={sub} domainName={domainName} domainId={domainId}/> : <p className="text-sm text-gray-400">Loading…</p>}
+              {ontGraph ? <OntologyMap graph={ontGraph} sub={sub} domainName={domainName} domainId={domainId} focusProjectDefault={activeProject}/> : <p className="text-sm text-gray-400">Loading…</p>}
             </div>
           )}
 
@@ -4367,7 +4650,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                   incidentRef={activeIncidentId}
                   onDocClick={openDocViewer}
                   apiBase={getApiBaseUrl()}
-                  selectedProject={selectedProject}
+                  selectedProject={activeProject || selectedProject}
                 />
               </PanelErrorBoundary>
             </div>
@@ -4375,12 +4658,12 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
 
           {/* ── COMPLIANCE MAP TAB ── */}
           {tab === "compliance_map" && (
-            <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} />
+            <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} focusProjectDefault={activeProject} />
           )}
 
           {/* ── COMPLIANCE TRACKER TAB ── */}
           {tab === "tracker" && (
-            <ComplianceTracker domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} onOpenProjectActions={openProjectActions} />
+            <ComplianceTracker domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} onOpenProjectActions={openProjectActions} activeProject={activeProject} />
           )}
 
           {/* ── COPILOT STUDIO TAB ── */}
@@ -4393,6 +4676,7 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
                 onSwitchToSetup={() => setSub("setup")}
                 onSwitchSub={(s) => setSub(s)}
                 onDocClick={openDocViewer}
+                onDirtyChange={setDirty}
               />
             </div>
           )}

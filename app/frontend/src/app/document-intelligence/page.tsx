@@ -3233,7 +3233,128 @@ function RunHistoryStrip({
 }
 
 
+interface ProjectRec {
+  project_id: string; name?: string; municipality?: string; state?: string;
+  address?: string; parcel_id?: string; status?: string; doc_count?: number; open_action_count?: number;
+}
+const PROJECT_STATUSES = ["Prospecting", "Feasibility", "Permitting", "Active", "Terminated"];
+const PROJECT_STATUS_COLORS: Record<string, string> = {
+  Prospecting: "bg-gray-100 text-gray-700", Feasibility: "bg-blue-100 text-blue-700",
+  Permitting: "bg-amber-100 text-amber-800", Active: "bg-green-100 text-green-700",
+  Terminated: "bg-red-100 text-red-600",
+};
+
+// Projects registry — first-class per-subject-area projects (separate from documents).
+function ProjectsManager({ domainId }: { domainId: string }) {
+  const [projects, setProjects] = useState<ProjectRec[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ProjectRec | null>(null);   // row being edited
+  const [creating, setCreating] = useState(false);
+  const blank: ProjectRec = { project_id: "", name: "", municipality: "", state: "", address: "", status: "Feasibility" };
+  const [form, setForm] = useState<ProjectRec>(blank);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetch(`/api/docintel/projects?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(d => { setProjects(d.projects ?? []); setErr(null); })
+      .catch(e => setErr(String(e)))
+      .finally(() => setLoading(false));
+  }, [domainId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function save() {
+    const isEdit = !!editing;
+    const url = isEdit
+      ? `/api/docintel/projects/${encodeURIComponent(form.project_id)}`
+      : `/api/docintel/projects`;
+    const res = await fetch(url, {
+      method: isEdit ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...form, domain_id: domainId }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.detail || "Save failed"); return; }
+    setCreating(false); setEditing(null); setForm(blank); load();
+  }
+  async function remove(pid: string) {
+    if (!confirm(`Delete project ${pid}? (documents and actions are not deleted)`)) return;
+    await fetch(`/api/docintel/projects/${encodeURIComponent(pid)}?domain_id=${encodeURIComponent(domainId)}`, { method: "DELETE" });
+    load();
+  }
+
+  const showForm = creating || !!editing;
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <p className="text-sm text-gray-500">{projects.length} project{projects.length !== 1 ? "s" : ""} in this subject area</p>
+        {!showForm && (
+          <button onClick={() => { setForm(blank); setCreating(true); setEditing(null); }}
+            className="ml-auto text-sm font-semibold px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700">+ New Project</button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
+          <p className="text-sm font-semibold text-gray-800">{editing ? `Edit ${editing.project_id}` : "New Project"}</p>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <input disabled={!!editing} value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}
+              placeholder="Project / Store ID (e.g. 5202)" className="border border-gray-300 rounded-lg px-3 py-2 disabled:bg-gray-100" />
+            <input value={form.name ?? ""} onChange={e => setForm({ ...form, name: e.target.value })}
+              placeholder="Name" className="border border-gray-300 rounded-lg px-3 py-2" />
+            <input value={form.municipality ?? ""} onChange={e => setForm({ ...form, municipality: e.target.value })}
+              placeholder="Municipality" className="border border-gray-300 rounded-lg px-3 py-2" />
+            <input value={form.state ?? ""} onChange={e => setForm({ ...form, state: e.target.value })}
+              placeholder="State" className="border border-gray-300 rounded-lg px-3 py-2" />
+            <input value={form.address ?? ""} onChange={e => setForm({ ...form, address: e.target.value })}
+              placeholder="Address / parcel" className="border border-gray-300 rounded-lg px-3 py-2 col-span-2" />
+            <select value={form.status ?? "Feasibility"} onChange={e => setForm({ ...form, status: e.target.value })}
+              className="border border-gray-300 rounded-lg px-3 py-2 bg-white">
+              {PROJECT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={save} disabled={!form.project_id.trim()}
+              className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
+              {editing ? "Save changes" : "Create project"}</button>
+            <button onClick={() => { setCreating(false); setEditing(null); setForm(blank); }}
+              className="text-sm px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <p className="text-sm text-gray-400 py-6 text-center animate-pulse">Loading projects…</p>
+       : err ? <p className="text-sm text-red-500">Failed to load projects: {err}</p>
+       : projects.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">No projects yet. Create one to start tracking a store-development project.</p>
+       : (
+        <div className="grid gap-2">
+          {projects.map(p => (
+            <div key={p.project_id} className="border border-gray-200 rounded-xl p-3.5 bg-white flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-gray-900">{p.name || p.project_id}</span>
+                  <span className="font-mono text-[10px] text-gray-400">#{p.project_id}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${PROJECT_STATUS_COLORS[p.status || ""] ?? "bg-gray-100 text-gray-600"}`}>{p.status}</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {[p.municipality, p.state].filter(Boolean).join(", ") || "—"}
+                  {" · "}<span className="text-gray-400">{p.doc_count ?? 0} docs · {p.open_action_count ?? 0} open actions</span>
+                </p>
+              </div>
+              <button onClick={() => { setForm(p); setEditing(p); setCreating(false); }}
+                className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">Edit</button>
+              <button onClick={() => remove(p.project_id)}
+                className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50">Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: { onBack: () => void; domainId?: string; onGoToProcess?: () => void }) {
+    const [libView, setLibView] = useState<"docs" | "projects">("docs");
     const [docs, setDocs] = useState<LibraryDoc[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -3550,6 +3671,33 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
         );
     }
 
+    const ViewToggle = () => (
+        <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+                <button onClick={() => setLibView("docs")} className={`px-3 py-1.5 ${libView === "docs" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>📄 Documents</button>
+                <button onClick={() => setLibView("projects")} className={`px-3 py-1.5 ${libView === "projects" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>📁 Projects</button>
+            </div>
+            <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-800 px-3 py-1.5 rounded-md border border-gray-200 hover:bg-gray-100">← Back</button>
+        </div>
+    );
+
+    if (libView === "projects") {
+        return (
+            <div className="min-h-screen bg-gray-50 p-6">
+                <div className="max-w-6xl mx-auto">
+                    <div className="flex items-center justify-between mb-5">
+                        <div>
+                            <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+                            <p className="text-sm text-gray-500 mt-0.5">Store-development projects for this subject area · separate from documents · <code className="bg-gray-100 px-1 rounded">platform.projects</code></p>
+                        </div>
+                        <ViewToggle />
+                    </div>
+                    <ProjectsManager domainId={domainId} />
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gray-50 p-6">
             <div className="max-w-6xl mx-auto">
@@ -3561,9 +3709,7 @@ function DocumentLibrary({ onBack, domainId = "supply_chain", onGoToProcess }: {
                             All documents processed through the IDP pipeline · <code className="bg-gray-100 px-1 rounded">jai_docintel.raw.parsed_documents</code>
                         </p>
                     </div>
-                    <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-800 px-3 py-1.5 rounded-md border border-gray-200 hover:bg-gray-100">
-                        ← Back
-                    </button>
+                    <ViewToggle />
                 </div>
 
                 {/* Run history strip — no trigger button here; link to Process Docs */}

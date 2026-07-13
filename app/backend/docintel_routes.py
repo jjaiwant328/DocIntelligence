@@ -16,7 +16,8 @@ Adds supply chain intelligence endpoints on top of the base app:
 import os
 import json
 import threading
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+import io
 from pydantic import BaseModel
 from typing import Optional, List
 from databricks.sdk import WorkspaceClient
@@ -2059,8 +2060,19 @@ def _tag_where(req, doc_lit: str) -> str:
 async def get_document_tags(domain_id: str = "compliance_due_diligence"):
     _bootstrap_project_tags(domain_id)
     tbd = _tags_by_doc(domain_id)
-    projects = sorted({p for v in tbd.values() for p in v["projects"]})
-    return {"tags_by_doc": tbd, "projects": projects}
+    projects = {p for v in tbd.values() for p in v["projects"]}
+    # Registered projects are authoritative — include them so newly-created projects
+    # are immediately selectable (union with any ids still present in tags).
+    try:
+        _bootstrap_projects(domain_id)
+        _did = (domain_id or "").replace("'", "''")
+        prows = run_sql(f"SELECT project_id FROM {CATALOG}.platform.projects "
+                        f"WHERE domain_id='{_did}' AND status <> '__marker__' AND project_id <> '__seeded__'",
+                        timeout_secs=20) or []
+        projects |= {r["project_id"] for r in prows if r.get("project_id")}
+    except Exception:
+        pass
+    return {"tags_by_doc": tbd, "projects": sorted(projects)}
 
 @router.post("/document-tags")
 async def add_document_tag(req: DocTagRequest):
@@ -2113,6 +2125,211 @@ async def bulk_document_tags(req: DocTagBulkRequest):
         except Exception:
             pass
     return {"ok": True, "count": n}
+
+
+# ── Projects — first-class per-domain entities (platform.projects) ─────────────
+_projects_checked = False
+
+def _ensure_projects_table():
+    global _projects_checked
+    if _projects_checked:
+        return
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.projects (
+                project_id   STRING,
+                domain_id    STRING,
+                name         STRING,
+                municipality STRING,
+                state        STRING,
+                address      STRING,
+                parcel_id    STRING,
+                status       STRING,
+                created_by   STRING,
+                created_at   TIMESTAMP,
+                updated_at   TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+        _projects_checked = True
+    except Exception:
+        pass
+
+def _bootstrap_projects(domain_id: str):
+    """Seed platform.projects ONCE per domain from the distinct project ids already in
+    document_project_tags (enriched with municipality/state from those projects' docs).
+    A persisted marker row (status='__marker__') means never re-seed, so user
+    create/edit/delete persist."""
+    _ensure_projects_table()
+    _did = (domain_id or "").replace("'", "''")
+    try:
+        seeded = run_sql(
+            f"SELECT 1 FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND status='__marker__' LIMIT 1",
+            timeout_secs=15) or []
+        if seeded:
+            return
+    except Exception:
+        return
+    _bootstrap_project_tags(domain_id)   # ensure tag-derived project ids exist first
+    _raw = _get_domain_schemas(domain_id)["schema_raw"]
+    try:
+        muni_rows = run_sql(f"""
+            SELECT t.project_id,
+                   MAX(CASE WHEN ef.field_name='municipality' THEN {_parse_val_sql("ef.field_value")} END) AS municipality,
+                   MAX(CASE WHEN ef.field_name='state'        THEN {_parse_val_sql("ef.field_value")} END) AS state
+            FROM {CATALOG}.platform.document_project_tags t
+            LEFT JOIN {CATALOG}.{_raw}.extracted_fields ef ON ef.doc_id = t.doc_id
+            WHERE t.domain_id='{_did}' AND t.scope='project' AND t.project_id IS NOT NULL
+            GROUP BY t.project_id
+        """, timeout_secs=30) or []
+        for r in muni_rows:
+            pid = (r.get("project_id") or "").strip()
+            if not pid:
+                continue
+            muni = r.get("municipality") or ""
+            st   = r.get("state") or ""
+            _p = pid.replace("'", "''"); _m = muni.replace("'", "''"); _s = st.replace("'", "''")
+            _name = (f"{muni} · Project {pid}" if muni else f"Project {pid}").replace("'", "''")
+            run_sql(f"""
+                INSERT INTO {CATALOG}.platform.projects
+                SELECT '{_p}','{_did}','{_name}','{_m}','{_s}','','','Feasibility','system',current_timestamp(),current_timestamp()
+                WHERE NOT EXISTS (SELECT 1 FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND project_id='{_p}')
+            """, timeout_secs=20)
+        run_sql(f"INSERT INTO {CATALOG}.platform.projects VALUES "
+                f"('__seeded__','{_did}','','','','','','__marker__','system',current_timestamp(),current_timestamp())",
+                timeout_secs=15)
+    except Exception:
+        pass
+
+
+class ProjectRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    project_id: str
+    name: Optional[str] = None
+    municipality: Optional[str] = None
+    state: Optional[str] = None
+    address: Optional[str] = None
+    parcel_id: Optional[str] = None
+    status: Optional[str] = None
+
+class ProjectUpdateRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    name: Optional[str] = None
+    municipality: Optional[str] = None
+    state: Optional[str] = None
+    address: Optional[str] = None
+    parcel_id: Optional[str] = None
+    status: Optional[str] = None
+
+
+def _require_cdd(domain_id: str):
+    if domain_id != "compliance_due_diligence":
+        raise HTTPException(status_code=404, detail="Projects are available only for compliance_due_diligence.")
+
+@router.get("/projects")
+async def list_projects(domain_id: str = "compliance_due_diligence"):
+    _require_cdd(domain_id)
+    _bootstrap_projects(domain_id)
+    _did = (domain_id or "").replace("'", "''")
+    try:
+        rows = run_sql(f"""
+            SELECT project_id, name, municipality, state, address, parcel_id, status
+            FROM {CATALOG}.platform.projects
+            WHERE domain_id='{_did}' AND status <> '__marker__' AND project_id <> '__seeded__'
+            ORDER BY project_id
+        """, timeout_secs=30) or []
+        dc = run_sql(f"""
+            SELECT project_id, COUNT(DISTINCT doc_id) c FROM {CATALOG}.platform.document_project_tags
+            WHERE domain_id='{_did}' AND scope='project' AND project_id IS NOT NULL GROUP BY project_id
+        """, timeout_secs=20) or []
+        dcmap = {r["project_id"]: int(r.get("c") or 0) for r in dc}
+        acmap: dict = {}
+        try:
+            # Count non-terminal actions explicitly scoped to each project (exact project_id,
+            # not a source_doc_ids substring match which false-positives + misses doc-less actions).
+            ac = run_sql(f"""
+                SELECT project_id, COUNT(*) c
+                FROM {CATALOG}.platform.action_master
+                WHERE domain_id='{_did}' AND project_id IS NOT NULL
+                  AND status NOT IN ('COMPLETED','CANCELLED','IGNORED')
+                GROUP BY project_id
+            """, timeout_secs=25) or []
+            acmap = {r["project_id"]: int(r.get("c") or 0) for r in ac}
+        except Exception:
+            acmap = {}
+        out = [{
+            "project_id": r["project_id"], "name": r.get("name"), "municipality": r.get("municipality"),
+            "state": r.get("state"), "address": r.get("address"), "parcel_id": r.get("parcel_id"),
+            "status": r.get("status"), "doc_count": dcmap.get(r["project_id"], 0),
+            "open_action_count": acmap.get(r["project_id"], 0),
+        } for r in rows]
+        return {"projects": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/projects")
+async def create_project(req: ProjectRequest):
+    _require_cdd(req.domain_id)
+    if not (req.project_id or "").strip():
+        raise HTTPException(status_code=400, detail="project_id required")
+    _bootstrap_projects(req.domain_id)   # set the seed marker before edits so GET can't re-seed
+    _did = req.domain_id.replace("'", "''"); _pid = req.project_id.strip().replace("'", "''")
+    def esc(v): return (v or "").replace("'", "''")
+    try:
+        ex = run_sql(f"SELECT 1 FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND project_id='{_pid}' LIMIT 1", timeout_secs=15) or []
+        if ex:
+            raise HTTPException(status_code=400, detail=f"Project '{req.project_id}' already exists")
+        _name = esc(req.name) or _pid
+        _status = esc(req.status) or "Feasibility"
+        run_sql(f"""INSERT INTO {CATALOG}.platform.projects VALUES
+            ('{_pid}','{_did}','{_name}','{esc(req.municipality)}','{esc(req.state)}',
+             '{esc(req.address)}','{esc(req.parcel_id)}','{_status}','user',current_timestamp(),current_timestamp())""",
+            timeout_secs=20)
+        return {"ok": True, "project_id": req.project_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: str, req: ProjectUpdateRequest):
+    _require_cdd(req.domain_id)
+    _bootstrap_projects(req.domain_id)   # marker before edits so GET can't re-seed over this change
+    _did = req.domain_id.replace("'", "''"); _pid = project_id.replace("'", "''")
+    def esc(v): return (v or "").replace("'", "''")
+    sets = []
+    for field in ("name", "municipality", "state", "address", "parcel_id", "status"):
+        val = getattr(req, field)
+        if val is not None:
+            sets.append(f"{field} = '{esc(val)}'")
+    if not sets:
+        return {"ok": True, "updated": False}
+    sets.append("updated_at = current_timestamp()")
+    try:
+        ex = run_sql(f"SELECT 1 FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND project_id='{_pid}' LIMIT 1", timeout_secs=15) or []
+        if not ex:
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        run_sql(f"UPDATE {CATALOG}.platform.projects SET {', '.join(sets)} WHERE domain_id='{_did}' AND project_id='{_pid}'", timeout_secs=20)
+        return {"ok": True, "updated": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, domain_id: str = "compliance_due_diligence"):
+    _require_cdd(domain_id)
+    _bootstrap_projects(domain_id)   # marker before delete so GET can't re-seed the removed project
+    _did = (domain_id or "").replace("'", "''"); _pid = project_id.replace("'", "''")
+    try:
+        ex = run_sql(f"SELECT 1 FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND project_id='{_pid}' AND status <> '__marker__' LIMIT 1", timeout_secs=15) or []
+        if not ex:
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        run_sql(f"DELETE FROM {CATALOG}.platform.projects WHERE domain_id='{_did}' AND project_id='{_pid}' AND status <> '__marker__'", timeout_secs=20)
+        return {"ok": True, "deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/docs-by-type")
@@ -2676,7 +2893,28 @@ async def save_copilot_prompt(req: CopilotPromptSaveRequest):
         # Invalidate in-process cache so next agent-query picks up new prompt
         with _domain_cache_lock:
             _domain_cache.pop(req.domain_id, None)
+        try: _rec_actions_cache.pop(req.domain_id, None)   # regenerate presets from new prompt
+        except Exception: pass
         return {"saved": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/copilot-prompt")
+async def delete_copilot_prompt(domain_id: str = "compliance"):
+    """Clear the saved guiding prompt; recommended actions then fall back to defaults."""
+    _did = (domain_id or "").replace("'", "''")
+    try:
+        run_sql(f"""
+            UPDATE {CATALOG}.platform.domain_configs
+            SET agent_system_prompt = NULL, updated_at = current_timestamp()
+            WHERE domain_id = '{_did}'
+        """, timeout_secs=30)
+        with _domain_cache_lock:
+            _domain_cache.pop(domain_id, None)
+        try: _rec_actions_cache.pop(domain_id, None)
+        except Exception: pass
+        return {"deleted": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5840,6 +6078,7 @@ class ActionMasterCreateRequest(BaseModel):
     incident_ref:  str  = ""
     logged_by:     str  = "app_user"
     source_doc_ids: str = ""   # JSON array string e.g. '["doc1","doc2"]'
+    project_id:    Optional[str] = None   # scope the action to a project (compliance_due_diligence)
     # Optional escalation-context signals, evaluated deterministically on create.
     # Omitted by existing callers → no rule fires → identical behavior.
     confidence:             Optional[float] = None   # e.g. answer/extraction confidence 0..1
@@ -5904,9 +6143,18 @@ def _ensure_action_master_table():
             cancel_date          TIMESTAMP,
             logged_by            STRING,
             created_at           TIMESTAMP,
-            updated_at           TIMESTAMP
+            updated_at           TIMESTAMP,
+            project_id           STRING,
+            deleted              BOOLEAN
         )
     """, timeout_secs=30)
+    # additive for tables created before these columns existed
+    # (Delta has no ADD COLUMN IF NOT EXISTS; raises if present → swallow)
+    for _col in ("project_id STRING", "deleted BOOLEAN"):
+        try:
+            run_sql(f"ALTER TABLE {CATALOG}.platform.action_master ADD COLUMNS ({_col})", timeout_secs=30)
+        except Exception:
+            pass
 
 
 def _ensure_action_history_table():
@@ -5972,13 +6220,24 @@ def _create_action_master_core(req: ActionMasterCreateRequest) -> dict:
     inc    = req.incident_ref.replace("'", "''")
     dom    = req.domain_id.replace("'", "''")
     docs   = req.source_doc_ids.replace("'", "''")
+    pid    = (req.project_id or "").strip() if req.domain_id == "compliance_due_diligence" else ""   # project scoping is CDD-only
+    # Scoped to a project with no explicit docs → ground the action in the project's curated docs (CDD only).
+    if pid and req.domain_id == "compliance_due_diligence" and not req.source_doc_ids.strip():
+        try:
+            import json as _j
+            _pd = sorted(_project_doc_ids(req.domain_id, pid))
+            if _pd:
+                docs = _j.dumps(_pd).replace("'", "''")
+        except Exception:
+            pass
+    pid_lit = "NULL" if not pid else "'" + pid.replace("'", "''") + "'"
     run_sql(f"""
         INSERT INTO {CATALOG}.platform.action_master
             (action_id, domain_id, action_type, description, priority,
-             source_doc_ids, incident_ref, status, logged_by, created_at, updated_at)
+             source_doc_ids, incident_ref, status, logged_by, created_at, updated_at, project_id)
         VALUES ('{action_id}', '{dom}', '{req.action_type}', '{desc}',
                 '{req.priority}', '{docs}', '{inc}', 'OPEN', '{by}',
-                current_timestamp(), current_timestamp())
+                current_timestamp(), current_timestamp(), {pid_lit})
     """, timeout_secs=30)
     _write_action_history(action_id, "", "OPEN", req.logged_by, "Action created", {})
 
@@ -6035,6 +6294,7 @@ async def list_action_master(
             where = f"WHERE domain_id = '{domain_id}' AND status = '{status.upper()}'"
         else:
             where = f"WHERE domain_id = '{domain_id}' AND status NOT IN ('COMPLETED','CANCELLED')"
+        where += " AND (deleted IS NULL OR deleted = false)"   # never show soft-deleted actions
         rows = run_sql(f"""
             SELECT action_id, domain_id, action_type, description, priority,
                    source_doc_ids, incident_ref, status, owner,
@@ -6045,7 +6305,7 @@ async def list_action_master(
                    verified_by, ignore_reason, ignore_by,
                    cancel_reason, cancel_authorized_by,
                    CAST(cancel_date AS STRING)       AS cancel_date,
-                   logged_by,
+                   logged_by, project_id,
                    CAST(created_at AS STRING)        AS created_at,
                    CAST(updated_at AS STRING)        AS updated_at
             FROM {CATALOG}.platform.action_master
@@ -6057,6 +6317,35 @@ async def list_action_master(
             LIMIT {limit}
         """, timeout_secs=30) or []
         return {"actions": rows, "total": len(rows), "domain_id": domain_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ActionDeleteRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    reason: Optional[str] = None
+
+
+@router.post("/action-master/{action_id}/delete")
+async def delete_action_master(action_id: str, req: ActionDeleteRequest):
+    """Soft-delete: hide from active tracker/reports summaries but KEEP the row and
+    REPORT it under Action Reports' deleted section, with an audit-history entry."""
+    _ensure_action_master_table()
+    _ensure_action_history_table()
+    _aid = action_id.replace("'", "''")
+    try:
+        rows = run_sql(f"SELECT status, domain_id FROM {CATALOG}.platform.action_master WHERE action_id='{_aid}'", timeout_secs=20) or []
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
+        if (rows[0].get("domain_id") or "") != "compliance_due_diligence":
+            raise HTTPException(status_code=404, detail="Soft-delete is only available for compliance_due_diligence actions.")
+        old_status = rows[0].get("status") or ""
+        run_sql(f"UPDATE {CATALOG}.platform.action_master SET deleted = true, updated_at = current_timestamp() WHERE action_id='{_aid}' AND domain_id='compliance_due_diligence'", timeout_secs=30)
+        _reason = (req.reason or "").strip() or "removed from tracker"
+        _write_action_history(action_id, old_status, "DELETED", "user", f"Deleted: {_reason}", {"deleted": True})
+        return {"action_id": action_id, "deleted": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -6161,6 +6450,226 @@ async def get_action_history(action_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ActionAttachRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    doc_ids: List[str] = []
+
+
+def _attach_docs_to_action(action_id: str, domain_id: str, doc_ids: list) -> list:
+    """Merge doc_ids into an action's source_doc_ids, tag them to the action's project,
+    and log an audit-history row. Returns the merged doc list."""
+    _ensure_action_master_table()
+    _ensure_action_history_table()
+    _ensure_document_project_tags_table()
+    aid = (action_id or "").replace("'", "''")
+    rows = run_sql(f"SELECT domain_id, status, source_doc_ids, project_id FROM {CATALOG}.platform.action_master WHERE action_id='{aid}'", timeout_secs=20) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
+    action_dom = rows[0].get("domain_id") or domain_id   # trust the action's OWN domain, not the caller's
+    if action_dom != "compliance_due_diligence":
+        raise HTTPException(status_code=404, detail="Attach is only available for compliance_due_diligence actions.")
+    status = rows[0].get("status") or ""
+    cur    = rows[0].get("source_doc_ids") or ""
+    proj   = rows[0].get("project_id")
+    # Robust parse — never silently drop existing refs on malformed JSON (fall back to CSV).
+    def _parse_ids(v):
+        s = str(v or "").strip()
+        if not s:
+            return []
+        try:
+            p = json.loads(s)
+            if isinstance(p, list):
+                return [str(x).strip() for x in p if str(x).strip()]
+        except Exception:
+            pass
+        return [x.strip() for x in s.strip("[]").replace('"', "").split(",") if x.strip()]
+    existing = _parse_ids(cur)
+    add = [str(d).strip() for d in (doc_ids or []) if str(d).strip()]
+    merged = existing[:]
+    for d in add:
+        if d not in merged:
+            merged.append(d)
+    docs_json = json.dumps(merged).replace("'", "''")
+    run_sql(f"UPDATE {CATALOG}.platform.action_master SET source_doc_ids='{docs_json}', updated_at=current_timestamp() WHERE action_id='{aid}'", timeout_secs=30)
+    # Tag each newly-attached doc to the action's project (curated association). Collect failures.
+    tag_failures: list = []
+    if proj:
+        _did = str(action_dom).replace("'", "''"); _pid = str(proj).replace("'", "''")
+        for d in add:
+            _doc = d.replace("'", "''")
+            try:
+                run_sql(f"DELETE FROM {CATALOG}.platform.document_project_tags WHERE domain_id='{_did}' AND doc_id='{_doc}' AND scope='project' AND project_id='{_pid}'", timeout_secs=20)
+                run_sql(f"INSERT INTO {CATALOG}.platform.document_project_tags VALUES ('{_did}','{_doc}','{_pid}','project','manual','user',current_timestamp())", timeout_secs=20)
+            except Exception:
+                tag_failures.append(d)
+    if add:
+        _note = f"Attached {len(add)} document(s) for review: {', '.join(add)[:200]}"
+        if tag_failures:
+            _note += f" (project-tag failed for: {', '.join(tag_failures)[:100]})"
+        _write_action_history(action_id, status, status, "user", _note, {"attached": add, "tag_failures": tag_failures})
+    return {"merged": merged, "tag_failures": tag_failures}
+
+
+@router.post("/action-master/{action_id}/attach")
+async def attach_docs(action_id: str, req: ActionAttachRequest):
+    """Attach existing document(s) to an action for review (link + tag to project + history)."""
+    _require_cdd(req.domain_id)
+    try:
+        res = _attach_docs_to_action(action_id, req.domain_id, req.doc_ids)
+        return {"action_id": action_id, "source_doc_ids": res["merged"],
+                "tag_failures": res["tag_failures"], "attached": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/action-master/{action_id}/attach-upload")
+async def attach_upload(action_id: str, domain_id: str = "compliance_due_diligence", file: UploadFile = File(...)):
+    """Upload a NEW document into the action's project/domain volume (so the existing
+    pipeline ingests it), then attach + tag it to the action. Full text/search becomes
+    available after the next pipeline run; the doc is linked+tagged immediately."""
+    _require_cdd(domain_id)
+    # Sanitize the filename — reject traversal / separators / control chars.
+    fname = os.path.basename((file.filename or "").strip().replace("\\", "/"))
+    if (not fname or fname in (".", "..") or "/" in fname
+            or any(ord(c) < 32 for c in fname)):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    # Validate the action exists (and get its real domain) BEFORE touching the volume.
+    aid = action_id.replace("'", "''")
+    arows = run_sql(f"SELECT domain_id FROM {CATALOG}.platform.action_master WHERE action_id='{aid}'", timeout_secs=15) or []
+    if not arows:
+        raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
+    action_dom = arows[0].get("domain_id") or domain_id
+    _raw = _get_domain_schemas(action_dom)["schema_raw"]
+    vol  = f"/Volumes/{CATALOG}/{_raw}/documents"
+    try:
+        w = WorkspaceClient()
+        # Do not silently overwrite an existing document.
+        try:
+            exists = any(fi.name == fname for fi in w.files.list_directory_contents(vol))
+        except Exception:
+            exists = False
+        if exists:
+            raise HTTPException(status_code=400, detail=f"A document named '{fname}' already exists in this project.")
+        content = await file.read()
+        w.files.upload(f"{vol}/{fname}", io.BytesIO(content), overwrite=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload to {vol} failed: {e}")
+    try:
+        res = _attach_docs_to_action(action_id, action_dom, [fname])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"action_id": action_id, "filename": fname, "source_doc_ids": res["merged"],
+            "note": "Uploaded to the project volume and linked; full parsing/search available after the next pipeline run."}
+
+
+# ── Recommended actions (prompt-driven for compliance_due_diligence) ──────────
+_CDD_FALLBACK_ACTIONS = [
+  {"category":"Feasibility Response","title":"Draft Feasibility Response","action_type":"FEASIBILITY_RESPONSE","priority":"HIGH",
+   "what_it_does":"Pulls the municipality requirements and prior responses and drafts a ready-to-send reply answering licensing, zoning, and distance questions.",
+   "next_steps":["Confirm the parcel/municipality","Generate the grounded draft reply","Route for review and send"],
+   "source_doc_types":["feasibility_request","municipal_requirement","historical_response"]},
+  {"category":"Feasibility Response","title":"Confirm Alcohol/Tobacco Eligibility","action_type":"ELIGIBILITY_CHECK","priority":"HIGH",
+   "what_it_does":"Checks municipal distance rules (schools/churches) and wet/dry status against the parcel location and flags restrictions.",
+   "next_steps":["Verify distance to schools/churches","Check wet/dry designation","Record eligibility determination"],
+   "source_doc_types":["alcohol_license","tobacco_license","municipal_requirement","zoning_document"]},
+  {"category":"License Filing","title":"File Alcohol License Application","action_type":"LICENSE_FILING","priority":"HIGH",
+   "what_it_does":"Assembles the application package and sets a deadline backward from the target opening date using the license lead time.",
+   "next_steps":["Confirm issuing authority and lead time","Assemble application package","Submit and track approval"],
+   "source_doc_types":["alcohol_license","municipal_requirement"]},
+  {"category":"License Filing","title":"File Business/Occupational License","action_type":"LICENSE_FILING","priority":"MEDIUM",
+   "what_it_does":"Prepares and submits the occupational tax certificate application for the jurisdiction.",
+   "next_steps":["Confirm processing time","Submit application","Retain certificate for the project file"],
+   "source_doc_types":["business_license","municipal_requirement"]},
+  {"category":"Research","title":"Research Municipality Requirements","action_type":"RESEARCH","priority":"MEDIUM",
+   "what_it_does":"Retrieves the municipality's requirements (distance rules, zoning, lead times) from ingested municipal documents.",
+   "next_steps":["Identify the jurisdiction","Pull requirement documents","Summarize applicable rules"],
+   "source_doc_types":["municipal_requirement","zoning_document","alcohol_license"]},
+  {"category":"Research","title":"Pull Municipal Code / Ordinance","action_type":"RESEARCH","priority":"MEDIUM",
+   "what_it_does":"Fetches the municode/.gov ordinance for the jurisdiction and attaches it as a cited source.",
+   "next_steps":["Locate the code section","Attach the source with its URL","Note the effective date"],
+   "source_doc_types":["municipal_requirement","regulatory_change"]},
+  {"category":"Escalation","title":"Escalate Regulatory Change to Legal","action_type":"ESCALATION","priority":"CRITICAL",
+   "what_it_does":"Creates an attorney-review-queue item with the previous vs. new requirement and affected projects.",
+   "next_steps":["Attach the change detection detail","Assign to Legal","Track resolution in the Legal Queue"],
+   "source_doc_types":["regulatory_change","municipal_requirement"]},
+  {"category":"Escalation","title":"Flag Deadline Risk","action_type":"ESCALATION","priority":"HIGH",
+   "what_it_does":"Raises a deadline-risk alert when the required license lead time cannot be met before opening.",
+   "next_steps":["Compare lead time vs. opening date","Notify the project owner","Propose an expedited path or revised date"],
+   "source_doc_types":["feasibility_request","alcohol_license","municipal_requirement"]},
+]
+_rec_actions_cache: dict = {}          # domain_id -> (prompt_hash, actions)
+_rec_actions_lock = threading.Lock()
+
+
+@router.get("/recommended-actions")
+async def recommended_actions(domain_id: str = "compliance_due_diligence", project_id: str = ""):
+    """Recommended actions per category, GENERATED from the domain's Copilot prompt
+    (cached by prompt hash) with a curated fallback so the UI is never empty."""
+    if domain_id != "compliance_due_diligence":
+        return {"actions": [], "source": "none"}
+    import hashlib as _hl, json as _j
+    _did = domain_id.replace("'", "''")
+    prompt = ""
+    try:
+        rows = run_sql(f"SELECT agent_system_prompt FROM {CATALOG}.platform.domain_configs WHERE domain_id='{_did}' LIMIT 1", timeout_secs=20) or []
+        prompt = (rows[0].get("agent_system_prompt") if rows else "") or ""
+    except Exception:
+        prompt = ""
+    phash = _hl.md5(prompt.encode("utf-8")).hexdigest() if prompt.strip() else ""
+    with _rec_actions_lock:
+        cached = _rec_actions_cache.get(domain_id)
+    if cached and phash and cached[0] == phash:
+        return {"actions": cached[1], "source": "prompt"}
+    if not prompt.strip():
+        return {"actions": _CDD_FALLBACK_ACTIONS, "source": "fallback"}
+    cats = ["Feasibility Response", "License Filing", "Research", "Escalation"]
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm, _m = _get_llm(max_tokens=1600)
+        sysmsg = (
+            "You design a compliance team's recommended-action playbook. Given the team's guiding "
+            "instructions, output ONLY a JSON array (no prose, no markdown fences) of ~2 actions per "
+            "category, across EXACTLY these categories: " + ", ".join(cats) + ". Each item: "
+            "{\"category\": one of the categories, \"title\": short imperative, \"action_type\": UPPER_SNAKE, "
+            "\"priority\": CRITICAL|HIGH|MEDIUM, \"what_it_does\": one sentence, \"next_steps\": [3 short steps], "
+            "\"source_doc_types\": [doc type slugs]}."
+        )
+        resp = llm.invoke([SystemMessage(content=sysmsg), HumanMessage(content=prompt[:6000])])
+        raw = (resp.content or "").strip()
+        s, e = raw.find("["), raw.rfind("]")
+        arr = _j.loads(raw[s:e+1]) if s >= 0 and e > s else []
+        actions = []
+        for a in arr:
+            if not isinstance(a, dict):
+                continue
+            cat = str(a.get("category", "")).strip()
+            if cat not in cats:
+                continue
+            pr = str(a.get("priority", "MEDIUM")).strip().upper()
+            actions.append({
+                "category": cat,
+                "title": (str(a.get("title", "")).strip()[:120] or "Recommended action"),
+                "action_type": (str(a.get("action_type", "ACTION")).strip().upper() or "ACTION").replace(" ", "_"),
+                "priority": pr if pr in ("CRITICAL", "HIGH", "MEDIUM") else "MEDIUM",
+                "what_it_does": str(a.get("what_it_does", "")).strip()[:300],
+                "next_steps": [str(x).strip()[:120] for x in (a.get("next_steps") or [])][:5],
+                "source_doc_types": [str(x).strip() for x in (a.get("source_doc_types") or [])][:6],
+            })
+        if not actions:
+            return {"actions": _CDD_FALLBACK_ACTIONS, "source": "fallback"}
+        with _rec_actions_lock:
+            _rec_actions_cache[domain_id] = (phash, actions)
+        return {"actions": actions, "source": "prompt"}
+    except Exception:
+        return {"actions": _CDD_FALLBACK_ACTIONS, "source": "fallback"}
+
+
 @router.get("/action-reports")
 async def get_action_reports(domain_id: str = "supply_chain"):
     """
@@ -6181,7 +6690,7 @@ async def get_action_reports(domain_id: str = "supply_chain"):
                 priority,
                 COUNT(*) AS cnt
             FROM {CATALOG}.platform.action_master
-            WHERE domain_id = '{_did}'
+            WHERE domain_id = '{_did}' AND (deleted IS NULL OR deleted = false)
             GROUP BY status, priority
             ORDER BY status, priority
         """, timeout_secs=30) or []
@@ -6191,9 +6700,10 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         overdue = run_sql(f"""
             SELECT action_id, action_type, description, priority,
                    CAST(due_date AS STRING) AS due_date, owner, status,
-                   CAST(source_doc_ids AS STRING) AS source_doc_ids
+                   CAST(source_doc_ids AS STRING) AS source_doc_ids, project_id
             FROM {CATALOG}.platform.action_master
             WHERE domain_id = '{_did}'
+              AND (deleted IS NULL OR deleted = false)
               AND due_date < DATE '{today}'
               AND status NOT IN ('COMPLETED','CANCELLED','IGNORED')
             ORDER BY due_date ASC
@@ -6209,11 +6719,22 @@ async def get_action_reports(domain_id: str = "supply_chain"):
                    logged_by, incident_ref, verified_by,
                    cancel_reason, ignore_reason,
                    CAST(source_doc_ids AS STRING) AS source_doc_ids,
-                   CAST(updated_at AS STRING) AS updated_at
+                   CAST(updated_at AS STRING) AS updated_at, project_id
             FROM {CATALOG}.platform.action_master
-            WHERE domain_id = '{_did}'
+            WHERE domain_id = '{_did}' AND (deleted IS NULL OR deleted = false)
             ORDER BY created_at DESC
             LIMIT 500
+        """, timeout_secs=30) or []
+
+        # Deleted (soft-deleted) actions — excluded from active views but still REPORTED here.
+        deleted_actions = run_sql(f"""
+            SELECT action_id, action_type, description, priority, status, owner,
+                   CAST(due_date AS STRING) AS due_date,
+                   CAST(updated_at AS STRING) AS updated_at, project_id
+            FROM {CATALOG}.platform.action_master
+            WHERE domain_id = '{_did}' AND deleted = true
+            ORDER BY updated_at DESC
+            LIMIT 200
         """, timeout_secs=30) or []
 
         # Build summary counts
@@ -6274,6 +6795,9 @@ async def get_action_reports(domain_id: str = "supply_chain"):
 
         for _r in overdue + all_actions:
             _pj = _projs_for(_r.get("source_doc_ids"))
+            _explicit = (_r.get("project_id") or "").strip() if _r.get("project_id") else ""
+            if _explicit and _explicit not in _pj:
+                _pj = [_explicit] + _pj    # explicit project scoping wins/leads
             _r["projects"] = _pj
             _r["project"]  = _pj[0] if _pj else None   # first, for backward-compat
         projects = sorted({p for _r in all_actions for p in (_r.get("projects") or [])})
@@ -6287,6 +6811,8 @@ async def get_action_reports(domain_id: str = "supply_chain"):
             "overdue_count": len(overdue),
             "actions":      all_actions,
             "projects":     projects,
+            "deleted_actions": deleted_actions,
+            "deleted_count":   len(deleted_actions),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
