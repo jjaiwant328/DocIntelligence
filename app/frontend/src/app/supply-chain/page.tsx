@@ -3620,7 +3620,12 @@ function ActionReportsView({ domainId, apiBase, initialProject }: { domainId: st
   const projects: string[] = Array.isArray(data.projects) ? (data.projects as string[]) : [];
   const filtered = allActions
     .filter(a => filterStatus === "ALL" || (a.status ?? "OPEN") === filterStatus)
-    .filter(a => filterProject === "ALL" || ((a as Record<string, unknown>).project as string) === filterProject);
+    .filter(a => {
+      if (filterProject === "ALL") return true;
+      const ps = (a as Record<string, unknown>).projects;
+      if (Array.isArray(ps)) return (ps as string[]).includes(filterProject);
+      return ((a as Record<string, unknown>).project as string) === filterProject;
+    });
 
   return (
     <div className="space-y-5">
@@ -3715,9 +3720,15 @@ function ActionReportsView({ domainId, apiBase, initialProject }: { domainId: st
                 </div>
                 <div className="col-span-4 pr-2">
                   <p className="text-gray-600 line-clamp-2">{a.description ?? "—"}</p>
-                  {(a as Record<string, unknown>).project ? (
-                    <span className="inline-block mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">📁 {String((a as Record<string, unknown>).project)}</span>
-                  ) : null}
+                  {(() => {
+                    const ps = (a as Record<string, unknown>).projects;
+                    const label = Array.isArray(ps) && ps.length
+                      ? (ps as string[]).join(", ")
+                      : ((a as Record<string, unknown>).project as string) || "";
+                    return label ? (
+                      <span className="inline-block mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">📁 {label}</span>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="col-span-2">
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[a.status ?? "OPEN"] ?? ""}`}>

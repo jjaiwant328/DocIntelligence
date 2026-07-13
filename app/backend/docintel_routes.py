@@ -4959,13 +4959,23 @@ async def generate_draft_reply(req: DraftReplyRequest):
         try:
             _didq = req.domain_id.replace("'", "''")
             _prow = run_sql(f"""
-                SELECT MIN(project_id) AS project_id FROM {CATALOG}.platform.document_project_tags
+                SELECT to_json(sort_array(collect_set(project_id))) AS projects
+                FROM {CATALOG}.platform.document_project_tags
                 WHERE domain_id='{_didq}' AND doc_id='{_doc_id}'
                   AND scope='project' AND project_id IS NOT NULL
             """, timeout_secs=15) or []
-            _proj = _prow[0].get("project_id") if _prow else None
-            if _proj:
-                _pdocs = [d for d in _project_doc_ids(req.domain_id, _proj) if d and d != req.doc_id]
+            import json as _jt2
+            try:
+                _projs = [str(x) for x in _jt2.loads((_prow[0].get("projects") if _prow else None) or "[]")]
+            except Exception:
+                _projs = []
+            if _projs:
+                # union the curated docs across ALL of the request's projects (∪ Universal)
+                _pset: set = set()
+                for _proj in _projs:
+                    _pset.update(_project_doc_ids(req.domain_id, _proj))
+                _pdocs = sorted(d for d in _pset if d and d != req.doc_id)   # deterministic
+                _plabel = "/".join(_projs)
                 if _pdocs:
                     _in = ", ".join("'" + str(d).replace("'", "''") + "'" for d in _pdocs[:8])
                     for d in (run_sql(f"""
@@ -4975,7 +4985,7 @@ async def generate_draft_reply(req: DraftReplyRequest):
                         WHERE pd.doc_id IN ({_in}) LIMIT 8
                     """, timeout_secs=20) or []):
                         fn = d.get("filename", "")
-                        context_text += f"\n\n[project {_proj} · {d.get('doc_type','')} · {fn}]\n{d.get('body','')}"
+                        context_text += f"\n\n[project {_plabel} · {d.get('doc_type','')} · {fn}]\n{d.get('body','')}"
                         if fn and fn not in [s["filename"] for s in sources]:
                             sources.append({"doc_id": d.get("doc_id", ""), "filename": fn})
         except Exception:
@@ -6216,22 +6226,31 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         # Attach the owning project to each action from the CURATED doc->project tags
         # (Phase 2) so manual re-tagging in the Library flows through; the tags table is
         # seeded from the same derived store/project id, so behaviour is unchanged by default.
+        # A doc may be tagged to MANY projects → collect ALL of them so an action
+        # appears under every project its source docs belong to.
         doc_proj: dict = {}
         try:
             _bootstrap_project_tags(domain_id)   # ensure derived tags exist (no-op after first seed)
             _didq = (domain_id or "").replace("'", "''")
             trows = run_sql(f"""
-                SELECT doc_id, MIN(project_id) AS project
+                SELECT doc_id, to_json(sort_array(collect_set(project_id))) AS projects
                 FROM {CATALOG}.platform.document_project_tags
                 WHERE domain_id='{_didq}' AND scope='project' AND project_id IS NOT NULL
                 GROUP BY doc_id
             """, timeout_secs=30) or []
-            doc_proj = {r["doc_id"]: r.get("project") for r in trows if r.get("project")}
+            import json as _jt
+            for r in trows:
+                try:
+                    arr = _jt.loads(r.get("projects") or "[]")   # JSON array — id-safe
+                    if arr:
+                        doc_proj[r["doc_id"]] = [str(x) for x in arr]
+                except Exception:
+                    pass
         except Exception:
             doc_proj = {}
 
         import json as _json
-        def _proj_for(src) -> str | None:
+        def _projs_for(src) -> list:
             # source_doc_ids may be a JSON list, a JSON scalar, or a plain/CSV string.
             ids = []
             if isinstance(src, (list, tuple)):
@@ -6243,17 +6262,18 @@ async def get_action_reports(domain_id: str = "supply_chain"):
                     ids = parsed if isinstance(parsed, list) else [parsed]
                 except Exception:
                     ids = s.strip("[]").replace('"', "").split(",")
+            out: list = []
             for did in ids:
-                did = str(did).strip()
-                if did and did in doc_proj:
-                    return doc_proj[did]
-            return None
+                for p in doc_proj.get(str(did).strip(), []):
+                    if p not in out:
+                        out.append(p)
+            return out
 
-        for _r in overdue:
-            _r["project"] = _proj_for(_r.get("source_doc_ids"))
-        for _r in all_actions:
-            _r["project"] = _proj_for(_r.get("source_doc_ids"))
-        projects = sorted({_r["project"] for _r in all_actions if _r.get("project")})
+        for _r in overdue + all_actions:
+            _pj = _projs_for(_r.get("source_doc_ids"))
+            _r["projects"] = _pj
+            _r["project"]  = _pj[0] if _pj else None   # first, for backward-compat
+        projects = sorted({p for _r in all_actions for p in (_r.get("projects") or [])})
 
         return {
             "domain_id":    domain_id,
