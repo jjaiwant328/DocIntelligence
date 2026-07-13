@@ -6084,6 +6084,9 @@ async def update_action_master(action_id: str, req: ActionMasterUpdateRequest):
                 status_code=400,
                 detail=f"Transition {old_status}→{new_status} is not allowed. Allowed: {allowed}"
             )
+        # Returning an action for rework after a failed review must carry a reason.
+        if old_status == "PENDING_VERIFICATION" and new_status == "IN_PROGRESS" and not (req.comments or "").strip():
+            raise HTTPException(status_code=400, detail="A reason is required to return an action for rework.")
         # Build SET clause based on new status
         set_parts = [f"status = '{new_status}'", "updated_at = current_timestamp()"]
         meta: dict = {}

@@ -3162,7 +3162,7 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
   if (catFilter === "reports") {
     return (
       <PanelErrorBoundary label="Action Reports">
-        <ActionReportsView domainId={domainId} apiBase={apiBase} initialProject={selectedProject} />
+        <ActionReportsView domainId={domainId} apiBase={apiBase} initialProject={selectedProject} onDocClick={onDocClick} />
       </PanelErrorBoundary>
     );
   }
@@ -3222,7 +3222,7 @@ function ActionCenter({ catFilter, onLogged, actions, domainId = "supply_chain",
           </div>
           <div className="space-y-2">
             {masterActions.map(a => (
-              <ActionLifecycleRow key={a.action_id} action={a} apiBase={apiBase} onRefresh={loadMasterActions} />
+              <ActionLifecycleRow key={a.action_id} action={a} apiBase={apiBase} onRefresh={loadMasterActions} onDocClick={onDocClick} />
             ))}
           </div>
         </div>
@@ -3346,6 +3346,24 @@ const ACTION_STATUS_COLORS: Record<string, string> = {
   CANCELLED:            "bg-red-50 text-red-400 border-red-200",
 };
 
+// Robust parse of an action's source_doc_ids (native array / JSON array / JSON scalar /
+// CSV / plain string) into clean doc ids — never emits null/empty/object placeholders.
+function parseDocIds(raw: unknown): string[] {
+  const clean = (v: unknown) => String(v).trim();
+  const ok = (v: string) => !!v && v.toLowerCase() !== "null" && v.toLowerCase() !== "undefined";
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.map(clean).filter(ok);
+  const s = String(raw).trim();
+  if (!s) return [];
+  try {
+    const p = JSON.parse(s);
+    if (Array.isArray(p)) return p.map(clean).filter(ok);
+    if (typeof p === "string" || typeof p === "number") { const v = clean(p); return ok(v) ? [v] : []; }
+    return [];   // object/other → not a document id
+  } catch { /* not JSON — treat as CSV/plain below */ }
+  return s.replace(/[[\]"]/g, "").split(",").map(clean).filter(ok);
+}
+
 interface ActionMasterRecord {
   action_id: string; domain_id: string; action_type: string; description: string;
   priority: string; status: string; owner?: string; due_date?: string; eta?: string;
@@ -3363,6 +3381,7 @@ function TransitionModal({ title, fields, onConfirm, onCancel, submitting }: {
   submitting: boolean;
 }) {
   const [vals, setVals] = useState<Record<string, string>>({});
+  const missingRequired = fields.some(f => f.required && !(vals[f.key] ?? "").trim());
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
@@ -3383,8 +3402,9 @@ function TransitionModal({ title, fields, onConfirm, onCancel, submitting }: {
           </div>
         ))}
         <div className="flex gap-2 pt-2">
-          <button disabled={submitting} onClick={() => onConfirm(vals)}
-            className="flex-1 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+          <button disabled={submitting || missingRequired} onClick={() => onConfirm(vals)}
+            title={missingRequired ? "Fill the required fields first" : ""}
+            className="flex-1 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
             {submitting ? "Saving…" : "Confirm"}
           </button>
           <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
@@ -3395,8 +3415,8 @@ function TransitionModal({ title, fields, onConfirm, onCancel, submitting }: {
 }
 
 /** Inline lifecycle badge + transition buttons for an action_master record */
-function ActionLifecycleRow({ action, apiBase, onRefresh }: {
-  action: ActionMasterRecord; apiBase: string; onRefresh: () => void;
+function ActionLifecycleRow({ action, apiBase, onRefresh, onDocClick }: {
+  action: ActionMasterRecord; apiBase: string; onRefresh: () => void; onDocClick?: (docId: string) => void;
 }) {
   const [modal, setModal] = useState<string | null>(null);  // transition key
   const [submitting, setSubmitting] = useState(false);
@@ -3476,6 +3496,24 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
 
   const allowedTransitions = STATUS_TRANSITIONS[safeStatus] ?? [];
 
+  // Parse source_doc_ids so the action links back to its origin docs.
+  const srcDocs: string[] = parseDocIds(action.source_doc_ids);
+
+  // PENDING_VERIFICATION → IN_PROGRESS is "Return for rework" and REQUIRES a reason.
+  const configFor = (t: string) => {
+    if (safeStatus === "PENDING_VERIFICATION" && t === "IN_PROGRESS") {
+      return {
+        label: "Return for rework",
+        color: "bg-orange-600 text-white hover:bg-orange-700",
+        fields: [
+          { key: "comments",   label: "Reason for return (required)", type: "textarea", required: true },
+          { key: "changed_by", label: "Your name", required: true },
+        ],
+      };
+    }
+    return TRANSITION_CONFIG[t];
+  };
+
   async function doTransition(newStatus: string, vals: Record<string, string>) {
     setSubmitting(true);
     try {
@@ -3531,7 +3569,7 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
       {allowedTransitions.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pt-1">
           {allowedTransitions.map(t => {
-            const cfg = TRANSITION_CONFIG[t];
+            const cfg = configFor(t);
             if (!cfg) return null;
             return (
               <button key={t} onClick={() => setModal(t)}
@@ -3540,14 +3578,30 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
               </button>
             );
           })}
-          <button onClick={loadHistory}
-            className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 ml-auto">
-            {histOpen ? "Hide History" : "History"}
-          </button>
         </div>
       )}
-      {histOpen && history.length > 0 && (
+      {/* Origin — the documents this action was built from */}
+      {srcDocs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 pt-1">
+          <span className="text-[10px] text-gray-400">Origin:</span>
+          {srcDocs.map(fn => (
+            <button key={fn} onClick={() => onDocClick?.(fn)} title="Open source document"
+              className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-blue-600 hover:bg-blue-50 hover:underline max-w-[16rem] truncate">
+              📄 {fn}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* History — always available (also for terminal actions) */}
+      <div className="pt-1">
+        <button onClick={loadHistory}
+          className="text-[11px] px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50">
+          {histOpen ? "Hide History" : "History"}
+        </button>
+      </div>
+      {histOpen && (
         <div className="border-t border-gray-100 pt-2 space-y-1 max-h-40 overflow-y-auto">
+          {history.length === 0 && <p className="text-[10px] text-gray-400">No history yet.</p>}
           {history.map((h, i) => (
             <div key={i} className="flex gap-2 text-[10px] text-gray-500">
               <span className="text-gray-300">{h.changed_at?.slice(0,16)}</span>
@@ -3559,10 +3613,10 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
         </div>
       )}
       {/* Transition modal */}
-      {modal && TRANSITION_CONFIG[modal] && (
+      {modal && configFor(modal) && (
         <TransitionModal
-          title={`${TRANSITION_CONFIG[modal].label}: ${(action.action_type ?? "").replace(/_/g," ")}`}
-          fields={TRANSITION_CONFIG[modal].fields}
+          title={`${configFor(modal)!.label}: ${(action.action_type ?? "").replace(/_/g," ")}`}
+          fields={configFor(modal)!.fields}
           submitting={submitting}
           onCancel={() => setModal(null)}
           onConfirm={(vals) => doTransition(modal, vals)}
@@ -3573,7 +3627,7 @@ function ActionLifecycleRow({ action, apiBase, onRefresh }: {
 }
 
 /** Action Reports sub-tab */
-function ActionReportsView({ domainId, apiBase, initialProject }: { domainId: string; apiBase: string; initialProject?: string }) {
+function ActionReportsView({ domainId, apiBase, initialProject, onDocClick }: { domainId: string; apiBase: string; initialProject?: string; onDocClick?: (docId: string) => void }) {
   const [data, setData]       = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
@@ -3720,15 +3774,30 @@ function ActionReportsView({ domainId, apiBase, initialProject }: { domainId: st
                 </div>
                 <div className="col-span-4 pr-2">
                   <p className="text-gray-600 line-clamp-2">{a.description ?? "—"}</p>
-                  {(() => {
-                    const ps = (a as Record<string, unknown>).projects;
-                    const label = Array.isArray(ps) && ps.length
-                      ? (ps as string[]).join(", ")
-                      : ((a as Record<string, unknown>).project as string) || "";
-                    return label ? (
-                      <span className="inline-block mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">📁 {label}</span>
-                    ) : null;
-                  })()}
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {(() => {
+                      const ps = (a as Record<string, unknown>).projects;
+                      const list: string[] = Array.isArray(ps) && ps.length
+                        ? (ps as string[])
+                        : ((a as Record<string, unknown>).project ? [String((a as Record<string, unknown>).project)] : []);
+                      return list.map(pj => (
+                        <button key={pj} onClick={(e) => { e.stopPropagation(); setFilterProject(pj); }}
+                          title={`Filter actions to project ${pj}`}
+                          className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 cursor-pointer">
+                          📁 {pj}
+                        </button>
+                      ));
+                    })()}
+                    {(() => {
+                      const docs = parseDocIds((a as Record<string, unknown>).source_doc_ids);
+                      return docs.map(fn => (
+                        <button key={fn} onClick={(e) => { e.stopPropagation(); onDocClick?.(fn); }}
+                          title="Open source document" className="text-[9px] px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-blue-600 hover:bg-blue-50 hover:underline cursor-pointer max-w-[12rem] truncate">
+                          📄 {fn}
+                        </button>
+                      ));
+                    })()}
+                  </div>
                 </div>
                 <div className="col-span-2">
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${ACTION_STATUS_COLORS[a.status ?? "OPEN"] ?? ""}`}>
