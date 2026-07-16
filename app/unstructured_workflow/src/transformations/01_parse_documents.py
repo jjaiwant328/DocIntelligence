@@ -216,11 +216,14 @@ txt_parsed = txt_with_meta.withColumn(
                                 'content',     _txt_content,
                                 'confidence',  CAST(1.0 AS DOUBLE),
                                 'id',          CAST(0 AS BIGINT),
-                                'bbox',        CAST(array() AS ARRAY<STRING>),
+                                -- ai_prep_search needs a page-anchored bbox + a populated
+                                -- pages array to place content, or it emits zero chunks.
+                                -- Synthesize a single full-page box on page 0 for text docs.
+                                'bbox',        array(named_struct('coord', array(0, 0, 1000, 1000), 'page_id', 0)),
                                 'description', CAST(NULL AS STRING)
                             )
                         ),
-                        'pages', CAST(array() AS ARRAY<STRING>)
+                        'pages', array(named_struct('id', CAST(0 AS BIGINT), 'image_uri', CAST(NULL AS STRING)))
                     ),
                     'metadata', named_struct(
                         'id',      element_at(split(path, '/'), -1),
@@ -345,11 +348,13 @@ office_parsed = office_with_text.withColumn(
                                 'content',     _txt_content,
                                 'confidence',  CAST(1.0 AS DOUBLE),
                                 'id',          CAST(0 AS BIGINT),
-                                'bbox',        CAST(array() AS ARRAY<STRING>),
+                                -- page-anchored bbox + populated pages so ai_prep_search
+                                -- can chunk these (empty bbox/pages → zero chunks).
+                                'bbox',        array(named_struct('coord', array(0, 0, 1000, 1000), 'page_id', 0)),
                                 'description', CAST(NULL AS STRING)
                             )
                         ),
-                        'pages', CAST(array() AS ARRAY<STRING>)
+                        'pages', array(named_struct('id', CAST(0 AS BIGINT), 'image_uri', CAST(NULL AS STRING)))
                     ),
                     'metadata', named_struct(
                         'id',      element_at(split(path, '/'), -1),

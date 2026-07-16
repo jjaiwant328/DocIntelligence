@@ -142,12 +142,15 @@ if meta:
          v.get("entity_name"), v.get("regulation_id"), None)
         for doc_id, v in meta.items()
     ]
-    meta_df = spark.createDataFrame(
-        meta_rows,
-        ["doc_id", "shipment_id", "lot_number", "supplier", "trailer_id",
-         "recall_number", "reference_number", "issuing_party", "location",
-         "entity_name", "regulation_id", "risk_level"]
-    )
+    # Explicit all-string schema: passing only column names makes Spark infer types,
+    # which throws CANNOT_DETERMINE_TYPE on serverless when a column is all-NULL (e.g.
+    # a domain whose docs have no shipment_id). An explicit StructType avoids inference.
+    from pyspark.sql.types import StructType, StructField
+    _meta_col_names = ["doc_id", "shipment_id", "lot_number", "supplier", "trailer_id",
+                       "recall_number", "reference_number", "issuing_party", "location",
+                       "entity_name", "regulation_id", "risk_level"]
+    _meta_schema = StructType([StructField(c, StringType(), True) for c in _meta_col_names])
+    meta_df = spark.createDataFrame(meta_rows, _meta_schema)
     enriched_df = chunks_df.join(meta_df.drop("risk_level"), on="doc_id", how="left")
 else:
     enriched_df = chunks_df

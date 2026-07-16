@@ -548,6 +548,12 @@ function buildTabs(domainId: string) {
       ],
     },
     ...(domainId === "compliance_due_diligence" ? [{
+      id: "inbox",
+      icon: "📨",
+      label: "Inbox",
+      tooltip: "Feasibility Inbox — inbound NPUC/feasibility requests, auto-classified and ready to triage. Where every project starts.",
+    }] : []),
+    ...(domainId === "compliance_due_diligence" ? [{
       id: "tracker",
       icon: "📋",
       label: "Tracker",
@@ -557,7 +563,9 @@ function buildTabs(domainId: string) {
       id: "ontology",
       icon: "🕸",
       label: "Knowledge Graph",
-      tooltip: "Interactive knowledge graph — entities extracted from documents and their relationships",
+      tooltip: domainId === "compliance_due_diligence"
+        ? "Verify the documents attached to a project — Focus a project to see its documents, municipality, licenses and prior responses light up (unassigned docs are dimmed)."
+        : "Interactive knowledge graph — entities extracted from documents and their relationships",
       subs: [
         { id:"graph",    label:"Graph View" },
         { id:"entities", label:"Entity List" },
@@ -577,11 +585,17 @@ function buildTabs(domainId: string) {
       id: "compliance_map",
       icon: "🗺",
       label: "Compliance Map",
-      tooltip: "Jurisdiction × document-type coverage matrix — see which regulations apply where and identify gaps",
-      subs: [
-        { id: "map",    label: "Coverage Matrix" },
-        { id: "pulse",  label: "Regulatory Pulse" },
-      ],
+      tooltip: domainId === "compliance_due_diligence"
+        ? "Regulatory Pulse — detected regulatory changes with effective dates and what action is required by when."
+        : "Jurisdiction × document-type coverage matrix — see which regulations apply where and identify gaps",
+      // CDD single-project demo: the jurisdiction×topic Coverage Matrix is a portfolio
+      // view whose projected/synthetic cells distract here, so show Regulatory Pulse only.
+      subs: domainId === "compliance_due_diligence"
+        ? [{ id: "pulse", label: "Regulatory Pulse" }]
+        : [
+            { id: "map",    label: "Coverage Matrix" },
+            { id: "pulse",  label: "Regulatory Pulse" },
+          ],
     },
   ];
 }
@@ -1187,18 +1201,18 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
                 ) : (
                   <div className={`border rounded-lg p-3.5 space-y-1.5 ${p.is_active ? "border-green-300 bg-green-50" : "border-gray-200 bg-white hover:bg-gray-50"}`}>
                     <div className="flex items-center gap-2">
+                      {promptLibrary.length > 1 && (
+                        <input type="radio" name="active-copilot-prompt" checked={!!p.is_active}
+                          onChange={() => { if (!p.is_active) handleActivatePrompt(p.prompt_id); }}
+                          title={p.is_active ? "Active guiding prompt" : "Make this the active prompt"}
+                          className="accent-green-600 cursor-pointer flex-shrink-0" />
+                      )}
                       {p.is_active && <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Active</span>}
                       <span className="text-sm font-semibold text-gray-800 flex-1">{p.name}</span>
                       <span className="text-[10px] text-gray-400">{p.created_at ? new Date(p.created_at).toLocaleDateString() : ""}</span>
                     </div>
                     <pre className="text-[11px] text-gray-500 font-mono whitespace-pre-wrap max-h-24 overflow-auto bg-gray-50 rounded p-2 border border-gray-100">{p.preview}</pre>
                     <div className="flex items-center gap-2 pt-1">
-                      {!p.is_active && (
-                        <button onClick={() => handleActivatePrompt(p.prompt_id)}
-                          className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-green-600 text-white hover:bg-green-700">
-                          Activate
-                        </button>
-                      )}
                       <button onClick={() => setEditingPromptId(p.prompt_id)}
                         className="text-[11px] font-semibold px-2.5 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-100">
                         Edit
@@ -1848,8 +1862,24 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
   const [draft, setDraft] = useState<{ draft: string; sources: DraftSource[] } | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sentMsg, setSentMsg] = useState<string | null>(null);
   // Scope to the Control Tower's active project (fall back to all if none set).
   const rowsShown = activeProject ? rows.filter(r => String((r as {project?:string}).project ?? "") === activeProject) : rows;
+
+  const sendDraft = async () => {
+    if (!draft || !draftFor) return;
+    setSending(true);
+    try {
+      const r = await fetch(`${apiBase}/api/docintel/send-draft-reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, doc_id: draftFor, draft: draft.draft }),
+      });
+      const d = await r.json();
+      setSentMsg(d.sent ? "✓ Logged as sent (demo)" : "Send failed");
+    } catch { setSentMsg("Send failed"); }
+    setSending(false);
+  };
 
   useEffect(() => {
     setLoading(true); setErr(null);
@@ -1860,15 +1890,28 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
   }, [domainId, apiBase]);
 
   const genDraft = async (docId: string) => {
-    setDraftFor(docId); setDraft(null); setDraftLoading(true); setCopied(false);
+    setDraftFor(docId); setDraft(null); setDraftLoading(true); setCopied(false); setSentMsg(null);
     try {
+      // Draft generation is an LLM call (~20-30s). Guard against a gateway timeout
+      // page (HTML) — which would otherwise blow up r.json() with "Unexpected token '<'".
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 115000);
       const r = await fetch(`${apiBase}/api/docintel/generate-draft-reply`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain_id: domainId, doc_id: docId }),
+        body: JSON.stringify({ domain_id: domainId, doc_id: docId }), signal: ctl.signal,
       });
+      clearTimeout(to);
+      if (!(r.headers.get("content-type") || "").includes("application/json")) {
+        throw new Error(`The draft is taking too long to generate (HTTP ${r.status}). Please try again.`);
+      }
       const d = await r.json();
       setDraft({ draft: d.draft ?? d.message ?? "(no draft returned)", sources: d.sources ?? [] });
-    } catch (e) { setDraft({ draft: "Error generating draft: " + String(e), sources: [] }); }
+    } catch (e) {
+      const msg = (e as Error)?.name === "AbortError"
+        ? "The draft request timed out — please try again."
+        : ((e as Error)?.message || String(e));
+      setDraft({ draft: "Couldn't generate the draft — " + msg, sources: [] });
+    }
     setDraftLoading(false);
   };
 
@@ -1967,9 +2010,11 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
                       </div>
                     </div>
                   )}
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex items-center gap-2">
                     <button onClick={() => { if (draft) { navigator.clipboard?.writeText(draft.draft); setCopied(true); } }} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">{copied ? "✓ Copied" : "Copy"}</button>
-                    <button onClick={() => setDraftFor(null)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Close</button>
+                    <button onClick={sendDraft} disabled={sending} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">{sending ? "Sending…" : "📤 Send (demo)"}</button>
+                    {sentMsg && <span className="text-[11px] text-green-600">{sentMsg}</span>}
+                    <button onClick={() => setDraftFor(null)} className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Close</button>
                   </div>
                 </>
               )}
@@ -1977,6 +2022,266 @@ function ComplianceTracker({ domainId, apiBase, onDocClick, onOpenProjectActions
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Feasibility Inbox (intake triage) ────────────────────────────────────────
+interface InboxRow {
+  doc_id: string; filename?: string; sender: string; subject: string;
+  received_date?: string | null; municipality?: string | null; state?: string | null;
+  project?: string | null; request_type?: string; urgency: string;
+  linked_project?: string | null; has_action?: boolean;
+}
+interface SentRow { id: string; subject: string; to_addr: string; sent_at: string; doc_id: string; }
+
+function FeasibilityInbox({ domainId, apiBase, onDocClick, onOpenProjectActions }:
+  { domainId: string; apiBase: string; onDocClick?: (d: string) => void; onOpenProjectActions?: (p: string) => void }) {
+  const [rows, setRows] = useState<InboxRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [draftFor, setDraftFor] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ draft: string; sources: DraftSource[] } | null>(null);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sentMsg, setSentMsg] = useState<string | null>(null);
+  const [sentLog, setSentLog] = useState<SentRow[]>([]);
+
+  const loadSent = () => fetch(`${apiBase}/api/docintel/sent-responses?domain_id=${encodeURIComponent(domainId)}`)
+    .then(r => r.json()).then(d => setSentLog(d.responses ?? [])).catch(() => {});
+  useEffect(() => {
+    setLoading(true); setErr(null);
+    fetch(`${apiBase}/api/docintel/feasibility-inbox?domain_id=${encodeURIComponent(domainId)}`)
+      .then(r => r.json()).then(d => { setRows(d.inbox ?? []); setLoading(false); })
+      .catch(e => { setErr(String(e)); setLoading(false); });
+    loadSent();
+  }, [domainId, apiBase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const genDraft = async (docId: string) => {
+    setDraftFor(docId); setDraft(null); setDraftLoading(true); setCopied(false); setSentMsg(null);
+    try {
+      // Draft generation is an LLM call (~20-30s). Guard against a gateway timeout
+      // page (HTML) — which would otherwise blow up r.json() with "Unexpected token '<'".
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 115000);
+      const r = await fetch(`${apiBase}/api/docintel/generate-draft-reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, doc_id: docId }), signal: ctl.signal,
+      });
+      clearTimeout(to);
+      if (!(r.headers.get("content-type") || "").includes("application/json")) {
+        throw new Error(`The draft is taking too long to generate (HTTP ${r.status}). Please try again.`);
+      }
+      const d = await r.json();
+      setDraft({ draft: d.draft ?? d.message ?? "(no draft returned)", sources: d.sources ?? [] });
+    } catch (e) {
+      const msg = (e as Error)?.name === "AbortError"
+        ? "The draft request timed out — please try again."
+        : ((e as Error)?.message || String(e));
+      setDraft({ draft: "Couldn't generate the draft — " + msg, sources: [] });
+    }
+    setDraftLoading(false);
+  };
+  const sendDraft = async () => {
+    if (!draft || !draftFor) return;
+    setSending(true);
+    try {
+      const r = await fetch(`${apiBase}/api/docintel/send-draft-reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, doc_id: draftFor, draft: draft.draft }),
+      });
+      const d = await r.json();
+      setSentMsg(d.sent ? "✓ Logged as sent (demo)" : "Send failed"); loadSent();
+    } catch { setSentMsg("Send failed"); }
+    setSending(false);
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="mb-3">
+        <h3 className="text-base font-bold text-gray-900">📨 Feasibility Inbox</h3>
+        <p className="text-xs text-gray-500">Inbound NPUC / feasibility requests — auto-classified, extracted, and ready to triage. This is where every project starts.</p>
+      </div>
+      {loading ? (
+        <div className="py-8 text-center"><Spinner label="Loading inbox…" /></div>
+      ) : err ? (
+        <div className="text-xs text-red-500 py-4">Could not load inbox: {err}</div>
+      ) : rows.length === 0 ? (
+        <div className="text-xs text-gray-400 py-8 text-center">No feasibility requests found.</div>
+      ) : (
+        <div className="space-y-2">
+          {rows.map(r => (
+            <div key={r.doc_id} className={`border rounded-lg px-4 py-3 hover:shadow-sm transition-shadow ${r.urgency === "high" ? "border-red-200 bg-red-50/40" : "border-gray-200"}`}>
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-gray-800 truncate">{r.subject}</span>
+                    {r.urgency === "high" && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">URGENT</span>}
+                    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100">classified: feasibility_request</span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-0.5 truncate">{r.sender}{r.received_date ? ` · ${r.received_date}` : ""}</p>
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                    {r.municipality && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">📍 {r.municipality}{r.state ? `, ${r.state}` : ""}</span>}
+                    {r.project && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">🏪 {r.project}</span>}
+                    {r.has_action && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-100">✓ action created</span>}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                  <button onClick={() => onDocClick?.(r.doc_id)} className="text-[11px] text-blue-600 hover:underline">Open</button>
+                  <button onClick={() => genDraft(r.doc_id)} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap">✉️ Draft Reply</button>
+                  {r.project && onOpenProjectActions && <button onClick={() => onOpenProjectActions(r.project!)} className="text-[11px] text-gray-500 hover:text-gray-800 whitespace-nowrap">📁 Project</button>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sent responses log */}
+      {sentLog.length > 0 && (
+        <div className="mt-5 border-t border-gray-100 pt-3">
+          <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-2">Sent responses (demo) · {sentLog.length}</p>
+          <div className="space-y-1">
+            {sentLog.slice(0, 6).map(s => (
+              <div key={s.id} className="flex items-center gap-2 text-[11px] text-gray-500">
+                <span className="text-green-500">📤</span>
+                <span className="truncate flex-1">{s.subject}</span>
+                <span className="text-gray-400">{s.to_addr}</span>
+                <span className="text-gray-300">{(s.sent_at || "").slice(0, 16)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Draft reply modal (with Send) */}
+      {draftFor && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setDraftFor(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <h4 className="text-sm font-bold text-gray-900">✉️ Draft Reply</h4>
+              <button onClick={() => setDraftFor(null)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">×</button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              {draftLoading ? (
+                <div className="py-8 text-center"><Spinner label="Drafting a grounded reply from the municipality's requirements…" /></div>
+              ) : (
+                <>
+                  <textarea readOnly value={draft?.draft ?? ""} className="w-full text-xs font-mono border border-gray-200 rounded-lg p-3 min-h-[20rem] max-h-[40vh] overflow-auto" />
+                  {draft?.sources && draft.sources.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Sources</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {draft.sources.map((s, i) => (
+                          <span key={i} className="text-[11px] bg-gray-100 rounded px-2 py-0.5 flex items-center gap-1">
+                            {s.filename || s.doc_id}
+                            {s.source_url && <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">🔗</a>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-2">
+                    <button onClick={() => { if (draft) { navigator.clipboard?.writeText(draft.draft); setCopied(true); } }} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">{copied ? "✓ Copied" : "Copy"}</button>
+                    <button onClick={sendDraft} disabled={sending} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">{sending ? "Sending…" : "📤 Send (demo)"}</button>
+                    {sentMsg && <span className="text-[11px] text-green-600">{sentMsg}</span>}
+                    <button onClick={() => setDraftFor(null)} className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Close</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Today's Priorities (act-today queue) ─────────────────────────────────────
+interface PriorityItem { kind: string; severity: string; title: string; detail?: string | null; project?: string | null; date?: string | null; action_id?: string; doc_id?: string; }
+function TodayPriorities({ domainId, apiBase, activeProject = "", onOpenProjectActions, onDocClick }:
+  { domainId: string; apiBase: string; activeProject?: string; onOpenProjectActions?: (p: string) => void; onDocClick?: (d: string) => void }) {
+  const [items, setItems] = useState<PriorityItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [counts, setCounts] = useState<{ overdue?: number; review?: number; deadline?: number }>({});
+  useEffect(() => {
+    setLoading(true);
+    const q = activeProject ? `&project_id=${encodeURIComponent(activeProject)}` : "";
+    fetch(`${apiBase}/api/docintel/today-priorities?domain_id=${encodeURIComponent(domainId)}${q}`)
+      .then(r => r.json()).then(d => { setItems(d.items ?? []); setCounts(d.counts ?? {}); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [domainId, apiBase, activeProject]);
+  const color = (s: string) => s === "high" ? "border-red-300 bg-red-50" : s === "medium" ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50";
+  const badge = (k: string) => k === "overdue" ? "bg-red-100 text-red-700" : k === "review" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700";
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-gray-900">🎯 Today&apos;s Priorities{activeProject ? ` · ${activeProject}` : ""}</h3>
+        <div className="flex gap-1.5">
+          {(counts.overdue ?? 0) > 0 && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{counts.overdue} overdue</span>}
+          {(counts.review ?? 0) > 0 && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{counts.review} review</span>}
+          {(counts.deadline ?? 0) > 0 && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{counts.deadline} deadline</span>}
+        </div>
+      </div>
+      {loading ? <div className="py-4"><Spinner label="Loading priorities…" /></div>
+        : items.length === 0 ? <p className="text-xs text-gray-400 py-2">Nothing needs action right now. 🎉</p>
+        : (
+          <div className="space-y-2">
+            {items.map((it, i) => (
+              <div key={i} className={`flex items-center gap-3 border rounded-lg px-3 py-2 ${color(it.severity)}`}>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${badge(it.kind)}`}>{it.kind.toUpperCase()}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-gray-800 truncate">{it.title}</p>
+                  {it.detail && <p className="text-[11px] text-gray-500 truncate">{it.detail}</p>}
+                </div>
+                {it.date && <span className="text-[10px] text-gray-500 whitespace-nowrap">{it.date}</span>}
+                {it.project && onOpenProjectActions && <button onClick={() => onOpenProjectActions(it.project!)} className="text-[10px] text-indigo-600 hover:underline whitespace-nowrap">📁 {it.project}</button>}
+                {it.doc_id && onDocClick && <button onClick={() => onDocClick(it.doc_id!)} className="text-[10px] text-blue-600 hover:underline">open</button>}
+              </div>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
+// ── Project lifecycle timeline (NPUC → feasibility → response → refresh → change) ──
+interface Milestone { stage: string; label: string; kind: string; date?: string | null; doc_id?: string | null; }
+function ProjectTimeline({ domainId, apiBase, project, onDocClick, onOpenPulse }:
+  { domainId: string; apiBase: string; project: string; onDocClick?: (d: string) => void; onOpenPulse?: () => void }) {
+  const [ms, setMs] = useState<Milestone[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!project) { setMs([]); setLoading(false); return; }
+    setLoading(true);
+    fetch(`${apiBase}/api/docintel/project-timeline?domain_id=${encodeURIComponent(domainId)}&project_id=${encodeURIComponent(project)}`)
+      .then(r => r.json()).then(d => { setMs(d.milestones ?? []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [domainId, apiBase, project]);
+  if (!project) return null;
+  const icon = (k: string) => (({ npuc: "📄", request: "✉️", response: "✅", refresh: "🔄", change: "⚑" } as Record<string, string>)[k] || "•");
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-5">
+      <h3 className="text-sm font-bold text-gray-900 mb-3">🗺 Project Lifecycle · {project}</h3>
+      {loading ? <div className="py-3"><Spinner label="Loading timeline…" /></div>
+        : ms.length === 0 ? <p className="text-xs text-gray-400">No lifecycle events yet.</p>
+        : (
+          <div className="flex items-center gap-0 overflow-x-auto pb-2">
+            {ms.map((m, i) => (
+              <div key={i} className="flex items-center">
+                <button
+                  onClick={() => { if (m.kind === "change" && onOpenPulse) onOpenPulse(); else if (m.doc_id && onDocClick) onDocClick(m.doc_id); }}
+                  className={`flex flex-col items-center text-center min-w-[118px] px-2 ${(m.doc_id || m.kind === "change") ? "cursor-pointer group" : ""}`}>
+                  <span className={`w-9 h-9 flex items-center justify-center rounded-full text-sm border-2 ${m.kind === "change" ? "border-red-400 bg-red-50" : "border-indigo-300 bg-indigo-50 group-hover:bg-indigo-100"}`}>{icon(m.kind)}</span>
+                  <span className={`mt-1 text-[10px] font-semibold leading-tight ${m.kind === "change" ? "text-red-600" : "text-gray-700"}`}>{m.label}</span>
+                  {m.date && <span className="text-[9px] text-gray-400">{m.date}</span>}
+                </button>
+                {i < ms.length - 1 && <span className="text-gray-300 px-0.5">→</span>}
+              </div>
+            ))}
+          </div>
+        )}
     </div>
   );
 }
@@ -4476,6 +4781,18 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
           {tab === "overview" && (
             <div className="space-y-4">
 
+              {/* Today's Priorities (act-today queue) — CDD only */}
+              {domainId === "compliance_due_diligence" && (
+                <TodayPriorities domainId={domainId} apiBase={getApiBaseUrl()} activeProject={activeProject}
+                  onOpenProjectActions={openProjectActions} onDocClick={openDocViewer} />
+              )}
+
+              {/* Project lifecycle timeline — when a project is focused */}
+              {domainId === "compliance_due_diligence" && activeProject && (
+                <ProjectTimeline domainId={domainId} apiBase={getApiBaseUrl()} project={activeProject}
+                  onDocClick={openDocViewer} onOpenPulse={() => { setTab("compliance_map"); setSub("pulse"); }} />
+              )}
+
               {/* KPI Cards */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {[
@@ -4659,6 +4976,11 @@ function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/conte
           {/* ── COMPLIANCE MAP TAB ── */}
           {tab === "compliance_map" && (
             <ComplianceMapTab domainId={domainId} sub={sub} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} focusProjectDefault={activeProject} />
+          )}
+
+          {/* ── FEASIBILITY INBOX TAB ── */}
+          {tab === "inbox" && (
+            <FeasibilityInbox domainId={domainId} apiBase={getApiBaseUrl()} onDocClick={openDocViewer} onOpenProjectActions={openProjectActions} />
           )}
 
           {/* ── COMPLIANCE TRACKER TAB ── */}

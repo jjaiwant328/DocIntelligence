@@ -37,6 +37,71 @@ VS_ENDPOINT = os.getenv("DOCINTEL_VS_ENDPOINT", "docintel-vs-endpoint")
 VS_INDEX    = os.getenv("DOCINTEL_VS_INDEX", "jai_docintel.vectors.docintel_docs_index")
 AGENT_MODEL = os.getenv("DOCINTEL_AGENT_MODEL", "databricks-claude-sonnet-4-5")
 
+# Hybrid (semantic + BM25 keyword) retrieval support is a Vector Search beta. We try
+# HYBRID first — it markedly improves recall of exact tokens (statute/section numbers,
+# store/project IDs, license class names) alongside semantics — and transparently fall
+# back to plain ANN when unsupported. The result is cached so beta-off workspaces don't
+# pay a failed-hybrid round-trip on every query.
+_HYBRID_OK = None   # None = untried, True = supported, False = unsupported → ANN only
+
+_vsc_singleton = None
+
+def _get_vsc():
+    """Authenticated VectorSearchClient. In a Databricks App the process runs as the
+    app service principal via OAuth (DATABRICKS_CLIENT_ID/SECRET); the VS client does
+    NOT auto-pick those, so pass them explicitly — otherwise every query fails with
+    'specify either personal access token or service principal client ID and secret'
+    and silently falls back to SQL. Cached for the app lifetime."""
+    global _vsc_singleton
+    if _vsc_singleton is None:
+        from databricks.vector_search.client import VectorSearchClient
+        cid  = os.getenv("DATABRICKS_CLIENT_ID")
+        sec  = os.getenv("DATABRICKS_CLIENT_SECRET")
+        host = (os.getenv("DATABRICKS_HOST") or "").strip()
+        # DATABRICKS_HOST in the app env has no scheme (adb-….net); the VS client builds
+        # its OIDC token URL from it. Force https so SP credentials are never exchanged
+        # over plaintext http.
+        if host.startswith("http://"):
+            host = "https://" + host[len("http://"):]
+        elif not host.startswith("https://"):
+            host = "https://" + host
+        if cid and sec:
+            _vsc_singleton = VectorSearchClient(
+                workspace_url=host,
+                service_principal_client_id=cid,
+                service_principal_client_secret=sec,
+                disable_notice=True,
+            )
+        else:
+            _vsc_singleton = VectorSearchClient(disable_notice=True)  # notebook/PAT env
+    return _vsc_singleton
+
+
+def _vs_search(index, query_text, columns, num_results, filters=None):
+    """index.similarity_search with HYBRID when available, else ANN. Same return shape.
+    Any hard failure (e.g. an index missing a requested column) propagates so the
+    caller can fall back to its SQL/keyword path."""
+    global _HYBRID_OK
+    kw = {"query_text": query_text, "columns": columns, "num_results": num_results}
+    if filters:
+        kw["filters"] = filters
+    if _HYBRID_OK is not False:
+        try:
+            r = index.similarity_search(query_type="hybrid", **kw)
+            _HYBRID_OK = True
+            return r
+        except Exception as e:
+            # Only a genuine "hybrid/query_type unsupported" error should disable hybrid
+            # for the process. Propagate anything else (auth/network/transient/bad-request)
+            # so the caller falls back to SQL rather than silently degrading to ANN and
+            # permanently poisoning _HYBRID_OK on a transient blip.
+            _m = str(e).lower()
+            if any(k in _m for k in ("query_type", "hybrid", "not supported", "unsupported")):
+                _HYBRID_OK = False
+            else:
+                raise
+    return index.similarity_search(**kw)
+
 # Ordered fallback list tried when the primary model endpoint is unavailable
 _MODEL_FALLBACKS = [
     AGENT_MODEL,
@@ -547,18 +612,19 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
             try:
                 from databricks.vector_search.client import VectorSearchClient
                 from langchain_core.tools import tool
-                vsc = VectorSearchClient()
+                vsc = _get_vsc()
                 vsc.get_index(VS_ENDPOINT, _domain_vs_index)  # validate
 
                 @tool
                 def search_documents(query: str, doc_type_filter: str = None) -> str:
                     """Search supply chain documents semantically using Vector Search."""
                     index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-                    results = index.similarity_search(
+                    results = _vs_search(
+                        index,
                         query_text=query,
                         columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                        filters={"doc_type": doc_type_filter} if doc_type_filter else None,
                         num_results=5,
+                        filters={"doc_type": doc_type_filter} if doc_type_filter else None,
                     )
                     data = results.get("result", {}).get("data_array", [])
                     if not data:
@@ -606,9 +672,10 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
         # 1. Try VS search first
         try:
             from databricks.vector_search.client import VectorSearchClient
-            vsc = VectorSearchClient()
+            vsc = _get_vsc()
             index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-            results = index.similarity_search(
+            results = _vs_search(
+                index,
                 query_text=req.question,
                 columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
                 num_results=6,
@@ -1328,13 +1395,17 @@ async def search_docs(
         _vec = _d.get("schema_vec", "vectors")
         results: list = []
 
-        if mode == "semantic":
+        # Both keyword and semantic modes retrieve via the Vector Search index using
+        # HYBRID (BM25 keyword + semantic) so results are RANKED by relevance. The crude
+        # SQL ILIKE path is kept only as a graceful fallback when VS is unavailable.
+        if mode in ("semantic", "keyword"):
             try:
                 from databricks.vector_search.client import VectorSearchClient
-                vsc = VectorSearchClient()
+                vsc = _get_vsc()
                 vs_index_name = f"{CATALOG}.{_vec}.{domain_id}_docs_index"
                 index = vsc.get_index(VS_ENDPOINT, vs_index_name)
-                vs_res = index.similarity_search(
+                vs_res = _vs_search(
+                    index,
                     query_text=q,
                     columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
                     num_results=limit,
@@ -1364,12 +1435,12 @@ async def search_docs(
                         "snippet":  snippet,
                         "score":    None,
                     })
-            except Exception as vs_err:
-                # Fall back to keyword on VS failure
+            except Exception:
+                # Fall back to SQL keyword search only if the VS index/query is unavailable
                 mode = "keyword_fallback"
                 results = []
 
-        if mode in ("keyword", "keyword_fallback"):
+        if mode == "keyword_fallback":
             like = f"%{q.lower()}%"
             # Domain isolation comes from the schema (e.g. jai_docintel.compliance or .raw),
             # not from a domain_id column — so no WHERE domain_id filter is needed.
@@ -4162,9 +4233,10 @@ async def copilot_query(req: CopilotQueryRequest):
             _domain = _get_domain_schemas(req.domain_id)
             _vec = _domain["schema_vec"]
             domain_index = f"{CATALOG}.{_vec}.{req.domain_id}_docs_index"
-            vsc = VectorSearchClient()
+            vsc = _get_vsc()
             index = vsc.get_index(VS_ENDPOINT, domain_index)
-            results = index.similarity_search(
+            results = _vs_search(
+                index,
                 query_text=req.query,
                 columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
                 num_results=6,
@@ -5126,8 +5198,8 @@ class DraftReplyRequest(BaseModel):
 async def generate_draft_reply(req: DraftReplyRequest):
     """
     Generate a ready-to-send draft email reply to a feasibility request, grounded
-    in the municipality's requirements (Vector Search + extracted fields) and any
-    prior response. Returns {draft, sources}.
+    in the municipality's requirement/license/change docs and the project's curated
+    documents (deterministic SQL over the curated corpus). Returns {draft, sources}.
     """
     if req.domain_id != "compliance_due_diligence":
         raise HTTPException(status_code=404, detail="Draft reply is available only for compliance_due_diligence.")
@@ -5145,24 +5217,14 @@ async def generate_draft_reply(req: DraftReplyRequest):
             raise HTTPException(status_code=404, detail=f"Document '{req.doc_id}' not found.")
         request_text = rows[0].get("body") or ""
 
-        # 2. Retrieve municipality requirements via Vector Search (best-effort)
+        # 2. Grounding. A Vector Search similarity pass was removed here: on this small,
+        #    curated corpus it was redundant with the deterministic SQL grounding (2a) +
+        #    the project's curated tags (2b) below, and it was the dominant latency
+        #    (VS client init + query). Dropping it speeds up the draft with no loss of
+        #    grounding — the same requirement/license/change docs are pulled directly.
         context_text = ""; sources: list = []
-        try:
-            from databricks.vector_search.client import VectorSearchClient
-            vsc = VectorSearchClient()
-            index = vsc.get_index(VS_ENDPOINT, f"{CATALOG}.{vec}.{req.domain_id}_docs_index")
-            res = index.similarity_search(
-                query_text=request_text[:800],
-                columns=["doc_id", "doc_type", "chunk_to_retrieve"], num_results=6)
-            for r in res.get("result", {}).get("data_array", []):
-                did = r[0] if len(r) > 0 else ""
-                context_text += f"\n\n[{r[1] if len(r)>1 else ''} · {did}]\n{r[2] if len(r)>2 else ''}"
-                if did and did not in [s['doc_id'] for s in sources]:
-                    sources.append({"doc_id": did, "filename": did})
-        except Exception:
-            pass
 
-        # 2b. Deterministic SQL grounding — pull THIS municipality's requirement/license/
+        # 2a. Deterministic SQL grounding — pull THIS municipality's requirement/license/
         #     change docs directly (filenames encode the city), so the draft is grounded
         #     and cited even when Vector Search misses on this small corpus.
         try:
@@ -5238,16 +5300,17 @@ async def generate_draft_reply(req: DraftReplyRequest):
         except Exception:
             pass
 
-        # 4. Draft the reply
-        llm, _m = _get_llm(max_tokens=1400)
+        # 4. Draft the reply. Cap output tokens — a feasibility reply is a short business
+        #    email, and a smaller budget is the main lever on generation latency.
+        llm, _m = _get_llm(max_tokens=900)
         system = (
             "You are a store-development compliance analyst. Draft a professional, ready-to-send "
             "EMAIL REPLY to the feasibility/due-diligence request below. Answer the specific questions "
             "(alcohol/tobacco/business licensing, zoning, distance restrictions, lead times) using ONLY "
             "the provided requirement excerpts; where the excerpts are silent, say what still needs to be "
-            "confirmed. Keep it concise and business-appropriate: greeting, a short summary answer, a "
+            "confirmed. Be CONCISE — under ~300 words: greeting, a 2-3 sentence summary answer, a short "
             "bulleted requirements/next-steps list with lead times, and a sign-off. End with a 'Sources:' "
-            "line listing the document names used. Do not invent regulations."
+            "line listing the document names used. Do not invent regulations; do not pad."
         )
         human = f"FEASIBILITY REQUEST:\n{request_text}\n\nREQUIREMENT EXCERPTS:{context_text or ' (none retrieved)'}"
         resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=human)])
@@ -5256,6 +5319,356 @@ async def generate_draft_reply(req: DraftReplyRequest):
         raise
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Demo-appeal surfaces (CDD only): Feasibility Inbox, Today's Priorities,
+# branded reply (send + log), and per-project lifecycle timeline.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/feasibility-inbox")
+async def feasibility_inbox(domain_id: str = "compliance_due_diligence"):
+    """Inbound feasibility/NPUC emails as a triage inbox: each auto-classified
+    feasibility_request doc with sender/subject/date, extracted municipality/project,
+    an urgency flag, its linked project, and whether an action already exists."""
+    _require_cdd(domain_id)
+    _d = _get_domain_schemas(domain_id); raw = _d["schema_raw"]
+    _did = domain_id.replace("'", "''")
+    import re as _re, json as _j
+    try:
+        docs = run_sql(f"""
+            SELECT doc_id, filename, SUBSTRING(CAST(parsed_content AS STRING), 1, 1400) AS head
+            FROM {CATALOG}.{raw}.parsed_documents
+            WHERE doc_type = 'feasibility_request'
+            ORDER BY doc_id
+        """, timeout_secs=30) or []
+        pv = _parse_val_sql
+        ef = run_sql(f"""
+            SELECT doc_id,
+                   MAX({pv("CASE WHEN field_name='requester' THEN field_value END")})     AS requester,
+                   MAX({pv("CASE WHEN field_name='request_type' THEN field_value END")})  AS request_type,
+                   MAX({pv("CASE WHEN field_name='municipality' THEN field_value END")})  AS municipality,
+                   MAX({pv("CASE WHEN field_name='county' THEN field_value END")})        AS county,
+                   MAX({pv("CASE WHEN field_name='state' THEN field_value END")})         AS state,
+                   MAX({pv("CASE WHEN field_name='store_number' THEN field_value END")})  AS store_number,
+                   MAX({pv("CASE WHEN field_name='project_id' THEN field_value END")})    AS project_id,
+                   MAX({pv("CASE WHEN field_name='lead_time' THEN field_value END")})     AS lead_time
+            FROM {CATALOG}.{raw}.extracted_fields GROUP BY doc_id
+        """, timeout_secs=30) or []
+        efmap = {r["doc_id"]: r for r in ef}
+
+        tagmap: dict = {}
+        try:
+            trows = run_sql(f"""
+                SELECT doc_id, to_json(sort_array(collect_set(project_id))) AS projects
+                FROM {CATALOG}.platform.document_project_tags
+                WHERE domain_id='{_did}' AND scope='project' AND project_id IS NOT NULL
+                GROUP BY doc_id
+            """, timeout_secs=20) or []
+            for r in trows:
+                try: tagmap[r["doc_id"]] = _j.loads(r.get("projects") or "[]")
+                except Exception: pass
+        except Exception:
+            pass
+
+        acted: set = set()
+        try:
+            arows = run_sql(f"""
+                SELECT CAST(source_doc_ids AS STRING) AS s FROM {CATALOG}.platform.action_master
+                WHERE domain_id='{_did}' AND (deleted IS NULL OR deleted=false)
+            """, timeout_secs=20) or []
+            for a in arows:
+                for did in (a.get("s") or "").replace("[","").replace("]","").replace('"',"").split(","):
+                    did = did.strip()
+                    if did: acted.add(did)
+        except Exception:
+            pass
+
+        def _hdr(head, key):
+            # parsed_content is a JSON VARIANT string → newlines arrive escaped as "\n".
+            # A header key may follow a newline OR the JSON content-open quote (Subject-first
+            # emails like the Fulton .eml put Subject before From), so accept either boundary.
+            txt = (head or "").replace("\\n", "\n").replace("\\r", "")
+            m = _re.search(rf'(?:^|[\n"])\s*{key}:\s*([^\n"]+)', txt)
+            return m.group(1).strip() if m else None
+
+        out = []
+        for d in docs:
+            head = d.get("head") or ""
+            e = efmap.get(d["doc_id"], {})
+            proj = (e.get("store_number") or e.get("project_id") or "").strip()
+            lead = e.get("lead_time") or ""
+            # Deadline signals in the email body ("respond by …", "by end of week") or a
+            # long license lead time make a request time-sensitive.
+            urgent = bool(_re.search(r"respond by|due by|by friday|by end of week|end of week|by eow|within \d+ (business )?days|urgent|asap|as soon as", head, _re.I)
+                          or _re.search(r"\b(60|90|120|150|180)\b", lead))
+            out.append({
+                "doc_id": d["doc_id"], "filename": d.get("filename"),
+                "sender":  _hdr(head, "From")    or e.get("requester") or "—",
+                "subject": _hdr(head, "Subject") or "Feasibility request",
+                "received_date": _hdr(head, "Date"),
+                "municipality": e.get("municipality") or e.get("county"), "state": e.get("state"),
+                "project": proj or None,
+                "request_type": e.get("request_type") or "feasibility_request",
+                "urgency": "high" if urgent else "normal",
+                "linked_project": (tagmap.get(d["doc_id"]) or [None])[0],
+                "has_action": d["doc_id"] in acted,
+                "has_reply": False,
+            })
+        out.sort(key=lambda x: (x["urgency"] != "high", x["doc_id"]))
+        return {"inbox": out, "total": len(out)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/today-priorities")
+async def today_priorities(domain_id: str = "compliance_due_diligence", project_id: str = ""):
+    """A single ranked 'act today' queue: overdue actions → pending reviews →
+    deadline risks (long license lead time / soon-expiring permit)."""
+    _require_cdd(domain_id)
+    _ensure_action_master_table()
+    _d = _get_domain_schemas(domain_id); raw = _d["schema_raw"]
+    _did = domain_id.replace("'", "''")
+    _pf  = project_id.strip()
+    _pfl = _pf.replace("'", "''")
+    from datetime import date, timedelta
+    import re as _re
+    today = date.today().isoformat()
+    soon  = (date.today() + timedelta(days=60)).isoformat()
+    items: list = []
+    try:
+        proj_clause = f" AND project_id = '{_pfl}'" if _pf else ""
+        overdue = run_sql(f"""
+            SELECT action_id, action_type, description, CAST(due_date AS STRING) AS due_date,
+                   owner, project_id
+            FROM {CATALOG}.platform.action_master
+            WHERE domain_id='{_did}' AND (deleted IS NULL OR deleted=false)
+              AND due_date < DATE '{today}'
+              AND status NOT IN ('COMPLETED','CANCELLED','IGNORED'){proj_clause}
+            ORDER BY due_date ASC LIMIT 50
+        """, timeout_secs=30) or []
+        for a in overdue:
+            items.append({"kind":"overdue","severity":"high",
+                          "title": (a.get("action_type") or "Action").replace("_"," ").title() + " — overdue",
+                          "detail": a.get("description"), "project": a.get("project_id"),
+                          "date": a.get("due_date"), "action_id": a.get("action_id")})
+
+        review = run_sql(f"""
+            SELECT action_id, action_type, description, owner, project_id
+            FROM {CATALOG}.platform.action_master
+            WHERE domain_id='{_did}' AND (deleted IS NULL OR deleted=false)
+              AND status='PENDING_VERIFICATION'{proj_clause}
+            LIMIT 50
+        """, timeout_secs=30) or []
+        for a in review:
+            items.append({"kind":"review","severity":"medium",
+                          "title": (a.get("action_type") or "Action").replace("_"," ").title() + " — awaiting review",
+                          "detail": a.get("description"), "project": a.get("project_id"),
+                          "date": None, "action_id": a.get("action_id")})
+
+        pv = _parse_val_sql
+        risk = run_sql(f"""
+            SELECT doc_id,
+                   MAX({pv("CASE WHEN field_name='lead_time' THEN field_value END")})       AS lead_time,
+                   MAX({pv("CASE WHEN field_name='expiration_date' THEN field_value END")}) AS expiration_date,
+                   MAX({pv("CASE WHEN field_name='municipality' THEN field_value END")})    AS municipality,
+                   MAX({pv("CASE WHEN field_name='store_number' THEN field_value END")})    AS store_number,
+                   MAX({pv("CASE WHEN field_name='project_id' THEN field_value END")})      AS project_id,
+                   MAX({pv("CASE WHEN field_name='license_type' THEN field_value END")})    AS license_type
+            FROM {CATALOG}.{raw}.extracted_fields GROUP BY doc_id
+        """, timeout_secs=30) or []
+        for r in risk:
+            proj = (r.get("store_number") or r.get("project_id") or "").strip()
+            if _pf and proj != _pf:
+                continue
+            lead = r.get("lead_time") or ""
+            exp  = (r.get("expiration_date") or "").strip()
+            det = None
+            if _re.search(r"\b(60|90|120|150|180)\b", lead):
+                det = f"License lead time {lead} — start the application early"
+            if exp and today <= exp <= soon:
+                det = f"License/permit expires {exp}"
+            if det:
+                items.append({"kind":"deadline","severity":"low",
+                              "title": ((r.get("license_type") or "License") + " deadline risk"
+                                        + (f" · {r.get('municipality')}" if r.get("municipality") else "")),
+                              "detail": det, "project": proj or None,
+                              "date": exp or None, "doc_id": r.get("doc_id")})
+
+        rank = {"overdue":0,"review":1,"deadline":2}
+        items.sort(key=lambda x: (rank.get(x["kind"],9), x.get("date") or "9999"))
+        return {"items": items, "total": len(items),
+                "counts": {"overdue":  sum(1 for i in items if i["kind"]=="overdue"),
+                           "review":   sum(1 for i in items if i["kind"]=="review"),
+                           "deadline": sum(1 for i in items if i["kind"]=="deadline")}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_sent_responses_checked = False
+def _ensure_sent_responses_table():
+    global _sent_responses_checked
+    if _sent_responses_checked:
+        return
+    run_sql(f"""
+        CREATE TABLE IF NOT EXISTS {CATALOG}.platform.sent_responses (
+            id STRING, domain_id STRING, doc_id STRING, project_id STRING,
+            to_addr STRING, subject STRING, body_html STRING,
+            sent_at TIMESTAMP, sent_by STRING
+        ) USING DELTA
+    """, timeout_secs=30)
+    _sent_responses_checked = True
+
+
+class SendDraftRequest(BaseModel):
+    domain_id: str = "compliance_due_diligence"
+    doc_id: str
+    draft: str
+    to: Optional[str] = None
+    subject: Optional[str] = None
+
+
+@router.post("/send-draft-reply")
+async def send_draft_reply(req: SendDraftRequest):
+    """SIMULATED send: wraps the draft in a RaceTrac-branded HTML email and LOGS it
+    to platform.sent_responses. Does NOT actually email anyone (demo)."""
+    _require_cdd(req.domain_id)
+    _ensure_sent_responses_table()
+    import uuid, html as _html
+    _did = req.domain_id.replace("'", "''")
+    _doc = (req.doc_id or "").replace("'", "''")
+    project = ""
+    try:
+        pr = run_sql(f"""
+            SELECT MIN(project_id) AS p FROM {CATALOG}.platform.document_project_tags
+            WHERE domain_id='{_did}' AND doc_id='{_doc}' AND scope='project' AND project_id IS NOT NULL
+        """, timeout_secs=15) or []
+        project = (pr[0].get("p") if pr else "") or ""
+    except Exception:
+        pass
+    subject = (req.subject or "RE: Feasibility Request")[:300]
+    to_addr = (req.to or "requester@racetrac.com")[:200]
+    body_esc = _html.escape(req.draft or "").replace("\n", "<br/>")
+    body_html = (
+        "<div style='font-family:Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb'>"
+        "<div style='background:#e11d2a;color:#fff;padding:14px 20px;font-weight:bold;font-size:15px'>"
+        "RaceTrac &middot; Store Development Compliance</div>"
+        f"<div style='padding:20px;color:#111;font-size:13px;line-height:1.6'>{body_esc}</div>"
+        "<div style='padding:12px 20px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#6b7280;font-size:11px'>"
+        "Generated by the Store Development Compliance Copilot &middot; demo — not actually emailed</div></div>"
+    )
+    rid = str(uuid.uuid4())
+    _bh = body_html.replace("'", "''"); _subj = subject.replace("'", "''")
+    _to = to_addr.replace("'", "''");  _proj = project.replace("'", "''")
+    try:
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.sent_responses
+            VALUES ('{rid}','{_did}','{_doc}','{_proj}','{_to}','{_subj}','{_bh}',
+                    current_timestamp(),'demo-user')
+        """, timeout_secs=30)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"sent": True, "simulated": True, "id": rid, "body_html": body_html,
+            "note": "Logged as sent (demo) — no email was actually delivered."}
+
+
+@router.get("/sent-responses")
+async def sent_responses(domain_id: str = "compliance_due_diligence"):
+    _require_cdd(domain_id)
+    _ensure_sent_responses_table()
+    _did = domain_id.replace("'", "''")
+    try:
+        rows = run_sql(f"""
+            SELECT id, doc_id, project_id, to_addr, subject,
+                   CAST(sent_at AS STRING) AS sent_at, sent_by
+            FROM {CATALOG}.platform.sent_responses
+            WHERE domain_id='{_did}' ORDER BY sent_at DESC LIMIT 100
+        """, timeout_secs=30) or []
+        return {"responses": rows, "total": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/project-timeline")
+async def project_timeline(domain_id: str = "compliance_due_diligence", project_id: str = ""):
+    """Per-project lifecycle arc built from EXISTING data: NPUC → feasibility request
+    → response → refresh (consultant) → regulatory change detected."""
+    _require_cdd(domain_id)
+    if not project_id.strip():
+        raise HTTPException(status_code=400, detail="project_id is required.")
+    _d = _get_domain_schemas(domain_id); raw = _d["schema_raw"]
+    _pf = project_id.strip()
+    import re as _re
+    try:
+        doc_ids = sorted(_project_doc_ids(domain_id, _pf))
+        pv = _parse_val_sql
+        erows = run_sql(f"""
+            SELECT doc_id,
+                   MAX({pv("CASE WHEN field_name='store_number' THEN field_value END")})  AS store_number,
+                   MAX({pv("CASE WHEN field_name='project_id' THEN field_value END")})    AS project_id,
+                   MAX({pv("CASE WHEN field_name='response_date' THEN field_value END")}) AS response_date,
+                   MAX({pv("CASE WHEN field_name='municipality' THEN field_value END")})  AS municipality
+            FROM {CATALOG}.{raw}.extracted_fields GROUP BY doc_id
+        """, timeout_secs=30) or []
+        emap = {r["doc_id"]: r for r in erows}
+        for r in erows:
+            p = (r.get("store_number") or r.get("project_id") or "").strip()
+            if p == _pf and r["doc_id"] not in doc_ids:
+                doc_ids.append(r["doc_id"])
+        milestones = [{"stage":"npuc","label":"New Property Under Contract","kind":"npuc","date":None,"doc_id":None}]
+        muni = ""
+        if doc_ids:
+            _in = ", ".join("'" + str(x).replace("'", "''") + "'" for x in doc_ids[:50])
+            pdocs = run_sql(f"""
+                SELECT doc_id, filename, doc_type, SUBSTRING(CAST(parsed_content AS STRING),1,600) AS head
+                FROM {CATALOG}.{raw}.parsed_documents WHERE doc_id IN ({_in})
+            """, timeout_secs=30) or []
+            def _date_from(head, doc_id):
+                txt = (head or "").replace("\\n", "\n").replace("\\r", "")
+                m = _re.search(r"^Date:\s*(.+)$", txt, _re.MULTILINE)
+                if m: return m.group(1).strip()
+                return (emap.get(doc_id, {}) or {}).get("response_date")
+            for d in pdocs:
+                dt = d.get("doc_type"); head = d.get("head") or ""
+                e = emap.get(d["doc_id"], {})
+                if e.get("municipality"): muni = e["municipality"]
+                if dt == "feasibility_request":
+                    milestones.append({"stage":"feasibility","label":"Feasibility Request","kind":"request",
+                                       "date": _date_from(head, d["doc_id"]), "doc_id": d["doc_id"]})
+                elif dt == "historical_response":
+                    milestones.append({"stage":"response","label":"Response Provided","kind":"response",
+                                       "date": e.get("response_date") or _date_from(head, d["doc_id"]), "doc_id": d["doc_id"]})
+                elif dt == "consultant_correspondence":
+                    milestones.append({"stage":"refresh","label":"Consultant / Refresh","kind":"refresh",
+                                       "date": _date_from(head, d["doc_id"]), "doc_id": d["doc_id"]})
+        # Change detected — a regulatory_change doc for this project's municipality
+        if muni:
+            token = next((t for t in ["dallas","hillsborough","tampa","atlanta","fulton"] if t in muni.lower()), "")
+            if token:
+                crows = run_sql(f"""
+                    SELECT doc_id, filename FROM {CATALOG}.{raw}.parsed_documents
+                    WHERE doc_type='regulatory_change'
+                      AND LOWER(SUBSTRING(CAST(parsed_content AS STRING),1,800)) LIKE '%{token}%'
+                    ORDER BY doc_id
+                    LIMIT 3
+                """, timeout_secs=20) or []
+                # A jurisdiction can have several regulatory_change docs (e.g. the Dallas
+                # alcohol ordinance .docx + the v2024→v2025 change .txt) — collapse to a
+                # single "Change Detected" milestone so the timeline reads cleanly.
+                if crows:
+                    milestones.append({"stage":"change","label":"Regulatory Change Detected","kind":"change",
+                                       "date": None, "doc_id": crows[0]["doc_id"]})
+        order = {"npuc":0,"request":1,"response":2,"refresh":3,"change":4}
+        milestones.sort(key=lambda m: (order.get(m["kind"],9), m.get("date") or ""))
+        return {"project_id": _pf, "municipality": muni, "milestones": milestones}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5362,13 +5775,14 @@ def _cdd_vs_search(vs_index: str, query: str, doc_type_filter=None, k: int = 6):
     """Vector Search helper → (context_text, cited_docs)."""
     try:
         from databricks.vector_search.client import VectorSearchClient
-        vsc = VectorSearchClient()
+        vsc = _get_vsc()
         index = vsc.get_index(VS_ENDPOINT, vs_index)
-        results = index.similarity_search(
+        results = _vs_search(
+            index,
             query_text=query,
             columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-            filters={"doc_type": doc_type_filter} if doc_type_filter else None,
             num_results=k,
+            filters={"doc_type": doc_type_filter} if doc_type_filter else None,
         )
         data = results.get("result", {}).get("data_array", [])
         cited, chunks = [], []
@@ -5902,6 +6316,11 @@ async def list_copilot_prompts(domain_id: str = "compliance"):
             WHERE domain_id = '{domain_id}'
             ORDER BY is_active DESC, created_at DESC
         """, timeout_secs=30) or []
+        # The SQL statement API returns BOOLEAN as the strings "true"/"false" (both
+        # truthy in Python/JS). Normalize to a real bool so the backend filter AND the
+        # frontend's active/delete branch behave correctly.
+        for r in rows:
+            r["is_active"] = str(r.get("is_active")).strip().lower() == "true"
         # Also attach the full text for the active prompt
         active = [r for r in rows if r.get("is_active")]
         active_full = None
@@ -6001,21 +6420,33 @@ async def update_copilot_prompt(prompt_id: str, req: CopilotPromptUpdateRequest)
 
 @router.delete("/copilot-prompts/{prompt_id}")
 async def delete_copilot_prompt(prompt_id: str):
-    """Permanently delete a prompt (cannot delete the active prompt)."""
+    """Permanently delete a prompt. Deleting the active prompt also clears the
+    domain's guiding prompt so recommended actions fall back to defaults."""
     _ensure_copilot_prompts_table()
+    _pid = prompt_id.replace("'", "''")
     try:
         rows = run_sql(f"""
             SELECT is_active, domain_id FROM {CATALOG}.platform.copilot_prompts
-            WHERE prompt_id = '{prompt_id}'
+            WHERE prompt_id = '{_pid}'
         """, timeout_secs=20) or []
         if not rows:
             raise HTTPException(status_code=404, detail="Prompt not found")
-        if rows[0].get("is_active"):
-            raise HTTPException(status_code=400, detail="Cannot delete the active prompt. Activate another prompt first.")
+        # NOTE: the SQL statement API returns booleans as the STRINGS "true"/"false",
+        # and a non-empty string is truthy — so compare explicitly, never `if is_active`.
+        was_active = str(rows[0].get("is_active")).strip().lower() == "true"
+        dom = (rows[0].get("domain_id") or "").replace("'", "''")
         run_sql(f"""
-            DELETE FROM {CATALOG}.platform.copilot_prompts WHERE prompt_id = '{prompt_id}'
+            DELETE FROM {CATALOG}.platform.copilot_prompts WHERE prompt_id = '{_pid}'
         """, timeout_secs=30)
-        return {"deleted": True, "prompt_id": prompt_id}
+        if was_active and dom:
+            run_sql(f"""
+                UPDATE {CATALOG}.platform.domain_configs
+                SET agent_system_prompt = NULL, updated_at = current_timestamp()
+                WHERE domain_id = '{dom}'
+            """, timeout_secs=30)
+            with _domain_cache_lock:
+                _domain_cache.pop(dom, None)
+        return {"deleted": True, "prompt_id": prompt_id, "was_active": was_active}
     except HTTPException:
         raise
     except Exception as e:
