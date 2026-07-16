@@ -643,16 +643,19 @@ try:
             "filename AS doc_id",
             "doc_type",
             "prep_result:document.source_uri::STRING AS source_uri",
-            "variant_explode(prep_result:document.contents) AS chunk",
+            # explode(CAST(... AS ARRAY<VARIANT>)) is portable across runtimes;
+            # variant_explode is not resolvable on some SQL/serverless runtimes and
+            # was forcing this whole block to throw → the manual fallback always ran.
+            "explode(CAST(prep_result:document.contents AS ARRAY<VARIANT>)) AS chunk",
         )
         .selectExpr(
             "doc_id",
             "doc_type",
             "source_uri",
-            "chunk.value:chunk_id::STRING         AS chunk_id",
-            "chunk.value:chunk_position::INT      AS chunk_position",
-            "chunk.value:chunk_to_retrieve::STRING AS chunk_to_retrieve",
-            "chunk.value:chunk_to_embed::STRING    AS chunk_to_embed",
+            "chunk:chunk_id::STRING         AS chunk_id",
+            "chunk:chunk_position::INT      AS chunk_position",
+            "chunk:chunk_to_retrieve::STRING AS chunk_to_retrieve",
+            "chunk:chunk_to_embed::STRING    AS chunk_to_embed",
         )
         .filter(F.length(F.col("chunk_to_retrieve")) > 30)
     )
@@ -1058,7 +1061,11 @@ for doc_type, gold_df in gold_dfs.items():
 from functools import reduce
 from pyspark.sql import DataFrame
 if all_fields:
-    union_df = reduce(DataFrame.union, all_fields)
+    # Call union as an INSTANCE method via a lambda. `reduce(DataFrame.union, …)`
+    # invokes the unbound classic-class method, which forces the `_jdf` JVM path and
+    # fails on serverless (JVM_ATTRIBUTE_NOT_SUPPORTED); the lambda dispatches to the
+    # Spark Connect implementation instead.
+    union_df = reduce(lambda a, b: a.union(b), all_fields)
     union_df.write.mode("append").option("mergeSchema", "true").saveAsTable(f"{CATALOG}.{SCHEMA_RAW}.extracted_fields")
     print(f"Appended: {CATALOG}.{SCHEMA_RAW}.extracted_fields  ({union_df.count()} rows)")
 
