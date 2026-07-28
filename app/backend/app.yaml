@@ -30,10 +30,6 @@ env:
   value: vectors
 - name: DOCINTEL_SCHEMA_AGT
   value: agents
-- name: DOCINTEL_VS_ENDPOINT
-  value: docintel-vs-endpoint
-- name: DOCINTEL_VS_INDEX
-  value: jai_docintel.vectors.docintel_docs_index
 - name: DOCINTEL_AGENT_MODEL
   value: databricks-claude-sonnet-4-5
 runtime: python_3.10
