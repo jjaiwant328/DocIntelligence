@@ -305,6 +305,36 @@ _VS_STOPWORDS = {
 }
 
 
+# Escape character used in the ILIKE ... ESCAPE clause below. Deliberately NOT a
+# backslash: a backslash escape char collides with Spark's own string-literal
+# backslash handling, making the doubling ambiguous. '!' has no special meaning
+# in a SQL string literal, so the escaping is unambiguous and testable.
+_LIKE_ESCAPE = "!"
+
+
+def _sql_like_lit(s, max_len: int = 8000) -> str:
+    """Escape a value for safe inline use inside a single-quoted LIKE/ILIKE
+    pattern with `ESCAPE '!'`.
+
+    Neutralizes the LIKE wildcards `%` and `_` (and the escape char `!` itself)
+    so user-controlled input can't widen the match, then applies `_sql_lit` for
+    quote/backslash safety of the surrounding SQL literal. `!`-escaping must run
+    BEFORE `_sql_lit` so the added `!` prefixes aren't themselves quote-escaped.
+    """
+    v = str(s or "")[:max_len]
+    v = v.replace(_LIKE_ESCAPE, _LIKE_ESCAPE + _LIKE_ESCAPE)  # escape the escape char first
+    v = v.replace("%", _LIKE_ESCAPE + "%").replace("_", _LIKE_ESCAPE + "_")
+    # v may have grown past max_len; pass its full length so _sql_lit does not
+    # re-truncate and split an escape pair.
+    return _sql_lit(v, len(v))
+
+
+# Valid Unity Catalog schema identifier: letters, digits, underscore (no dots,
+# no quoting metacharacters). Used to validate the schema_vec before it is
+# interpolated into a table name.
+_SCHEMA_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _vs_keywords(query: str, limit: int = 12) -> list:
     """Tokenize a natural-language query into distinct ranking keywords.
 
@@ -339,6 +369,12 @@ def _vs_search(vec_schema: str, query: str, doc_type_filter: str = None,
     callers still get grounding context instead of nothing.
     """
     empty = {"result": {"data_array": []}}
+
+    # Validate the schema identifier before interpolating it into a table name.
+    if not vec_schema or not _SCHEMA_IDENT_RE.match(str(vec_schema)):
+        print(f"[_vs_search] invalid vec_schema {vec_schema!r} — refusing to query")
+        return empty
+
     table = f"{CATALOG}.{vec_schema}.document_chunks"
     dt_clause = ""
     if doc_type_filter:
@@ -350,17 +386,19 @@ def _vs_search(vec_schema: str, query: str, doc_type_filter: str = None,
     try:
         if kws:
             # Per-keyword match count + full-phrase bonus, highest score first.
+            # LIKE wildcards (% and _) in user input are escaped via _sql_like_lit
+            # + ESCAPE '!' so they match literally and can't widen the search.
             score_terms = " + ".join(
-                f"(CASE WHEN chunk_to_retrieve ILIKE '%{_sql_lit(kw, 100)}%' THEN 1 ELSE 0 END)"
+                f"(CASE WHEN chunk_to_retrieve ILIKE '%{_sql_like_lit(kw, 100)}%' ESCAPE '{_LIKE_ESCAPE}' THEN 1 ELSE 0 END)"
                 for kw in kws
             )
-            phrase = _sql_lit(query, 400)
+            phrase = _sql_like_lit(query, 400)
             sql = f"""
                 SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve
                 FROM (
                     SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve, chunk_position,
                            ({score_terms}) AS kw_score,
-                           (CASE WHEN chunk_to_retrieve ILIKE '%{phrase}%' THEN 2 ELSE 0 END) AS phrase_score
+                           (CASE WHEN chunk_to_retrieve ILIKE '%{phrase}%' ESCAPE '{_LIKE_ESCAPE}' THEN 2 ELSE 0 END) AS phrase_score
                     FROM {table}
                     WHERE chunk_to_retrieve IS NOT NULL {dt_clause}
                 )
@@ -615,7 +653,6 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     _domain = _get_domain_schemas(domain_id)
     _raw = _domain["schema_raw"]
     _vec_schema = _domain.get("schema_vec", "vectors")
-    _domain_vs_index = f"{CATALOG}.{_vec_schema}.{domain_id}_docs_index"
 
     _base_prompt = _domain.get("agent_system_prompt") or (
         f"You are the {domain_id.replace('_', ' ').title()} AI assistant. "
@@ -627,7 +664,7 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
     # ── Compliance Due Diligence: four-agent tool-calling agent ──────────────
     if domain_id == CDD_DOMAIN_ID:
-        return _cdd_agent_query(req, domain_id, _domain, _base_prompt, _domain_vs_index)
+        return _cdd_agent_query(req, domain_id, _domain, _base_prompt)
 
     # ── Supply chain: full UC function agent ─────────────────────────────────
     if domain_id == "supply_chain":
@@ -4478,16 +4515,22 @@ def _cdd_intake(domain_id: str, request_text: str) -> dict:
     }
 
 
-def _cdd_vs_search(vs_index: str, query: str, doc_type_filter=None, k: int = 6):
+def _cdd_vs_search(domain_id: str, query: str, doc_type_filter=None, k: int = 6):
     """Keyword retrieval helper → (context_text, cited_docs).
 
-    Routes through the SQL `_vs_search` shim over document_chunks. The legacy
-    `vs_index` arg is kept for caller compatibility — its middle component is the
-    `schema_vec` (e.g. 'jai_docintel.vectors.cdd_docs_index' → 'vectors'); this
-    fixes the prior CDD gap where a VS outage returned nothing (no fallback)."""
+    Routes through the SQL `_vs_search` shim over the CURRENT domain's
+    `document_chunks` table. The `schema_vec` is resolved from the domain config
+    (`_get_domain_schemas(domain_id)["schema_vec"]`) — the same source every
+    other call-site uses — so a domain whose chunks live in its own schema (e.g.
+    compliance_due_diligence → `jai_docintel.compliance_due_diligence.document_chunks`)
+    is queried correctly, NOT a global `vectors` schema. This also gives CDD the
+    keyword fallback it previously lacked. If schema_vec cannot be resolved we
+    fail hard (log + empty) rather than silently querying the wrong schema."""
     try:
-        parts = (vs_index or "").split(".")
-        vec_schema = parts[1] if len(parts) >= 2 else SCH_VEC
+        vec_schema = _get_domain_schemas(domain_id).get("schema_vec")
+        if not vec_schema:
+            print(f"[_cdd_vs_search] no schema_vec resolved for domain '{domain_id}' — skipping retrieval")
+            return "", []
         results = _vs_search(vec_schema, query, doc_type_filter=doc_type_filter, k=k)
         data = results.get("result", {}).get("data_array", [])
         cited, chunks = [], []
@@ -4504,16 +4547,14 @@ def _cdd_vs_search(vs_index: str, query: str, doc_type_filter=None, k: int = 6):
 
 
 # ── Agent Tool 2: Research ────────────────────────────────────────────────────
-def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
-                  vs_index: str = None) -> dict:
+def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "") -> dict:
     """Retrieve municipality requirements/licenses via keyword search over
     document_chunks, enriched with the ontology `Municipality DEFINES ...` edges."""
     dom = _get_domain_schemas(domain_id)
     raw = dom["schema_raw"]
     ont = dom.get("schema_ont") or raw
-    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
     query = f"requirements and licenses to open a store in {municipality} {requirement_type}".strip()
-    context_text, cited = _cdd_vs_search(vs_index, query)
+    context_text, cited = _cdd_vs_search(domain_id, query)
 
     # Ontology: Municipality DEFINES requirement/license edges
     defines: list = []
@@ -4567,17 +4608,16 @@ def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
 
 
 # ── Agent Tool 3: Historical Knowledge ────────────────────────────────────────
-def _cdd_history(domain_id: str, municipality: str, vs_index: str = None) -> dict:
+def _cdd_history(domain_id: str, municipality: str) -> dict:
     """"Have we handled this municipality before?" — keyword search over prior
     responses plus `Response`/`HAS_HISTORY_OF` edges, returning cited prior answers with dates."""
     dom = _get_domain_schemas(domain_id)
     raw = dom["schema_raw"]
     ont = dom.get("schema_ont") or raw
-    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
     query = f"prior feasibility response history for {municipality}"
-    context_text, cited = _cdd_vs_search(vs_index, query, doc_type_filter="historical_response")
+    context_text, cited = _cdd_vs_search(domain_id, query, doc_type_filter="historical_response")
     if not context_text:  # fall back to an unfiltered search
-        context_text, cited = _cdd_vs_search(vs_index, query)
+        context_text, cited = _cdd_vs_search(domain_id, query)
 
     priors: list = []
     try:
@@ -4852,7 +4892,7 @@ async def regulatory_change_history(domain_id: str = CDD_DOMAIN_ID, limit: int =
 
 # ── The CDD agent: four tools orchestrated inside the existing agent_query ─────
 def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
-                     base_prompt: str, vs_index: str) -> dict:
+                     base_prompt: str) -> dict:
     """Build a tool-calling agent whose tools ARE the four CDD 'agents'
     (Intake / Research / History / Action) plus change detection. Falls back to
     a direct-LLM answer over document context if the agent stack is unavailable."""
@@ -4872,13 +4912,13 @@ def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
             """Retrieve the regulatory requirements and licenses for a municipality
             (e.g. Tampa FL, Dallas TX). Uses keyword search over the domain
             document_chunks plus the ontology 'Municipality DEFINES' edges. Cite doc IDs."""
-            return json.dumps(_cdd_research(domain_id, municipality, requirement_type, vs_index))
+            return json.dumps(_cdd_research(domain_id, municipality, requirement_type))
 
         @tool
         def municipality_history(municipality: str) -> str:
             """Answer 'have we handled this municipality before?'. Returns prior
             responses/correspondence with their dates and cited document IDs."""
-            return json.dumps(_cdd_history(domain_id, municipality, vs_index))
+            return json.dumps(_cdd_history(domain_id, municipality))
 
         @tool
         def create_tracked_action(description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
@@ -4920,7 +4960,7 @@ def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
         }
     except Exception as e:
         # Graceful fallback: direct LLM over SQL keyword document context
-        context_text, cited = _cdd_vs_search(vs_index, req.question)
+        context_text, cited = _cdd_vs_search(domain_id, req.question)
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
             human = req.question
