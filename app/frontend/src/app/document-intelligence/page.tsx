@@ -1407,7 +1407,6 @@ const PIPELINE_STAGES = [
     { id: "extract",   label: "Extract Document Content",  desc: "Read parsed output, join content tables",            icon: "📝",  est_ms: 60_000  },
     { id: "classify",  label: "Classify & Extract Fields", desc: "ai_classify + ai_extract per document type",         icon: "🏷️", est_ms: 180_000 },
     { id: "graph",     label: "Build Knowledge Graph",     desc: "Persist gold tables, extracted_fields, entities",    icon: "🕸️",  est_ms: 60_000  },
-    { id: "index",     label: "Index for Semantic Search", desc: "ai_prep_search → document_chunks for vector search", icon: "🔍",  est_ms: 90_000  },
     { id: "agent",     label: "Register AI Agent",         desc: "Log model in MLflow, register in Unity Catalog",     icon: "🤖",  est_ms: 30_000  },
 ];
 
@@ -1420,7 +1419,6 @@ const TASK_STAGE_MAP: Record<string, string> = {
     task_extract: "extract", extract: "extract",
     task_classify:"classify",classify:"classify",
     task_graph:   "graph",   graph:   "graph",
-    task_index:   "index",   index:   "index",   vector_search: "index",
     task_agent:   "agent",   agent:   "agent",
 };
 
@@ -2146,9 +2144,8 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                     { icon: "📄", label: "Parse Documents (AI)",      text: "Auto Loader reads new files from your volume. PDFs and images are processed with ai_parse_document (produces a VARIANT). TXT files are read directly and wrapped in a compatible VARIANT. Already-seen files are skipped automatically." },
                                     { icon: "📝", label: "Extract Document Content",  text: "Reads parsed output from the Bronze table (parsed_documents_raw). De-duplicates, applies volume filter, and joins raw text content for classification." },
                                     { icon: "🏷️", label: "Classify & Extract Fields","text": "ai_classify assigns a document type label to each document. For documents matching a configured schema, ai_extract pulls structured fields (e.g. violation_code, deadline, supplier_name). Documents without a schema go through universal schema discovery." },
-                                    { icon: "🕸️", label: "Build Knowledge Graph",    text: "Writes classified, extracted documents to parsed_documents (Silver). Persists per-doc-type gold tables (gold_health_inspection_report, gold_permit, etc.) and a unified extracted_fields table for ontology mapping." },
-                                    { icon: "🔍", label: "Index for Semantic Search", text: "ai_prep_search chunks each document into context-enriched search passages. Results are written to document_chunks and synced to the Vector Search index for RAG-powered search and the AI Agent." },
-                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this subject area so it can answer questions grounded in the newly processed documents." },
+                                    { icon: "🕸️", label: "Build Knowledge Graph",    text: "Writes classified, extracted documents to parsed_documents (Silver). Persists per-doc-type gold tables (gold_health_inspection_report, gold_permit, etc.) and a unified extracted_fields table for ontology mapping. ai_prep_search also chunks each document into document_chunks for semantic retrieval." },
+                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this subject area so it can answer questions grounded in the newly processed documents. Semantic search is served at query time by ai_similarity over document_chunks — no index to build or sync." },
                                 ].map(s => (
                                     <div key={s.label} className="flex gap-2 items-start">
                                         <span className="text-base shrink-0 mt-0.5">{s.icon}</span>
@@ -2169,8 +2166,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                     { name: `jai_docintel.${domainId}.parsed_documents`,  desc: "All processed documents with doc_type, raw_text, and parsed VARIANT." },
                                     { name: `jai_docintel.${domainId}.extracted_fields`,  desc: "All structured fields extracted per document, in long format (field_name, field_value)." },
                                     { name: `jai_docintel.${domainId}.gold_{doc_type}`,   desc: "Per-doc-type wide tables with each extraction field as a column. Created automatically for each doc type processed." },
-                                    { name: `jai_docintel.vectors.document_chunks`,       desc: "ai_prep_search chunks for semantic search. Fed to Vector Search index." },
-                                    { name: `jai_docintel.vectors.${domainId}_docs_index`,"desc": "Databricks Vector Search index — powers semantic search and the AI Agent." },
+                                    { name: `jai_docintel.${domainId}.document_chunks`,   desc: "ai_prep_search chunks. Ranked at query time by ai_similarity for semantic search and the AI Agent." },
                                     { name: "jai_docintel.platform.file_processing_log",  desc: "Deduplication log. Files already processed (status=success) are never re-processed in batch mode." },
                                     { name: `jai_docintel.${domainId}.suggested_extractions`, desc: "Schema discovery output for documents without a configured schema — review to improve your Schema Setup." },
                                 ].map(t => (

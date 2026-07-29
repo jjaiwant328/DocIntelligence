@@ -117,18 +117,9 @@ resources:
             base_parameters:
               domain_id: "${var.domain_id}"
 
-        - task_key: vector_search
-          depends_on:
-            - task_key: idp_pipeline
-          notebook_task:
-            notebook_path: ./notebooks/05_vector_search.py
-            base_parameters:
-              domain_id: "${var.domain_id}"
-
         - task_key: agent
           depends_on:
             - task_key: ontology_mapping
-            - task_key: vector_search
           notebook_task:
             notebook_path: ./notebooks/06_agent.py
             base_parameters:
@@ -148,7 +139,7 @@ resources:
     # runs only the pipeline tasks that pick up newly uploaded documents
     docintel_process_docs:
       name: "DocIntelligence — Process New Documents"
-      description: "Processes newly uploaded documents: parse → classify/extract → ontology → vector search → agent registration. Safe to run on-demand or on a schedule."
+      description: "Processes newly uploaded documents: parse → classify/extract → ontology → agent registration. Safe to run on-demand or on a schedule."
       parameters:
         - name: domain_id
           default: supply_chain
@@ -205,18 +196,9 @@ resources:
             base_parameters:
               domain_id: "{{job.parameters.domain_id}}"
 
-        - task_key: vector_search
-          depends_on:
-            - task_key: idp_pipeline
-          notebook_task:
-            notebook_path: ./notebooks/05_vector_search.py
-            base_parameters:
-              domain_id: "{{job.parameters.domain_id}}"
-
         - task_key: agent
           depends_on:
             - task_key: ontology_mapping
-            - task_key: vector_search
           notebook_task:
             notebook_path: ./notebooks/06_agent.py
             base_parameters:
