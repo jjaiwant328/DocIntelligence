@@ -14,6 +14,7 @@ Adds supply chain intelligence endpoints on top of the base app:
 """
 
 import os
+import re
 import json
 import threading
 from fastapi import APIRouter, HTTPException
@@ -32,8 +33,6 @@ SCH_ONT   = os.getenv("DOCINTEL_SCHEMA_ONT", "ontology")
 SCH_AGT   = os.getenv("DOCINTEL_SCHEMA_AGT", "agents")
 SCH_VEC   = os.getenv("DOCINTEL_SCHEMA_VEC", "vectors")
 WH_ID     = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
-VS_ENDPOINT = os.getenv("DOCINTEL_VS_ENDPOINT", "docintel-vs-endpoint")
-VS_INDEX    = os.getenv("DOCINTEL_VS_INDEX", "jai_docintel.vectors.docintel_docs_index")
 AGENT_MODEL = os.getenv("DOCINTEL_AGENT_MODEL", "databricks-claude-sonnet-4-5")
 
 # Ordered fallback list tried when the primary model endpoint is unavailable
@@ -295,6 +294,66 @@ def run_sql(query: str, timeout_secs: int = 50) -> list:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── ai_similarity retrieval (replaces Vector Search similarity_search) ─────────
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_ident(name: str) -> str:
+    """Validate a catalog/schema/table identifier before interpolating it into
+    SQL. Guards against injection via the (config-derived) schema/catalog names —
+    only bare, unquoted SQL identifiers are allowed. Raises ValueError otherwise."""
+    if not name or not _IDENT_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
+
+
+def _vs_search(query: str, schema_vec: str, k: int = 6, doc_type_filter: str = None) -> list:
+    """Query-side semantic retrieval over the per-domain `document_chunks` table.
+
+    Ranks chunks with `ai_similarity(chunk_to_retrieve, <query>)` (ORDER BY score
+    DESC, LIMIT k). Returns rows shaped `[chunk_id, doc_id, doc_type,
+    chunk_to_retrieve]` — the exact 4-column shape the former Vector Search
+    `similarity_search(...).result.data_array` produced — so every call-site stays
+    drop-in (row[1]=doc_id, row[2]=doc_type, row[3]=chunk_to_retrieve).
+
+    Security: the user `query` is passed through `_sql_lit` (single-quote/backslash
+    escaping + length cap) and the catalog/schema identifiers through
+    `_safe_ident`. No raw untrusted string is concatenated into an identifier.
+
+    Graceful degradation: any SQL / ai_similarity failure returns `[]` (matching
+    the best-effort behavior all call-sites already assume) rather than 500-ing.
+    """
+    try:
+        q = (query or "").strip()
+        if not q:
+            return []
+        catalog = _safe_ident(CATALOG)
+        schema  = _safe_ident(schema_vec or "vectors")
+        lit = _sql_lit(q, 4000)
+        try:
+            k = max(1, min(int(k), 50))
+        except Exception:
+            k = 6
+        where = ""
+        if doc_type_filter:
+            where = f"WHERE doc_type = '{_sql_lit(doc_type_filter, 200)}'"
+        rows = run_sql(f"""
+            SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve
+            FROM {catalog}.{schema}.document_chunks
+            {where}
+            ORDER BY ai_similarity(chunk_to_retrieve, '{lit}') DESC
+            LIMIT {k}
+        """, timeout_secs=30) or []
+        return [
+            [r.get("chunk_id"), r.get("doc_id"), r.get("doc_type"), r.get("chunk_to_retrieve")]
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[_vs_search] ai_similarity retrieval failed: {e}")
+        return []
+
+
 def _unwrap_value(raw):
     """Normalize an ai_extract field_value into a clean scalar string (or None).
 
@@ -517,7 +576,6 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     _domain = _get_domain_schemas(domain_id)
     _raw = _domain["schema_raw"]
     _vec_schema = _domain.get("schema_vec", "vectors")
-    _domain_vs_index = f"{CATALOG}.{_vec_schema}.{domain_id}_docs_index"
 
     _base_prompt = _domain.get("agent_system_prompt") or (
         f"You are the {domain_id.replace('_', ' ').title()} AI assistant. "
@@ -529,7 +587,7 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
     # ── Compliance Due Diligence: four-agent tool-calling agent ──────────────
     if domain_id == CDD_DOMAIN_ID:
-        return _cdd_agent_query(req, domain_id, _domain, _base_prompt, _domain_vs_index)
+        return _cdd_agent_query(req, domain_id, _domain, _base_prompt, _vec_schema)
 
     # ── Supply chain: full UC function agent ─────────────────────────────────
     if domain_id == "supply_chain":
@@ -544,22 +602,12 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
             vs_tool_available = False
             try:
-                from databricks.vector_search.client import VectorSearchClient
                 from langchain_core.tools import tool
-                vsc = VectorSearchClient()
-                vsc.get_index(VS_ENDPOINT, _domain_vs_index)  # validate
 
                 @tool
                 def search_documents(query: str, doc_type_filter: str = None) -> str:
-                    """Search supply chain documents semantically using Vector Search."""
-                    index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-                    results = index.similarity_search(
-                        query_text=query,
-                        columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                        filters={"doc_type": doc_type_filter} if doc_type_filter else None,
-                        num_results=5,
-                    )
-                    data = results.get("result", {}).get("data_array", [])
+                    """Search supply chain documents semantically using ai_similarity ranking."""
+                    data = _vs_search(query, _vec_schema, k=5, doc_type_filter=doc_type_filter)
                     if not data:
                         return "No relevant documents found."
                     return "\n\n---\n\n".join(
@@ -602,17 +650,9 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
         context_text = ""
         cited_docs: list = []
 
-        # 1. Try VS search first
+        # 1. Try semantic (ai_similarity) search first
         try:
-            from databricks.vector_search.client import VectorSearchClient
-            vsc = VectorSearchClient()
-            index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-            results = index.similarity_search(
-                query_text=req.question,
-                columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                num_results=6,
-            )
-            data = results.get("result", {}).get("data_array", [])
+            data = _vs_search(req.question, _vec_schema, k=6)
             if data:
                 chunks = []
                 for row in data:
@@ -1178,7 +1218,6 @@ TASK_LABELS = {
     "workflow_extract": "Extract Document Content",
     "idp_pipeline":     "Classify & Extract Fields",
     "ontology_mapping": "Build Knowledge Graph",
-    "vector_search":    "Index for Semantic Search",
     "agent":            "Register AI Agent",
     "demo_scenario":    "Demo Scenario Validation",
 }
@@ -1308,7 +1347,7 @@ async def search_docs(
     """
     Search parsed documents for a domain.
     - keyword: SQL ILIKE on raw_text and filename — always available
-    - semantic: Vector Search similarity_search on document_chunks — requires VS index
+    - semantic: ai_similarity ranking over document_chunks — no VS index required
     Returns a uniform list of { doc_id, filename, doc_type, snippet, score? }
     """
     q = q.strip()
@@ -1323,16 +1362,9 @@ async def search_docs(
 
         if mode == "semantic":
             try:
-                from databricks.vector_search.client import VectorSearchClient
-                vsc = VectorSearchClient()
-                vs_index_name = f"{CATALOG}.{_vec}.{domain_id}_docs_index"
-                index = vsc.get_index(VS_ENDPOINT, vs_index_name)
-                vs_res = index.similarity_search(
-                    query_text=q,
-                    columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                    num_results=limit,
-                )
-                data = vs_res.get("result", {}).get("data_array", [])
+                data = _vs_search(q, _vec, k=limit)
+                if not data:
+                    raise RuntimeError("no ai_similarity results")
                 # Map chunk rows back to filenames via a batch SQL join
                 doc_ids = list({row[1] for row in data if len(row) > 1})
                 filenames: dict = {}
@@ -3612,32 +3644,24 @@ async def copilot_query(req: CopilotQueryRequest):
             "'[no source]'. Do not put filenames anywhere except in these brackets."
         )
 
-        # Retrieve relevant doc context via Vector Search (best-effort)
+        # Retrieve relevant doc context via ai_similarity ranking (best-effort)
         context_text = ""
         cited_docs: list = []
         try:
-            from databricks.vector_search.client import VectorSearchClient
             _domain = _get_domain_schemas(req.domain_id)
             _vec = _domain["schema_vec"]
-            domain_index = f"{CATALOG}.{_vec}.{req.domain_id}_docs_index"
-            vsc = VectorSearchClient()
-            index = vsc.get_index(VS_ENDPOINT, domain_index)
-            results = index.similarity_search(
-                query_text=req.query,
-                columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                num_results=6,
-            )
-            data = results.get("result", {}).get("data_array", [])
-            if data:
-                chunks = []
-                for row in data:
-                    doc_id = row[1] if len(row) > 1 else "unknown"
-                    doc_type = row[2] if len(row) > 2 else ""
-                    chunk = row[3] if len(row) > 3 else ""
-                    if doc_id not in cited_docs:
-                        cited_docs.append(doc_id)
-                    chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
-                context_text = "\n\n---\n\n".join(chunks)
+            data = _vs_search(req.query, _vec, k=6)
+            if not data:
+                raise RuntimeError("no ai_similarity results")
+            chunks = []
+            for row in data:
+                doc_id = row[1] if len(row) > 1 else "unknown"
+                doc_type = row[2] if len(row) > 2 else ""
+                chunk = row[3] if len(row) > 3 else ""
+                if doc_id not in cited_docs:
+                    cited_docs.append(doc_id)
+                chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
+            context_text = "\n\n---\n\n".join(chunks)
         except Exception as vs_err:
             # Fall back: pull recent parsed doc text snippets from SQL
             try:
@@ -4411,43 +4435,35 @@ def _cdd_intake(domain_id: str, request_text: str) -> dict:
     }
 
 
-def _cdd_vs_search(vs_index: str, query: str, doc_type_filter=None, k: int = 6):
-    """Vector Search helper → (context_text, cited_docs)."""
-    try:
-        from databricks.vector_search.client import VectorSearchClient
-        vsc = VectorSearchClient()
-        index = vsc.get_index(VS_ENDPOINT, vs_index)
-        results = index.similarity_search(
-            query_text=query,
-            columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-            filters={"doc_type": doc_type_filter} if doc_type_filter else None,
-            num_results=k,
-        )
-        data = results.get("result", {}).get("data_array", [])
-        cited, chunks = [], []
-        for r in data:
-            if len(r) < 4:
-                continue
-            doc_id = r[1]
-            if doc_id not in cited:
-                cited.append(doc_id)
-            chunks.append(f"[Source: {r[1]} | Type: {r[2]}]\n{r[3]}")
-        return "\n\n---\n\n".join(chunks), cited
-    except Exception:
-        return "", []
+def _cdd_vs_search(schema_vec: str, query: str, doc_type_filter=None, k: int = 6):
+    """Semantic retrieval helper → (context_text, cited_docs).
+
+    Ranks the domain's `document_chunks` with ai_similarity via `_vs_search`
+    (per-domain schema, NOT hardcoded). Returns "" / [] on any failure."""
+    data = _vs_search(query, schema_vec, k=k, doc_type_filter=doc_type_filter)
+    cited, chunks = [], []
+    for r in data:
+        if len(r) < 4:
+            continue
+        doc_id = r[1]
+        if doc_id not in cited:
+            cited.append(doc_id)
+        chunks.append(f"[Source: {r[1]} | Type: {r[2]}]\n{r[3]}")
+    return "\n\n---\n\n".join(chunks), cited
 
 
 # ── Agent Tool 2: Research ────────────────────────────────────────────────────
 def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
-                  vs_index: str = None) -> dict:
-    """Retrieve municipality requirements/licenses via Vector Search over the
-    domain index, enriched with the ontology `Municipality DEFINES ...` edges."""
+                  schema_vec: str = None) -> dict:
+    """Retrieve municipality requirements/licenses via ai_similarity ranking over
+    the per-domain `document_chunks`, enriched with the ontology
+    `Municipality DEFINES ...` edges."""
     dom = _get_domain_schemas(domain_id)
     raw = dom["schema_raw"]
     ont = dom.get("schema_ont") or raw
-    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
+    _vec = schema_vec or dom.get("schema_vec", "vectors")
     query = f"requirements and licenses to open a store in {municipality} {requirement_type}".strip()
-    context_text, cited = _cdd_vs_search(vs_index, query)
+    context_text, cited = _cdd_vs_search(_vec, query)
 
     # Ontology: Municipality DEFINES requirement/license edges
     defines: list = []
@@ -4501,17 +4517,18 @@ def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
 
 
 # ── Agent Tool 3: Historical Knowledge ────────────────────────────────────────
-def _cdd_history(domain_id: str, municipality: str, vs_index: str = None) -> dict:
-    """"Have we handled this municipality before?" — VS over prior responses plus
-    `Response`/`HAS_HISTORY_OF` edges, returning cited prior answers with dates."""
+def _cdd_history(domain_id: str, municipality: str, schema_vec: str = None) -> dict:
+    """"Have we handled this municipality before?" — ai_similarity over prior
+    responses plus `Response`/`HAS_HISTORY_OF` edges, returning cited prior
+    answers with dates."""
     dom = _get_domain_schemas(domain_id)
     raw = dom["schema_raw"]
     ont = dom.get("schema_ont") or raw
-    vs_index = vs_index or f"{CATALOG}.{dom.get('schema_vec', 'vectors')}.{domain_id}_docs_index"
+    _vec = schema_vec or dom.get("schema_vec", "vectors")
     query = f"prior feasibility response history for {municipality}"
-    context_text, cited = _cdd_vs_search(vs_index, query, doc_type_filter="historical_response")
+    context_text, cited = _cdd_vs_search(_vec, query, doc_type_filter="historical_response")
     if not context_text:  # fall back to an unfiltered search
-        context_text, cited = _cdd_vs_search(vs_index, query)
+        context_text, cited = _cdd_vs_search(_vec, query)
 
     priors: list = []
     try:
@@ -4786,7 +4803,7 @@ async def regulatory_change_history(domain_id: str = CDD_DOMAIN_ID, limit: int =
 
 # ── The CDD agent: four tools orchestrated inside the existing agent_query ─────
 def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
-                     base_prompt: str, vs_index: str) -> dict:
+                     base_prompt: str, schema_vec: str) -> dict:
     """Build a tool-calling agent whose tools ARE the four CDD 'agents'
     (Intake / Research / History / Action) plus change detection. Falls back to
     a direct-LLM answer over document context if the agent stack is unavailable."""
@@ -4806,13 +4823,13 @@ def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
             """Retrieve the regulatory requirements and licenses for a municipality
             (e.g. Tampa FL, Dallas TX). Uses Vector Search over the domain document
             index plus the ontology 'Municipality DEFINES' edges. Cite doc IDs."""
-            return json.dumps(_cdd_research(domain_id, municipality, requirement_type, vs_index))
+            return json.dumps(_cdd_research(domain_id, municipality, requirement_type, schema_vec))
 
         @tool
         def municipality_history(municipality: str) -> str:
             """Answer 'have we handled this municipality before?'. Returns prior
             responses/correspondence with their dates and cited document IDs."""
-            return json.dumps(_cdd_history(domain_id, municipality, vs_index))
+            return json.dumps(_cdd_history(domain_id, municipality, schema_vec))
 
         @tool
         def create_tracked_action(description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
@@ -4854,7 +4871,7 @@ def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
         }
     except Exception as e:
         # Graceful fallback: direct LLM over VS/SQL document context
-        context_text, cited = _cdd_vs_search(vs_index, req.question)
+        context_text, cited = _cdd_vs_search(schema_vec, req.question)
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
             human = req.question
