@@ -312,10 +312,15 @@ if domain_id == "compliance_due_diligence":
     )
     RETURNS STRING
     COMMENT 'Intake agent: classifies a feasibility request into the CDD document labels.'
-    RETURN ai_classify(request_text, ARRAY(
-        'feasibility_request', 'municipal_requirement', 'alcohol_license',
-        'tobacco_license', 'business_license', 'zoning_document', 'permit',
-        'historical_response', 'regulatory_change', 'consultant_correspondence'))
+    -- NOTE: inside a SQL UDF body, ai_classify's `labels` argument compiles as
+    -- STRING (the ARRAY<STRING> overload only resolves in top-level queries), so
+    -- a bare ARRAY(...) here raises AI_FUNCTION_COMPILATION_ERROR. Pass the labels
+    -- as a JSON array string and unwrap :response[0] to keep RETURNS STRING = a
+    -- single plain label (same pattern as ai_classify in 03_idp_pipeline.py).
+    RETURN ai_classify(
+        request_text,
+        '["feasibility_request", "municipal_requirement", "alcohol_license", "tobacco_license", "business_license", "zoning_document", "permit", "historical_response", "regulatory_change", "consultant_correspondence"]'
+    ):response[0]::STRING
     """)
     print("CDD Tool 1: cdd_classify_request ✓")
 
