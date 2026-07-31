@@ -5522,8 +5522,9 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         for r in stats:
             s = r.get("status","?")
             p = r.get("priority","?")
-            by_status[s]    = by_status.get(s,0) + r.get("cnt",0)
-            by_priority[p]  = by_priority.get(p,0) + r.get("cnt",0)
+            # run_sql returns all values as strings; coerce cnt to int before adding
+            by_status[s]    = by_status.get(s,0) + int(r.get("cnt") or 0)
+            by_priority[p]  = by_priority.get(p,0) + int(r.get("cnt") or 0)
 
         return {
             "domain_id":    domain_id,
