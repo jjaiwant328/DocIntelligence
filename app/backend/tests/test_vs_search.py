@@ -213,6 +213,41 @@ def test_vs_search_doc_type_filter():
     assert "WHERE doc_type = 'historical_response'" in captured["query"]
 
 
+# ── get_action_reports count coercion ────────────────────────────────────────────
+def test_action_reports_coerces_string_counts():
+    """run_sql returns cnt as strings (e.g. "6"); aggregation must not raise
+    TypeError and must produce correct int totals."""
+    import asyncio
+
+    def fake_run_sql(query, timeout_secs=30):
+        if "GROUP BY status, priority" in query:
+            # API-shaped rows: every value is a raw string
+            return [
+                {"status": "OPEN", "priority": "HIGH", "cnt": "6"},
+                {"status": "OPEN", "priority": "LOW", "cnt": "3"},
+                {"status": "CLOSED", "priority": "HIGH", "cnt": "5"},
+            ]
+        return []  # overdue + all_actions queries
+
+    orig_run_sql = dr.run_sql
+    orig_master = dr._ensure_action_master_table
+    orig_hist = dr._ensure_action_history_table
+    dr.run_sql = fake_run_sql
+    dr._ensure_action_master_table = lambda: None
+    dr._ensure_action_history_table = lambda: None
+    try:
+        result = asyncio.run(dr.get_action_reports("compliance_due_diligence"))
+    finally:
+        dr.run_sql = orig_run_sql
+        dr._ensure_action_master_table = orig_master
+        dr._ensure_action_history_table = orig_hist
+
+    assert result["by_status"] == {"OPEN": 9, "CLOSED": 5}
+    assert result["by_priority"] == {"HIGH": 11, "LOW": 3}
+    assert result["total"] == 14
+    assert all(isinstance(v, int) for v in result["by_status"].values())
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
