@@ -1,0 +1,19 @@
+id: generate_recommendation
+version: "1.0"
+category: reasoning
+description: Produce a proceed/hold recommendation with evidence and proposed actions.
+adapter: llm_schema
+implementation: prompts/generate_recommendation.md
+inputs:
+  risk:        {type: string, required: true}
+  gaps:        {type: array, required: true}
+  requirements: {type: array, required: false}
+outputs:
+  recommendation:   {type: string}
+  proposed_actions: {type: array}
+  evidence:         {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/generate_recommendation/

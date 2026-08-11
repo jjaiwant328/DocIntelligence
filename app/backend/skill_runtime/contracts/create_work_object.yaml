@@ -1,0 +1,19 @@
+id: create_work_object
+version: "1.0"
+category: workflow
+description: Create a generic WorkObject (review/case/...) for a domain + project.
+adapter: internal_call
+implementation: create_work_object
+inputs:
+  domain:  {type: string, required: true}
+  project: {type: string, required: true}
+  type:    {type: string, required: false}
+  title:   {type: string, required: false}
+outputs:
+  work_object_id: {type: string}
+  work_object:    {type: object}
+required_capabilities: [sql]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false, writes: true}
+test_method: tests/skills/create_work_object/

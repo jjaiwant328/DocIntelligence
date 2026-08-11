@@ -1,0 +1,17 @@
+id: create_action
+version: "1.0"
+category: workflow
+description: Create DRAFT actions in platform.action_master for the proposed actions.
+adapter: internal_call
+implementation: create_action
+inputs:
+  domain:           {type: string, required: true}
+  proposed_actions: {type: array, required: true}
+  project:          {type: string, required: false}
+outputs:
+  action_ids: {type: array}
+required_capabilities: [sql]
+ontology_dependencies: [Action]
+evidence_requirements: optional
+side_effects: {creates_actions: true, writes: true}
+test_method: tests/skills/create_action/

@@ -1,0 +1,19 @@
+id: assess_risk
+version: "1.0"
+category: reasoning
+description: Assess overall risk of proceeding given the gaps and evidence.
+adapter: llm_schema
+implementation: prompts/assess_risk.md
+inputs:
+  gaps:     {type: array, required: true}
+  evidence: {type: array, required: false}
+outputs:
+  risk:       {type: enum, values: [low, medium, high]}
+  rationale:  {type: string}
+  confidence: {type: number}
+  evidence:   {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/assess_risk/

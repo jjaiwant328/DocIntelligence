@@ -1,0 +1,16 @@
+id: identify_gap
+version: "1.0"
+category: reasoning
+description: From assessed requirements, list the gaps (unsatisfied or unevidenced).
+adapter: llm_schema
+implementation: prompts/identify_gap.md
+inputs:
+  assessments: {type: array, required: true}
+outputs:
+  gaps:     {type: array}
+  evidence: {type: array}
+required_capabilities: [llm]
+ontology_dependencies: [Requirement]
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/identify_gap/

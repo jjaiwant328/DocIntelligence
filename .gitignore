@@ -6,3 +6,4 @@ app/.git/
 node_modules/
 app/frontend/.next/
 app/frontend/out/
+.venv-test/

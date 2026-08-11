@@ -1,0 +1,34 @@
+# Skill Registry — declares skills + points at contract files.
+# 8 enabled (the Due-Diligence slice); remaining docs skills registered as
+# enabled: false stubs so the registry shape is complete and Scope A is additive.
+skills:
+  # --- understanding ---
+  - {id: classify_document,        version: "1.0", category: understanding,  enabled: false}
+  - {id: extract_entities,         version: "1.0", category: understanding,  enabled: false}
+  - {id: extract_requirements,     version: "1.0", category: understanding,  enabled: true}
+  - {id: extract_dates,            version: "1.0", category: understanding,  enabled: false}
+  - {id: summarize_document,       version: "1.0", category: understanding,  enabled: false}
+  # --- retrieval ---
+  - {id: search_documents,         version: "1.0", category: retrieval,      enabled: false}
+  - {id: find_related_documents,   version: "1.0", category: retrieval,      enabled: false}
+  - {id: find_prior_decisions,     version: "1.0", category: retrieval,      enabled: false}
+  - {id: find_supporting_evidence, version: "1.0", category: retrieval,      enabled: true}
+  # --- reasoning ---
+  - {id: assess_requirement,       version: "1.0", category: reasoning,      enabled: true}
+  - {id: identify_gap,             version: "1.0", category: reasoning,      enabled: true}
+  - {id: assess_risk,              version: "1.0", category: reasoning,      enabled: true}
+  - {id: detect_change,            version: "1.0", category: reasoning,      enabled: false}
+  - {id: determine_impact,         version: "1.0", category: reasoning,      enabled: false}
+  - {id: build_timeline,           version: "1.0", category: reasoning,      enabled: false}
+  - {id: generate_recommendation,  version: "1.0", category: reasoning,      enabled: true}
+  # --- workflow ---
+  - {id: create_work_object,       version: "1.0", category: workflow,       enabled: true}
+  - {id: create_finding,           version: "1.0", category: workflow,       enabled: false}
+  - {id: create_action,            version: "1.0", category: workflow,       enabled: true}
+  - {id: assign_action,            version: "1.0", category: workflow,       enabled: false}
+  - {id: escalate_action,          version: "1.0", category: workflow,       enabled: false}
+  - {id: verify_evidence,          version: "1.0", category: workflow,       enabled: false}
+  - {id: close_action,             version: "1.0", category: workflow,       enabled: false}
+  # --- communication ---
+  - {id: generate_response,        version: "1.0", category: communication,  enabled: false}
+  - {id: generate_executive_summary, version: "1.0", category: communication, enabled: false}
