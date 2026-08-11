@@ -1,17 +1,15 @@
 id: assess_requirement
 version: "1.0"
 category: reasoning
-description: Judge whether a single requirement is satisfied by the available evidence.
+description: Judge which requirements are satisfied by the available evidence.
 adapter: llm_schema
 implementation: prompts/assess_requirement.md
 inputs:
-  requirement: {type: string, required: true}
-  evidence:    {type: array, required: true}
+  requirements: {type: array, required: true}
+  evidence:     {type: array, required: true}
 outputs:
-  status:     {type: enum, values: [satisfied, gap, insufficient_evidence]}
-  rationale:  {type: string}
-  confidence: {type: number}
-  evidence:   {type: array}
+  assessments: {type: array}
+  evidence:    {type: array}
 required_capabilities: [llm]
 ontology_dependencies: [Requirement]
 evidence_requirements: required

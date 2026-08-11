@@ -16,8 +16,8 @@ def _ctx():
     return Context(
         internal={"create_work_object": lambda i, c: ({"work_object_id": "W-1",
                                                        "work_object": {}}, [])},
-        chat_completion=lambda p: '{"status":"satisfied","rationale":"ok",'
-                                  '"confidence":0.9,"evidence":[]}',
+        chat_completion=lambda p: '{"assessments":[{"requirement":"zoning",'
+                                  '"status":"satisfied","confidence":0.9}],"evidence":[]}',
         resolve_model=lambda: "databricks-claude-sonnet-4-5",
     )
 
@@ -44,8 +44,8 @@ def test_llm_skill_records_model():
     logger = ExecutionLogger()
     d = Dispatcher(REG, _ctx(), logger=logger)
     r = d.invoke("assess_requirement",
-                 {"requirement": "zoning", "evidence": [{"document_id": "D"}]})
-    assert r.status == "satisfied"
+                 {"requirements": ["zoning"], "evidence": [{"document_id": "D"}]})
+    assert r.status != "error" and r.outputs["assessments"][0]["status"] == "satisfied"
     assert logger.records[0].model == "databricks-claude-sonnet-4-5"
 
 
