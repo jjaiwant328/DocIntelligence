@@ -1,0 +1,60 @@
+# Due Diligence template — ordered skill graph (config, not code).
+# Same template runs Compliance and Supply Chain; only the domain config differs.
+# inputs_map values: "$domain.<key>", "$input.<key>", "$steps.<step_id>.<output_key>",
+# or a literal.
+id: due_diligence
+version: "1.0"
+approval_before: create_action
+steps:
+  - id: create_review
+    skill: create_work_object
+    inputs_map:
+      domain:  $input.domain
+      project: $input.project
+      type:    review
+
+  - id: identify_requirements
+    skill: extract_requirements
+    inputs_map:
+      domain:                 $input.domain
+      project:                $input.project
+      candidate_requirements: $domain.requirements
+      context:                $input.context
+
+  - id: collect_evidence
+    skill: find_supporting_evidence
+    inputs_map:
+      query:      $input.project
+      schema_vec: $input.schema_vec
+      k:          6
+
+  - id: evaluate
+    skill: assess_requirement
+    inputs_map:
+      requirement: $steps.identify_requirements.requirements
+      evidence:    $steps.collect_evidence.evidence
+
+  - id: identify_gaps
+    skill: identify_gap
+    inputs_map:
+      assessments: $steps.evaluate
+
+  - id: risk
+    skill: assess_risk
+    inputs_map:
+      gaps:     $steps.identify_gaps.gaps
+      evidence: $steps.collect_evidence.evidence
+
+  - id: recommendation
+    skill: generate_recommendation
+    inputs_map:
+      risk:         $steps.risk.risk
+      gaps:         $steps.identify_gaps.gaps
+      requirements: $steps.identify_requirements.requirements
+
+  - id: actions
+    skill: create_action
+    inputs_map:
+      domain:           $input.domain
+      project:          $input.project
+      proposed_actions: $steps.recommendation.proposed_actions
