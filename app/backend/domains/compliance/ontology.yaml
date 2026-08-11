@@ -1,0 +1,8 @@
+entities:
+  - Project
+  - Municipality
+  - Regulation
+  - License
+  - Requirement
+  - Response
+  - Action

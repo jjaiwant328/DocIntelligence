@@ -1,0 +1,7 @@
+entities:
+  - Supplier
+  - Product
+  - Shipment
+  - Certification
+  - QualityAudit
+  - Action
