@@ -113,8 +113,62 @@ class WorkflowRunRequest(BaseModel):
 
 @router.get("/skills")
 async def list_skills():
-    return {"skills": _REGISTRY.list(enabled_only=False),
-            "enabled": _REGISTRY.enabled_ids()}
+    rows = _REGISTRY.list(enabled_only=False)
+    detailed = []
+    for r in rows:
+        item = dict(r)
+        try:
+            c = _REGISTRY.get(r["id"])
+            item.update({"description": c.description, "adapter": c.adapter,
+                         "inputs": c.inputs, "outputs": c.outputs,
+                         "evidence_requirements": c.evidence_requirements,
+                         "side_effects": c.side_effects})
+        except Exception:
+            pass
+        detailed.append(item)
+    return {"skills": detailed, "enabled": _REGISTRY.enabled_ids()}
+
+
+@router.get("/templates")
+async def list_templates():
+    import os as _os
+    import yaml as _yaml
+    from workflow_engine.engine import DEFAULT_TEMPLATES_DIR
+    out = []
+    for fn in sorted(_os.listdir(DEFAULT_TEMPLATES_DIR)):
+        if not fn.endswith(".yaml"):
+            continue
+        with open(_os.path.join(DEFAULT_TEMPLATES_DIR, fn)) as f:
+            t = _yaml.safe_load(f)
+        out.append({"id": t["id"], "version": t.get("version"),
+                    "approval_before": t.get("approval_before"),
+                    "steps": [{"id": s["id"], "skill": s["skill"]} for s in t["steps"]]})
+    return {"templates": out}
+
+
+class SkillInvokeRequest(BaseModel):
+    skill: str
+    domain_id: str = "compliance"
+    inputs: dict = {}
+
+
+@router.post("/skill-invoke")
+async def skill_invoke(req: SkillInvokeRequest):
+    """Playground: invoke ONE skill directly with user-supplied inputs."""
+    import docintel_routes as routes
+    dom = domain_loader(req.domain_id)
+    logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
+                             catalog=routes.CATALOG)
+    try:
+        ensure_table(logger.run_sql, catalog=routes.CATALOG)
+    except Exception as e:
+        print(f"[skill-invoke] ensure_table failed: {e}")
+    ctx = build_live_context(dom.platform_domain_id)
+    dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
+    inputs = dict(req.inputs or {})
+    inputs.setdefault("schema_vec", dom.schema_vec)   # convenience for retrieval skills
+    result = dispatcher.invoke(req.skill, inputs)
+    return result.to_dict()
 
 
 @router.post("/workflow-run")
