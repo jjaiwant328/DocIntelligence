@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {assessments: [{requirement: zoning, status: gap}]}
+    fake: {model: '{"gaps":[{"requirement":"zoning","reason":"not satisfied"}],"evidence":[]}'}
+    expect: {status: ok, output_has: [gaps]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"gaps":[],"evidence":[]}'}
+    expect: {status: error, error_contains: assessments}
+  - name: invalid
+    inputs: {assessments: "nope"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {assessments: []}
+    fake: {model: '{"gaps":[],"evidence":[]}'}
+    expect: {status: ok, output_has: [gaps]}
+  - name: ambiguous
+    inputs: {assessments: [{requirement: x, status: insufficient_evidence}]}
+    fake: {model: '{"gaps":[{"requirement":"x","reason":"unclear"}],"evidence":[]}'}
+    expect: {status: ok, output_has: [gaps]}

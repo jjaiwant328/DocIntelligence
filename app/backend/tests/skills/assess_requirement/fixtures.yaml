@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {requirement: zoning, evidence: [{document_id: D1, source_text: "zoning approved"}]}
+    fake: {model: '{"status":"satisfied","rationale":"approved","confidence":0.9,"evidence":[{"document_id":"D1","source_text":"zoning approved","method":"reasoning"}]}'}
+    expect: {status: satisfied, confidence_present: true, min_evidence: 1}
+  - name: missing_input
+    inputs: {requirement: zoning}
+    fake: {model: '{"status":"gap","rationale":"x","confidence":0.5,"evidence":[]}'}
+    expect: {status: error, error_contains: evidence}
+  - name: invalid
+    inputs: {requirement: zoning, evidence: "not a list"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {requirement: alcohol_license, evidence: []}
+    fake: {model: '{"status":"insufficient_evidence","rationale":"no evidence","confidence":0.1,"evidence":[]}'}
+    expect: {status: insufficient_evidence, confidence_present: true}
+  - name: ambiguous
+    inputs: {requirement: environmental_permit, evidence: [{document_id: D2, source_text: "conflicting notes"}]}
+    fake: {model: '{"status":"gap","rationale":"conflicting","confidence":0.4,"evidence":[{"document_id":"D2","source_text":"conflicting notes","method":"reasoning"}]}'}
+    expect: {status: gap, confidence_present: true}

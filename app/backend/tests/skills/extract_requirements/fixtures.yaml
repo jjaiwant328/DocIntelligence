@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {domain: compliance, project: Store 1827, candidate_requirements: [zoning, alcohol_license]}
+    fake: {model: '{"requirements":["zoning","alcohol_license"],"evidence":[]}'}
+    expect: {status: ok, output_has: [requirements]}
+  - name: missing_input
+    inputs: {domain: compliance, project: Store 1827}
+    fake: {model: '{"requirements":[],"evidence":[]}'}
+    expect: {status: error, error_contains: candidate_requirements}
+  - name: invalid
+    inputs: {domain: compliance, project: Store 1827, candidate_requirements: "zoning"}
+    fake: {model: '{"requirements":[],"evidence":[]}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {domain: compliance, project: Store 1827, candidate_requirements: [zoning]}
+    fake: {model: '{"requirements":["zoning"],"evidence":[]}'}
+    expect: {status: ok, output_has: [requirements]}
+  - name: ambiguous
+    inputs: {domain: compliance, project: Store 1827, candidate_requirements: [zoning, business_license], context: unclear}
+    fake: {model: '{"requirements":["zoning","business_license"],"evidence":[]}'}
+    expect: {status: ok, output_has: [requirements]}
