@@ -171,6 +171,7 @@ class AgentQueryRequest(BaseModel):
     question: str
     chat_history: Optional[List[dict]] = []
     incident_ref: Optional[str] = None  # inject into system prompt for incident-focused queries
+    approve: bool = False               # confirm consequential deterministic-agent actions (ADR-003)
 
 class LogActionRequest(BaseModel):
     action_type: str          # e.g. "RECALL_NOTIFICATION", "SUPPLIER_CONTACT", "INSPECTION"
@@ -566,7 +567,21 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     Multi-domain AI agent query.
     - Supply chain: uses UC Function toolkit + VS (full agent executor)
     - All other domains: uses direct LLM + VS document context (same path as copilot-query)
+
+    ADR-003: when DOCINTEL_AGENT_DETERMINISTIC is truthy, the agent is demoted to
+    a thin caller — the LLM interprets intent only and the deterministic workflow
+    engine/skills do all orchestration. Any failure falls back to the legacy path.
     """
+    if os.getenv("DOCINTEL_AGENT_DETERMINISTIC", "").lower() in ("1", "true", "yes"):
+        try:
+            from skill_routes import deterministic_agent_answer
+            approve = bool(getattr(req, "approve", False))
+            return deterministic_agent_answer(
+                req.question, domain_id,
+                chat_history=req.chat_history, approve=approve)
+        except Exception as e:
+            print(f"[agent] deterministic path failed, falling back to legacy: {e}")
+
     try:
         from databricks_langchain import ChatDatabricks
         from langchain_core.messages import HumanMessage, SystemMessage
