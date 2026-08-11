@@ -32,4 +32,6 @@ env:
   value: agents
 - name: DOCINTEL_AGENT_MODEL
   value: databricks-claude-sonnet-4-5
+- name: DOCINTEL_AGENT_DETERMINISTIC
+  value: "true"
 runtime: python_3.10
