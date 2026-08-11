@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"work_object_id": "WO-1", "finding_type": "gap", "description": "x"}
+    fake: {internal_name: create_finding, internal_out: {"finding_id": "FND-1"}}
+    expect: {status: ok, output_has: ["finding_id"]}
+  - name: missing_input
+    inputs: {"finding_type": "gap", "description": "x"}
+    fake: {internal_name: create_finding, internal_out: {}}
+    expect: {status: error, error_contains: work_object_id}
+  - name: invalid
+    inputs: {"work_object_id": 123, "finding_type": "gap", "description": "x"}
+    fake: {internal_name: create_finding, internal_out: {}}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"work_object_id": "WO-1", "finding_type": "gap", "description": "x"}
+    fake: {internal_name: create_finding, internal_out: {"finding_id": "FND-1"}}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"work_object_id": "WO-1", "finding_type": "gap", "description": "x"}
+    fake: {internal_name: create_finding, internal_out: {"finding_id": "FND-1"}}
+    expect: {status: ok}

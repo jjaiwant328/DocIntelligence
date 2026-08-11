@@ -293,6 +293,160 @@ RETURN
 print(f"Tool (all domains): traverse_ontology ✓")
 
 # COMMAND ----------
+# MAGIC %md
+# MAGIC ### Compliance Due Diligence — the four "agents" as UC-function tools
+# MAGIC
+# MAGIC Additive, domain-gated. The generic tools above still register for this
+# MAGIC domain; these add store-development-specific reasoning the CDD agent uses
+# MAGIC (mirrors the LangChain tools wired in `docintel_routes.py`):
+# MAGIC Intake · Research · Historical Knowledge · Change detection.
+
+# COMMAND ----------
+
+if domain_id == "compliance_due_diligence":
+
+    # Tool: Intake — classify a feasibility request into the domain labels.
+    spark.sql(f"""
+    CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA_AGT}.cdd_classify_request(
+        request_text STRING COMMENT 'Raw feasibility/store-development request text or email body.'
+    )
+    RETURNS STRING
+    COMMENT 'Intake agent: classifies a feasibility request into the CDD document labels.'
+    -- NOTE: inside a SQL UDF body, ai_classify's `labels` argument compiles as
+    -- STRING (the ARRAY<STRING> overload only resolves in top-level queries), so
+    -- a bare ARRAY(...) here raises AI_FUNCTION_COMPILATION_ERROR. Pass the labels
+    -- as a JSON array string and unwrap :response[0] to keep RETURNS STRING = a
+    -- single plain label (same pattern as ai_classify in 03_idp_pipeline.py).
+    RETURN ai_classify(
+        request_text,
+        '["feasibility_request", "municipal_requirement", "alcohol_license", "tobacco_license", "business_license", "zoning_document", "permit", "historical_response", "regulatory_change", "consultant_correspondence"]'
+    ):response[0]::STRING
+    """)
+    print("CDD Tool 1: cdd_classify_request ✓")
+
+    # Tool: Research — requirements/licenses defined for a municipality.
+    spark.sql(f"""
+    CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA_AGT}.cdd_get_municipality_requirements(
+        municipality_input STRING COMMENT 'Municipality name, e.g. Tampa, Dallas, Atlanta.'
+    )
+    RETURNS TABLE (
+        doc_id           STRING,
+        doc_type         STRING,
+        requirement_type STRING,
+        license_type     STRING,
+        authority        STRING,
+        lead_time        STRING,
+        effective_date   STRING
+    )
+    COMMENT 'Research agent: municipal requirements and licenses for a municipality.'
+    RETURN
+        WITH d AS (
+          SELECT ef.doc_id, pd.doc_type,
+            MAX(CASE WHEN ef.field_name='municipality'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS municipality,
+            MAX(CASE WHEN ef.field_name='requirement_type'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS requirement_type,
+            MAX(CASE WHEN ef.field_name='license_type'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS license_type,
+            MAX(CASE WHEN ef.field_name='authority'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS authority,
+            MAX(CASE WHEN ef.field_name='lead_time'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS lead_time,
+            MAX(CASE WHEN ef.field_name='effective_date'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS effective_date
+          FROM {CATALOG}.{SCHEMA_RAW}.extracted_fields ef
+          JOIN {CATALOG}.{SCHEMA_RAW}.parsed_documents pd ON pd.doc_id = ef.doc_id
+          GROUP BY ef.doc_id, pd.doc_type
+        )
+        SELECT doc_id, doc_type, requirement_type, license_type,
+               authority, lead_time, effective_date
+        FROM d
+        WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER(CONCAT('%', municipality_input, '%'))
+        ORDER BY effective_date DESC NULLS LAST
+    """)
+    print("CDD Tool 2: cdd_get_municipality_requirements ✓")
+
+    # Tool: Historical Knowledge — prior responses for a municipality, with dates.
+    spark.sql(f"""
+    CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA_AGT}.cdd_get_municipality_history(
+        municipality_input STRING COMMENT 'Municipality name to look up prior responses for.'
+    )
+    RETURNS TABLE (
+        doc_id        STRING,
+        doc_type      STRING,
+        responder     STRING,
+        response_date STRING,
+        request_type  STRING
+    )
+    COMMENT 'Historical Knowledge agent: prior feasibility responses/correspondence with dates.'
+    RETURN
+        WITH d AS (
+          SELECT ef.doc_id, pd.doc_type,
+            MAX(CASE WHEN ef.field_name='municipality'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS municipality,
+            MAX(CASE WHEN ef.field_name='responder'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS responder,
+            MAX(CASE WHEN ef.field_name='response_date'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS response_date,
+            MAX(CASE WHEN ef.field_name='request_type'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS request_type
+          FROM {CATALOG}.{SCHEMA_RAW}.extracted_fields ef
+          JOIN {CATALOG}.{SCHEMA_RAW}.parsed_documents pd ON pd.doc_id = ef.doc_id
+          WHERE pd.doc_type IN ('historical_response','consultant_correspondence')
+          GROUP BY ef.doc_id, pd.doc_type
+        )
+        SELECT doc_id, doc_type, responder, response_date, request_type
+        FROM d
+        WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER(CONCAT('%', municipality_input, '%'))
+        ORDER BY response_date DESC NULLS LAST
+    """)
+    print("CDD Tool 3: cdd_get_municipality_history ✓")
+
+    # Tool: Change detection — versions of a requirement ordered by effective_date.
+    spark.sql(f"""
+    CREATE OR REPLACE FUNCTION {CATALOG}.{SCHEMA_AGT}.cdd_get_requirement_versions(
+        municipality_input     STRING COMMENT 'Municipality name.',
+        requirement_type_input STRING COMMENT 'Requirement or license type substring, e.g. alcohol.'
+    )
+    RETURNS TABLE (
+        doc_id           STRING,
+        requirement_type STRING,
+        license_type     STRING,
+        authority        STRING,
+        requirement      STRING,
+        effective_date   STRING
+    )
+    COMMENT 'Change-detection support: requirement versions ordered newest-first by effective_date.'
+    RETURN
+        WITH d AS (
+          SELECT ef.doc_id,
+            MAX(CASE WHEN ef.field_name='municipality'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS municipality,
+            MAX(CASE WHEN ef.field_name='requirement_type'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS requirement_type,
+            MAX(CASE WHEN ef.field_name='license_type'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS license_type,
+            MAX(CASE WHEN ef.field_name='authority'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS authority,
+            MAX(CASE WHEN ef.field_name='requirement'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS requirement,
+            MAX(CASE WHEN ef.field_name='effective_date'
+                THEN GET_JSON_OBJECT(CAST(ef.field_value AS STRING),'$.value') END) AS effective_date
+          FROM {CATALOG}.{SCHEMA_RAW}.extracted_fields ef
+          GROUP BY ef.doc_id
+        )
+        SELECT doc_id, requirement_type, license_type, authority, requirement, effective_date
+        FROM d
+        WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER(CONCAT('%', municipality_input, '%'))
+          AND (LOWER(COALESCE(requirement_type,'')) LIKE LOWER(CONCAT('%', requirement_type_input, '%'))
+            OR LOWER(COALESCE(license_type,''))     LIKE LOWER(CONCAT('%', requirement_type_input, '%')))
+        ORDER BY effective_date DESC NULLS LAST
+    """)
+    print("CDD Tool 4: cdd_get_requirement_versions ✓")
+    print("Note: the Action agent (create/track + escalation) is served by the "
+          "app backend via POST /action-master — no UC function needed.")
+
+# COMMAND ----------
 # MAGIC %md ## Step 2 — Verify UC Function Tools
 
 # COMMAND ----------
@@ -337,6 +491,30 @@ print("=== traverse_ontology ===")
 _sample_ent = spark.sql(f"SELECT entity_id FROM {CATALOG}.{SCHEMA_ONT}.entities LIMIT 1").collect()
 if _sample_ent:
     display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA_AGT}.traverse_ontology('{_sample_ent[0]['entity_id']}', NULL)"))
+
+if domain_id == "compliance_due_diligence":
+    # Best-effort verification of the CDD-specific tools against a sample municipality.
+    try:
+        _muni_row = spark.sql(f"""
+            SELECT GET_JSON_OBJECT(CAST(field_value AS STRING),'$.value') AS municipality
+            FROM {CATALOG}.{SCHEMA_RAW}.extracted_fields
+            WHERE field_name = 'municipality' LIMIT 1
+        """).collect()
+        _muni = (_muni_row[0]["municipality"] if _muni_row else "Dallas") or "Dallas"
+        print(f"=== CDD Tool: cdd_classify_request ===")
+        display(spark.sql(f"""
+            SELECT {CATALOG}.{SCHEMA_AGT}.cdd_classify_request(
+                'We are evaluating a new RaceTrac store in {_muni}. What licenses are required?'
+            ) AS request_type
+        """))
+        print(f"=== CDD Tool: cdd_get_municipality_requirements ({_muni}) ===")
+        display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA_AGT}.cdd_get_municipality_requirements('{_muni}')"))
+        print(f"=== CDD Tool: cdd_get_municipality_history ({_muni}) ===")
+        display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA_AGT}.cdd_get_municipality_history('{_muni}')"))
+        print(f"=== CDD Tool: cdd_get_requirement_versions ({_muni}, alcohol) ===")
+        display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA_AGT}.cdd_get_requirement_versions('{_muni}','alcohol')"))
+    except Exception as _e:
+        print(f"[cdd] tool verification skipped: {_e}")
 
 # COMMAND ----------
 # MAGIC %md ## Step 3 — Register a Lightweight MLflow Model Entry Point

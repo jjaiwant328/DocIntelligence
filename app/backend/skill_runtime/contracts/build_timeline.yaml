@@ -1,0 +1,16 @@
+id: build_timeline
+version: "1.0"
+category: reasoning
+description: Assemble a chronological timeline of events from extracted dates/facts.
+adapter: llm_schema
+implementation: prompts/build_timeline.md
+inputs:
+  events: {type: array, required: true}
+outputs:
+  timeline: {type: array}
+  evidence: {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/build_timeline/

@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {domain: compliance, project: Store 1827, proposed_actions: [{action_type: obtain_zoning, description: file, priority: high}]}
+    fake: {internal_name: create_action, internal_out: {action_ids: ["A-1"]}}
+    expect: {status: ok, output_has: [action_ids]}
+  - name: missing_input
+    inputs: {domain: compliance}
+    fake: {internal_name: create_action, internal_out: {}}
+    expect: {status: error, error_contains: proposed_actions}
+  - name: invalid
+    inputs: {domain: compliance, proposed_actions: "nope"}
+    fake: {internal_name: create_action, internal_out: {}}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {domain: compliance, project: S1, proposed_actions: []}
+    fake: {internal_name: create_action, internal_out: {action_ids: []}}
+    expect: {status: ok, output_has: [action_ids]}
+  - name: ambiguous
+    inputs: {domain: compliance, project: S1, proposed_actions: [{action_type: review}]}
+    fake: {internal_name: create_action, internal_out: {action_ids: ["A-2"]}}
+    expect: {status: ok, output_has: [action_ids]}

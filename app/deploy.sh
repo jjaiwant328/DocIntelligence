@@ -53,6 +53,9 @@ echo "🔨 Building Next.js frontend..."
   cp out/supply-chain/index.html   out/supply-chain.html   2>/dev/null || true
   cp out/agent/index.html          out/agent.html           2>/dev/null || true
   cp out/setup/index.html          out/setup.html           2>/dev/null || true
+  cp out/workflow/index.html       out/workflow.html        2>/dev/null || true
+  cp out/playground/index.html     out/playground.html      2>/dev/null || true
+  cp out/builder/index.html        out/builder.html         2>/dev/null || true
 
   echo "🧹 Cleaning old static files from workspace..."
   databricks workspace delete "$APP_FOLDER_IN_WORKSPACE/static" --recursive --profile "$PROFILE" 2>/dev/null || true

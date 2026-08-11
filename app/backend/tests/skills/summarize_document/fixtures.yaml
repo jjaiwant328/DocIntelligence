@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"text": "long doc text here"}
+    fake: {model: '{"summary":"short summary","evidence":[]}'}
+    expect: {status: ok, output_has: ["summary"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"summary":"short summary","evidence":[]}'}
+    expect: {status: error, error_contains: text}
+  - name: invalid
+    inputs: {"text": 123}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"text": "long doc text here"}
+    fake: {model: '{"summary":"short summary","evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"text": "long doc text here"}
+    fake: {model: '{"summary":"short summary","evidence":[]}'}
+    expect: {status: ok}

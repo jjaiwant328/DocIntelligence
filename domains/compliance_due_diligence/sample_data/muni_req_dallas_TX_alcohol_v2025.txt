@@ -1,0 +1,100 @@
+DALLAS DEVELOPMENT SERVICES — ALCOHOL LICENSE REQUIREMENTS SUMMARY
+VERSION: v2025 (Effective January 1, 2025 — Ordinance No. 32891)
+
+Document ID: MUNI-REQ-2025-SD203-DALLAS-ALCOHOL-V2025
+Document Type: municipal_requirement
+Project ID: SD-2025-203
+Store Number: 5203
+Address: 6800 Greenville Ave, Dallas, TX 75231
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+Requirement Type: alcohol_license_requirements
+Authority: City of Dallas Development Services; Texas Alcoholic Beverage Commission (TABC)
+Prepared By: Kendra Patel, Senior Development Analyst
+Response Date: 2025-02-20
+Effective Date: 2025-01-01
+Expiration Date: 2025-12-31
+Source Document: FEASY-EMAIL-2025-SD203
+Responder: Kendra Patel
+
+IMPORTANT — REGULATORY CHANGE NOTICE
+This version (v2025) reflects a material change from the prior requirements summary
+(MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024 dated July 2024).
+City of Dallas Ordinance No. 32891, effective January 1, 2025, imposes new
+distance-based requirements for off-premise alcohol retail licenses.
+See Section 1.5 (Distance Exception Certificate) and the regulatory change document
+REGULATORY-CHANGE-DALLAS-ALCOHOL-V2024-V2025.
+
+DALLAS ALCOHOL LICENSE REQUIREMENTS — v2025
+
+SECTION 1 — TABC LICENSE TYPE AND PROCESS
+License Required: Beer Retailer Off-Premise (BF) [same as v2024]
+Issuing Authority: Texas Alcoholic Beverage Commission (TABC) [same]
+License Fee: $394 biennial [same]
+
+SECTION 1.5 — NEW (v2025): CITY OF DALLAS DISTANCE EXCEPTION CERTIFICATE
+*** CHANGE FROM v2024 — NEW REQUIREMENT EFFECTIVE JANUARY 1, 2025 ***
+
+Dallas City Ordinance No. 32891 (adopted November 14, 2024; effective January 1, 2025)
+amends Dallas City Code § 6-20 to require a "Distance Exception Certificate" (DEC) for
+any new off-premise beer/wine retailer license application where the proposed premises
+is located within 1,000 feet of:
+  (a) A public, private, or charter school (K–12)
+  (b) A church, synagogue, mosque, or other recognized place of worship
+  (c) A licensed daycare or childcare facility
+
+DISTANCE EXCEPTION CERTIFICATE — PROCESS
+If the proposed premises is within 1,000 ft of any of the above protected uses:
+  - Applicant MUST obtain a Distance Exception Certificate from Dallas Development Services
+    PRIOR TO submitting the TABC application.
+  - Application form: Dallas DEC Form 2025-ALC (available at dallascityhall.com/development)
+  - Required attachments:
+    (a) Certified site survey showing distances to all protected uses within 1,000 ft
+    (b) Neighborhood impact statement (2-page max)
+    (c) Letter of non-objection from protected use(s) within 500 ft, if obtainable
+  - Dallas Development Services review: 30–45 days
+  - Dallas City Council vote required if any protected use within 500 ft objects
+
+DISTANCE COMPLIANCE — SITE 6800 GREENVILLE AVE (v2025)
+*** DISTANCE EXCEPTION REQUIRED ***
+Site survey confirms:
+  Nearest school: Sudie L. Williams Elementary — 820 ft (< 1,000 ft threshold) — DEC REQUIRED
+  Nearest church: First United Methodist Dallas — 940 ft (< 1,000 ft threshold) — DEC REQUIRED
+
+Both protected uses are within 1,000 ft. Applicant must obtain Distance Exception Certificate
+before TABC BF application can be submitted.
+
+If both protected uses cooperate (letter of non-objection), DEC can be approved
+administratively. If either objects, Dallas City Council vote required (adds 60–90 days).
+
+REVISED PROCESS TIMELINE (v2025 — with DEC required)
+Day 1: Commission site survey and prepare DEC application
+Day 1–14: Site survey completed; DEC application prepared
+Day 14–15: Submit DEC application to Dallas Development Services
+Day 15–60: Dallas Development Services review (30–45 days, or longer if City Council required)
+Day 60–61: DEC issued (assuming administrative track, no Council vote)
+Day 61: Submit TABC BF application
+Day 61–91: TABC public notice period (30 days)
+Day 91–106: TABC review and approval
+Total Lead Time: 14–16 weeks (vs. 5–6 weeks under v2024)
+Additional Lead Time vs. v2024: 8–10 weeks
+
+SECTION 2 — ALL OTHER REQUIREMENTS (unchanged from v2024)
+- TABC seller/server training: Required for all selling employees
+- City of Dallas Certificate of Occupancy: Required before TABC license activated
+- TCEQ PST registration: Required for USTs
+- Texas Comptroller tobacco permit: Required for tobacco sales
+
+SECTION 3 — IMPACT ON SD-2025-203
+This site REQUIRES a Distance Exception Certificate before TABC application.
+Recommend immediate outreach to Sudie L. Williams Elementary and First United Methodist
+to request letters of non-objection.
+If both non-objection letters are obtained, DEC can be processed administratively (~45 days).
+If not, budget for City Council vote process (add 60–90 days) — potential store opening delay
+from Q4 2025 to Q1 2026.
+
+ACTION REQUIRED: File DEC application immediately. Do not submit TABC application until DEC is in hand.
+
+Prepared By: Kendra Patel    Date: February 20, 2025

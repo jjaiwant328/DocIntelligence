@@ -1,0 +1,19 @@
+id: detect_change
+version: "1.0"
+category: reasoning
+description: Compare two documents/versions and identify material semantic changes.
+adapter: llm_schema
+implementation: prompts/detect_change.md
+inputs:
+  current:  {type: string, required: true}
+  previous: {type: string, required: true}
+outputs:
+  changed:          {type: boolean}
+  changes:          {type: array}
+  affected_entities: {type: array}
+  evidence:         {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/detect_change/

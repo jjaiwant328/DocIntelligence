@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"text": "effective 2025-01-01"}
+    fake: {model: '{"dates":[{"date":"2025-01-01","role":"effective"}],"evidence":[]}'}
+    expect: {status: ok, output_has: ["dates"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"dates":[{"date":"2025-01-01","role":"effective"}],"evidence":[]}'}
+    expect: {status: error, error_contains: text}
+  - name: invalid
+    inputs: {"text": 123}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"text": "effective 2025-01-01"}
+    fake: {model: '{"dates":[{"date":"2025-01-01","role":"effective"}],"evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"text": "effective 2025-01-01"}
+    fake: {model: '{"dates":[{"date":"2025-01-01","role":"effective"}],"evidence":[]}'}
+    expect: {status: ok}

@@ -1,0 +1,12 @@
+{
+  "feasibility_request":      "A feasibility request email or memo asking whether a new store location is viable — includes site address, market, municipality, requester, and project/store number.",
+  "municipal_requirement":    "A document describing regulatory requirements imposed by a municipality or county for operating a fuel/convenience retail store — zoning rules, setbacks, operational conditions.",
+  "alcohol_license":          "A state or local alcohol beverage license application, approval, or renewal document for a retail store (beer/wine/spirits).",
+  "tobacco_license":          "A tobacco dealer permit, license, or renewal document issued to a retail store by a state or county authority.",
+  "business_license":         "A general business license, occupational license, or business tax receipt issued by a municipality or county allowing commercial operations at a store location.",
+  "zoning_document":          "A zoning certificate, zoning verification letter, conditional-use permit, or variance approval related to a store's land-use classification.",
+  "permit":                   "Any operational permit required for a store opening or continued operation — including building permits, signage permits, fire/safety permits, or fuel-dispensing permits.",
+  "historical_response":      "A prior formal or informal response to a feasibility request or municipal inquiry — captures what was answered, by whom, and for which municipality/project.",
+  "regulatory_change":        "A notice, ordinance amendment, or memo documenting a change in municipal or state regulatory requirements that affects store opening or operations.",
+  "consultant_correspondence":"Correspondence (email, letter, memo) between the company and an external consultant, attorney, or government liaison regarding store-development feasibility or compliance."
+}

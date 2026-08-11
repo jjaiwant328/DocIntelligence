@@ -178,22 +178,11 @@ def create_domain_pipeline_job(w: WorkspaceClient, domain_id: str, cfg: dict) ->
                     source=Source.WORKSPACE,
                 ),
             ),
-            # ── Step 5: Vector Search ─────────────────────────────────────────
-            Task(
-                task_key="vector_search",
-                depends_on=[TaskDependency(task_key="idp_pipeline")],
-                notebook_task=NotebookTask(
-                    notebook_path=f"{NB_BASE}/notebooks/05_vector_search",
-                    base_parameters={"domain_id": "{{job.parameters.domain_id}}"},
-                    source=Source.WORKSPACE,
-                ),
-            ),
-            # ── Step 6: AI Agent ──────────────────────────────────────────────
+            # ── Step 5: AI Agent ──────────────────────────────────────────────
             Task(
                 task_key="agent",
                 depends_on=[
                     TaskDependency(task_key="ontology_mapping"),
-                    TaskDependency(task_key="vector_search"),
                 ],
                 notebook_task=NotebookTask(
                     notebook_path=f"{NB_BASE}/notebooks/06_agent",
@@ -274,7 +263,9 @@ def grant_app_permissions(w: WorkspaceClient, job_id: int):
     try:
         acl = [JobAccessControlRequest(
             service_principal_name=APP_SERVICE_PRINCIPAL,
-            permission_level=PermissionLevel.CAN_MANAGE_RUN,
+            # CAN_MANAGE (not just CAN_MANAGE_RUN) so the app can edit the job
+            # schedule from the Process Documents UI, not only trigger runs.
+            permission_level=PermissionLevel.CAN_MANAGE,
         )]
         w.jobs.update_permissions(job_id=job_id, access_control_list=acl)
         print(f"  Granted CAN_MANAGE_RUN to app SP ({APP_SERVICE_PRINCIPAL})")

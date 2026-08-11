@@ -1,0 +1,77 @@
+REGULATORY CHANGE DETECTED
+
+Document ID: REGULATORY-CHANGE-DALLAS-ALCOHOL-V2024-V2025
+Document Type: regulatory_change
+Market: Dallas TX
+State: TX
+Municipality: City of Dallas
+County: Dallas County
+Requirement Type: alcohol_license_requirements
+Authority: City of Dallas Development Services
+Effective Date: 2025-01-01
+Response Date: 2025-02-20
+Responder: Kendra Patel
+Source Documents: MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024; MUNI-REQ-2025-SD203-DALLAS-ALCOHOL-V2025
+
+REGULATORY CHANGE DETECTED — City of Dallas Alcohol License Requirements
+Municipality: City of Dallas, TX
+Requirement Type: off-premise beer/wine retail license (TABC BF)
+Change: Dallas City Ordinance No. 32891 (effective 2025-01-01)
+Detected On: 2025-02-20
+Detection Method: Feasibility review for SD-2025-203 vs. SD-2024-202 historical precedent
+
+PREVIOUS REQUIREMENT (v2024 — effective through 2024-12-31)
+Applicable Document: MUNI-REQ-2024-SD202-DALLAS-ALCOHOL-V2024
+Summary: Standard TABC BF application process. City of Dallas imposed NO additional
+  distance requirements beyond Texas state minimum (300 ft from schools and churches).
+  No city-level proximity certificate or distance waiver required.
+Lead Time: 5–6 weeks (TABC public notice + approval only)
+City Approval Step: NONE beyond TABC notification
+
+NEW REQUIREMENT (v2025 — effective 2025-01-01)
+Applicable Document: MUNI-REQ-2025-SD203-DALLAS-ALCOHOL-V2025
+Ordinance: City of Dallas Ordinance No. 32891 (adopted 2024-11-14; effective 2025-01-01)
+Amends: Dallas City Code § 6-20
+Change: New "Distance Exception Certificate" (DEC) required for any new off-premise
+  beer/wine retailer within 1,000 ft of a school, church, or licensed daycare.
+  If within 1,000 ft, applicant must obtain DEC from Dallas Development Services BEFORE
+  submitting TABC application.
+  DEC requires: certified site survey, neighborhood impact statement, and letters of
+  non-objection from protected uses within 500 ft.
+  If protected use within 500 ft objects: City Council vote required.
+Lead Time (if DEC required): 14–16 weeks total (8–10 weeks longer than v2024)
+City Approval Step: NEW — Distance Exception Certificate required at sites within 1,000 ft.
+
+MATERIAL CHANGE SUMMARY
+| Dimension              | v2024 (old)                          | v2025 (new)                             |
+|------------------------|--------------------------------------|-----------------------------------------|
+| City distance rule     | None (state 300 ft minimum only)     | 1,000 ft from schools/churches/daycares |
+| City approval step     | None                                 | Distance Exception Certificate required |
+| Lead time (DEC sites)  | 5–6 weeks                            | 14–16 weeks                             |
+| Process complexity     | Low — TABC only                      | Moderate–High if DEC required           |
+| Council vote risk      | None                                 | Yes, if protected use within 500 ft     |
+
+IMPACT ASSESSMENT
+Affected Current Projects:
+  - SD-2025-203 (Store #5203, 6800 Greenville Ave, Dallas TX): DEC REQUIRED
+    Nearest school 820 ft; nearest church 940 ft — both within 1,000 ft.
+    Project opening may slip from Q4 2025 to Q1 2026 if DEC process delayed.
+
+Future Dallas Projects:
+  All future Dallas off-premise alcohol applications must check new 1,000 ft threshold.
+  Recommend adding distance check to RaceTrac site-selection criteria before option execution.
+  Sites within 1,000 ft should be flagged Red (proceed with caution) in site scoring model.
+
+Prior Projects (not affected):
+  - SD-2024-202 (Store #5202, 4210 Lemmon Ave): TABC license already obtained under v2024.
+    Not subject to retroactive DEC requirement. License remains valid through 2026-09-15.
+
+RECOMMENDED ACTIONS
+1. Immediately initiate DEC application for SD-2025-203 (target file date: 2025-02-28).
+2. Update site-selection screening model to add 1,000 ft Dallas distance buffer.
+3. Notify Real Estate team: future Dallas land options should require confirmed > 1,000 ft
+   distance from schools, churches, and daycares (or budget 14-16 week alcohol timeline).
+4. Monitor for similar distance-waiver ordinances in other Texas cities (Austin, Houston,
+   San Antonio) — trend may spread.
+
+Prepared By: Kendra Patel, Senior Development Analyst    Date: February 20, 2025

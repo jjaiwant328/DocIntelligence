@@ -1,0 +1,17 @@
+id: assess_requirement
+version: "1.0"
+category: reasoning
+description: Judge which requirements are satisfied by the available evidence.
+adapter: llm_schema
+implementation: prompts/assess_requirement.md
+inputs:
+  requirements: {type: array, required: true}
+  evidence:     {type: array, required: true}
+outputs:
+  assessments: {type: array}
+  evidence:    {type: array}
+required_capabilities: [llm]
+ontology_dependencies: [Requirement]
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/assess_requirement/

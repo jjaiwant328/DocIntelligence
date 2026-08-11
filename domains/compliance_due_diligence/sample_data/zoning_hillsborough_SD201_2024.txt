@@ -1,0 +1,72 @@
+ZONING COMPATIBILITY AND LAND USE VERIFICATION
+
+Document ID: ZONE-2024-SD201-TAMPA
+Document Type: zoning_document
+Project ID: SD-2024-201
+Store Number: 5201
+Address: 8820 N Dale Mabry Hwy, Tampa, FL 33614
+Market: Tampa FL
+State: FL
+Municipality: City of Tampa
+County: Hillsborough County
+Requirement Type: zoning_clearance
+Authority: City of Tampa Planning & Development Department
+Issuing Authority: City of Tampa Development Services
+Effective Date: 2024-04-10
+Lead Time: 5 days (verification letter)
+Responder: City of Tampa Planning Dept
+Response Date: 2024-04-10
+Source Document: FEASY-EMAIL-2024-SD201
+
+ZONING VERIFICATION LETTER
+
+RaceTrac Petroleum, Inc. — Store Development
+c/o Kendra Patel, Senior Development Analyst
+
+RE: Zoning Verification for 8820 N Dale Mabry Hwy, Tampa, FL 33614
+    Parcel ID: 076304-0000
+    Project: SD-2024-201 / Store #5201
+
+This letter is issued by the City of Tampa Planning & Development Department to verify
+the zoning and permitted uses at the above-referenced property.
+
+CURRENT ZONING
+District: CI — Commercial Intensive
+Reference: City of Tampa Zoning Code, Chapter 27 Land Development Regulations, § 27-158
+Effective: Existing zoning designation
+
+PROPOSED USE ANALYSIS
+Proposed Use: Convenience retail store with motor fuel dispensing
+SIC Code: 5541 (Gasoline Stations with Convenience Stores)
+Zoning Status: PERMITTED BY RIGHT under CI district regulations
+
+SITE DEVELOPMENT STANDARDS APPLICABLE
+Building setback: 10 ft from all property lines; 25 ft from residential parcels (none adjacent).
+Maximum lot coverage: 85% — no restriction issue at 0.98 acres.
+Canopy setback: Minimum 10 ft from public right-of-way per City of Tampa § 27-246.5.
+  Applicant must demonstrate canopy compliance at site plan review.
+Landscaping buffer: 10 ft buffer required along N Dale Mabry Hwy frontage (Class II buffer).
+Lighting: Must comply with City of Tampa § 27-283.5 (full-cutoff fixtures required).
+
+SPECIAL USE CONDITIONS
+Motor fuel stations within CI require no special exception or variance unless:
+  (a) Within 200 ft of a residential district — not applicable at this site.
+  (b) Proposing more than 12 fueling positions — proposed 8 positions, no exception required.
+
+ADJACENT ZONING CONTEXT
+North: CI (commercial retail)
+South: CI (auto dealership)
+East: CN (commercial neighborhood — buffer required if structure within 50 ft)
+West: I-275 right-of-way
+
+DETERMINATION
+The proposed use is COMPATIBLE with the CI zoning district.
+No variance or special exception is required for the principal use.
+Canopy setback and landscaping buffer must be confirmed during site plan review.
+
+NEXT STEPS
+1. Submit Development Review Committee (DRC) site plan application.
+2. Certificate of Use will be issued following DRC approval and final inspection.
+
+City Planner: Michael S. Torres, AICP    Date: April 10, 2024
+City of Tampa Planning & Development Department

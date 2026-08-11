@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"current": "v2 text", "previous": "v1 text"}
+    fake: {model: '{"changed":true,"changes":[{"field":"fee","from":"10","to":"20"}],"affected_entities":["License"],"evidence":[{"document_id":"current","source_text":"fee 20","method":"reasoning"}]}'}
+    expect: {status: ok, output_has: ["changed", "changes"]}
+  - name: missing_input
+    inputs: {"previous": "v1 text"}
+    fake: {model: '{"changed":true,"changes":[{"field":"fee","from":"10","to":"20"}],"affected_entities":["License"],"evidence":[{"document_id":"current","source_text":"fee 20","method":"reasoning"}]}'}
+    expect: {status: error, error_contains: current}
+  - name: invalid
+    inputs: {"current": 123, "previous": "v1 text"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"current": "v2 text", "previous": "v1 text"}
+    fake: {model: '{"changed":true,"changes":[{"field":"fee","from":"10","to":"20"}],"affected_entities":["License"],"evidence":[{"document_id":"current","source_text":"fee 20","method":"reasoning"}]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"current": "v2 text", "previous": "v1 text"}
+    fake: {model: '{"changed":true,"changes":[{"field":"fee","from":"10","to":"20"}],"affected_entities":["License"],"evidence":[{"document_id":"current","source_text":"fee 20","method":"reasoning"}]}'}
+    expect: {status: ok}

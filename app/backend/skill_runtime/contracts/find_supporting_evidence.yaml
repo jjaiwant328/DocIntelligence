@@ -1,0 +1,18 @@
+id: find_supporting_evidence
+version: "1.0"
+description: Retrieve document chunks that bear on a requirement via ai_similarity.
+category: retrieval
+adapter: uc_function
+implementation: _vs_search
+inputs:
+  query:       {type: string, required: true}
+  schema_vec:  {type: string, required: true}
+  k:           {type: integer, required: false}
+  doc_type:    {type: string, required: false}
+outputs:
+  evidence: {type: array}
+required_capabilities: [retrieval]
+ontology_dependencies: []
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/find_supporting_evidence/

@@ -47,23 +47,77 @@ try:
 except Exception:
     domain_id = "supply_chain"
 
+import re
+
 def _domain_schemas(catalog, domain_id):
     try:
         rows = spark.sql(f"""
-            SELECT schema_raw, schema_ont, entity_types
+            SELECT schema_raw, schema_ont, entity_types, analytics_config
             FROM {catalog}.platform.domain_configs
             WHERE domain_id = '{domain_id}' LIMIT 1
         """).collect()
         if rows:
             r = rows[0]
-            return r["schema_raw"] or "raw", r["schema_ont"] or "ontology", r["entity_types"]
+            return (r["schema_raw"] or "raw", r["schema_ont"] or "ontology",
+                    r["entity_types"], r["analytics_config"])
     except Exception:
         pass
-    return ("raw", "ontology", None)
+    return ("raw", "ontology", None, None)
 
-SCHEMA_RAW, SCHEMA_ONT, _entity_types_json = _domain_schemas(CATALOG, domain_id)
+SCHEMA_RAW, SCHEMA_ONT, _entity_types_json, _analytics_config_json = _domain_schemas(CATALOG, domain_id)
 print(f"Domain: {domain_id} | raw={SCHEMA_RAW} | ont={SCHEMA_ONT}")
 spark.sql(f"USE CATALOG {CATALOG}")
+
+# ── Config-driven ontology mapping ─────────────────────────────────────────────
+# Field-name → (entity_type, id_prefix). A domain extends/overrides this map (and
+# declares relationship rules) via:
+#   domain_configs.analytics_config = {"ontology_config": {
+#       "field_entity_map":  {"store_number": ["Project", "PROJ"], ...},
+#       "relationship_rules": [{"subject_field": ..., "predicate": ..., "object_field": ...}]}}
+# We nest under analytics_config (not a new column) because platform_routes.create_domain
+# does a positional INSERT — adding a column would break domain creation.
+# DEFAULT_FIELD_ENTITY_MAP preserves current behavior for supply_chain (bespoke branch,
+# does not use this map) and compliance (no ontology_config → pure default).
+DEFAULT_FIELD_ENTITY_MAP = {
+    # Compliance domain
+    "store_id":         ("Store",              "STORE"),
+    "inspector_id":     ("Inspector",          "INSP"),
+    "inspector_name":   ("Inspector",          "INSP"),
+    "permit_number":    ("Permit",             "PERM"),
+    "vendor_name":      ("Vendor",             "VEND"),
+    "regulation_ref":   ("Regulation",         "REG"),
+    "violation_code":   ("Violation",          "VIO"),
+    "corrective_action":("CorrectiveAction",   "CA"),
+    "audit_id":         ("Audit",              "AUDIT"),
+    "certification_id": ("Certification",      "CERT"),
+    # Generic
+    "location_id":      ("Location",           "LOC"),
+    "department":       ("Department",         "DEPT"),
+    "employee_id":      ("Employee",           "EMP"),
+    "supplier_id":      ("Vendor",             "VEND"),
+    "contract_number":  ("Contract",           "CONT"),
+}
+
+def _load_ontology_config(analytics_config_json):
+    try:
+        cfg = json.loads(analytics_config_json) if analytics_config_json else {}
+        return (cfg or {}).get("ontology_config", {}) or {}
+    except Exception:
+        return {}
+
+_ont_cfg = _load_ontology_config(_analytics_config_json)
+FIELD_ENTITY_MAP = dict(DEFAULT_FIELD_ENTITY_MAP)
+for _fname, _spec in (_ont_cfg.get("field_entity_map") or {}).items():
+    if isinstance(_spec, (list, tuple)) and len(_spec) == 2:
+        FIELD_ENTITY_MAP[_fname] = (_spec[0], _spec[1])
+RELATIONSHIP_RULES = _ont_cfg.get("relationship_rules") or []
+
+def safe_id(prefix, val):
+    """Build a short, filesystem-safe entity ID."""
+    v = re.sub(r"[^A-Za-z0-9_\-]", "_", str(val))[:40]
+    return f"{prefix}-{v}"
+
+print(f"  Ontology config: {len(FIELD_ENTITY_MAP)} field mappings, {len(RELATIONSHIP_RULES)} relationship rules")
 
 # COMMAND ----------
 # MAGIC %md ## Step 1 — Entity Alias Resolution Table
@@ -136,6 +190,7 @@ def get_extracted_field(doc_id, field_name):
 
 # COMMAND ----------
 
+import hashlib
 import json
 import re
 
@@ -270,31 +325,9 @@ else:
     #   2. Each parsed document becomes a Document entity.
     #   3. The relationship table captures EXTRACTED_FROM edges.
     #
-    # Field-name → (entity_type, id_prefix) mapping
-    FIELD_ENTITY_MAP = {
-        # Compliance domain
-        "store_id":         ("Store",              "STORE"),
-        "inspector_id":     ("Inspector",          "INSP"),
-        "inspector_name":   ("Inspector",          "INSP"),
-        "permit_number":    ("Permit",             "PERM"),
-        "vendor_name":      ("Vendor",             "VEND"),
-        "regulation_ref":   ("Regulation",         "REG"),
-        "violation_code":   ("Violation",          "VIO"),
-        "corrective_action":("CorrectiveAction",   "CA"),
-        "audit_id":         ("Audit",              "AUDIT"),
-        "certification_id": ("Certification",      "CERT"),
-        # Generic
-        "location_id":      ("Location",           "LOC"),
-        "department":       ("Department",         "DEPT"),
-        "employee_id":      ("Employee",           "EMP"),
-        "supplier_id":      ("Vendor",             "VEND"),
-        "contract_number":  ("Contract",           "CONT"),
-    }
-
-    def safe_id(prefix, val):
-        """Build a short, filesystem-safe entity ID."""
-        v = re.sub(r"[^A-Za-z0-9_\-]", "_", str(val))[:40]
-        return f"{prefix}-{v}"
+    # FIELD_ENTITY_MAP and safe_id() are defined once at the top of this notebook,
+    # config-driven from domain_configs.analytics_config.ontology_config with
+    # DEFAULT_FIELD_ENTITY_MAP as fallback. Not redefined here.
 
     seen_entities: set = set()
 
@@ -352,16 +385,37 @@ else:
         print(f"Warning: could not read parsed_documents: {_e}")
         docs_rows = []
 
-    for doc in docs_rows:
-        # Row objects use dict-style access, not .get()
-        doc_id = doc["doc_id"] if "doc_id" in doc else ""
-        if not doc_id:
-            try: doc_id = doc["filename"] or ""
-            except Exception: doc_id = ""
-        doc_type   = doc["doc_type"]   if "doc_type"   in doc else ""
-        char_count = doc["char_count"] if "char_count" in doc else 0
-        short_name = re.sub(r"\.pdf$", "", doc_id, flags=re.IGNORECASE)[:50]
-        eid = safe_id("DOC", short_name)
+    for _doc_idx, doc in enumerate(docs_rows):
+        # "col" in Row calls tuple.__contains__ (checks VALUES, not field names), so it
+        # always returns False for a field name like "doc_id".  Convert to a plain dict
+        # first so .get() works correctly.
+        doc_dict = doc.asDict()
+        doc_id = (doc_dict.get("doc_id") or doc_dict.get("document_id")
+                  or doc_dict.get("filename") or doc_dict.get("file_path") or "")
+        doc_type   = doc_dict.get("doc_type") or doc_dict.get("document_type") or ""
+        char_count = doc_dict.get("char_count") or 0
+
+        # Derive entity id from a STABLE UNIQUE key — hash the full doc_id so that
+        # shared basenames, >50-char names with a common prefix, or path differences
+        # never produce the same eid for two distinct documents.
+        # If no id field is present on this row at all, generate a deterministic
+        # fallback from the row content + ordinal position so every parsed document
+        # still produces exactly one Document entity (no silent drops, no junk "DOC-").
+        if doc_id:
+            unique_key = hashlib.sha256(doc_id.encode()).hexdigest()[:12]
+            short_name = re.sub(r"\.pdf$", "", doc_id, flags=re.IGNORECASE)[:50]
+        else:
+            row_fingerprint = json.dumps(sorted(doc_dict.items()), default=str)
+            unique_key = "r%d-%s" % (
+                _doc_idx,
+                hashlib.sha256(row_fingerprint.encode()).hexdigest()[:8],
+            )
+            short_name = f"doc_{_doc_idx}"
+
+        eid = f"DOC-{unique_key}"
+        if eid in seen_entities:
+            continue
+        seen_entities.add(eid)
         entity_records.append((
             eid, "Document", eid,
             json_attr(filename=doc_id, doc_type=doc_type or "",
@@ -475,6 +529,37 @@ else:
             rk3 = (perm_eid, "ASSOCIATED_WITH", store_eid)
             if rk3 not in seen_rels:
                 seen_rels.add(rk3); rel_records.append((perm_eid, "ASSOCIATED_WITH", store_eid, doc_id, 1.0, doc_id))
+
+    # ── Config-driven relationship rules (field-based edges within a document) ──
+    # Each rule: {"subject_field", "predicate", "object_field"}. Both fields must be
+    # in FIELD_ENTITY_MAP and present on the same document. No-op when a domain
+    # declares no relationship_rules (backward compatible with supply_chain / compliance).
+    if RELATIONSHIP_RULES:
+        doc_fields: dict = {}
+        for row in fields_rows2:
+            did = row["doc_id"] or ""
+            fn  = row["field_name"] or ""
+            fv  = _unwrap_field_value(row["field_value"])
+            if did and fn and fv:
+                doc_fields.setdefault(did, {})[fn] = fv
+        for did, fmap in doc_fields.items():
+            for rule in RELATIONSHIP_RULES:
+                sf   = rule.get("subject_field")
+                pred = rule.get("predicate")
+                of   = rule.get("object_field")
+                if not (sf and pred and of):
+                    continue
+                sval = fmap.get(sf); oval = fmap.get(of)
+                if not (sval and oval):
+                    continue
+                if sf not in FIELD_ENTITY_MAP or of not in FIELD_ENTITY_MAP:
+                    continue
+                s_eid = safe_id(FIELD_ENTITY_MAP[sf][1], sval)
+                o_eid = safe_id(FIELD_ENTITY_MAP[of][1], oval)
+                rk = (s_eid, pred, o_eid)
+                if rk not in seen_rels:
+                    seen_rels.add(rk)
+                    rel_records.append((s_eid, pred, o_eid, did, 1.0, did))
 
     print(f"  Built {len(rel_records)} relationships")
 

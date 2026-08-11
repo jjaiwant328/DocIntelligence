@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"action_id": "A-1", "assigned_to": "alice"}
+    fake: {internal_name: assign_action, internal_out: {"action_id": "A-1", "status": "ASSIGNED"}}
+    expect: {status: ASSIGNED, output_has: ["action_id"]}
+  - name: missing_input
+    inputs: {"assigned_to": "alice"}
+    fake: {internal_name: assign_action, internal_out: {}}
+    expect: {status: error, error_contains: action_id}
+  - name: invalid
+    inputs: {"action_id": 123, "assigned_to": "alice"}
+    fake: {internal_name: assign_action, internal_out: {}}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"action_id": "A-1", "assigned_to": "alice"}
+    fake: {internal_name: assign_action, internal_out: {"action_id": "A-1", "status": "ASSIGNED"}}
+    expect: {status: ASSIGNED}
+  - name: ambiguous
+    inputs: {"action_id": "A-1", "assigned_to": "alice"}
+    fake: {internal_name: assign_action, internal_out: {"action_id": "A-1", "status": "ASSIGNED"}}
+    expect: {status: ASSIGNED}

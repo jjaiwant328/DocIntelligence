@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"text": "Store 1827 in Dallas"}
+    fake: {model: '{"entities":[{"name":"Store 1827","type":"Project"}],"evidence":[]}'}
+    expect: {status: ok, output_has: ["entities"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"entities":[{"name":"Store 1827","type":"Project"}],"evidence":[]}'}
+    expect: {status: error, error_contains: text}
+  - name: invalid
+    inputs: {"text": 123}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"text": "Store 1827 in Dallas"}
+    fake: {model: '{"entities":[{"name":"Store 1827","type":"Project"}],"evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"text": "Store 1827 in Dallas"}
+    fake: {model: '{"entities":[{"name":"Store 1827","type":"Project"}],"evidence":[]}'}
+    expect: {status: ok}

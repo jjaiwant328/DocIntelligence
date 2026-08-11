@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {domain: compliance, project: Store 1827, type: review}
+    fake: {internal_name: create_work_object, internal_out: {work_object_id: "W-1", work_object: {}}}
+    expect: {status: ok, output_has: [work_object_id]}
+  - name: missing_input
+    inputs: {project: Store 1827}
+    fake: {internal_name: create_work_object, internal_out: {}}
+    expect: {status: error, error_contains: domain}
+  - name: invalid
+    inputs: {domain: 123, project: Store 1827}
+    fake: {internal_name: create_work_object, internal_out: {}}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {domain: compliance, project: ""}
+    fake: {internal_name: create_work_object, internal_out: {work_object_id: "W-2"}}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {domain: compliance, project: Store 1827, title: ""}
+    fake: {internal_name: create_work_object, internal_out: {work_object_id: "W-3"}}
+    expect: {status: ok}

@@ -8,6 +8,7 @@ import { ArrowLeft, Upload, FileText, Database, Settings, AlertCircle, File, Eye
 import { apiCall } from "@/lib/api-config";
 import { FloatingTooltip } from "@/components/ui/floating-tooltip";
 import { useDomain, DomainInfo } from "@/context/DomainContext";
+import { usePipelineRun } from "@/context/PipelineRunContext";
 
 // Helper function to format state names for better UX
 const formatStateName = (state: string): string => {
@@ -1406,7 +1407,6 @@ const PIPELINE_STAGES = [
     { id: "extract",   label: "Extract Document Content",  desc: "Read parsed output, join content tables",            icon: "📝",  est_ms: 60_000  },
     { id: "classify",  label: "Classify & Extract Fields", desc: "ai_classify + ai_extract per document type",         icon: "🏷️", est_ms: 180_000 },
     { id: "graph",     label: "Build Knowledge Graph",     desc: "Persist gold tables, extracted_fields, entities",    icon: "🕸️",  est_ms: 60_000  },
-    { id: "index",     label: "Index for Semantic Search", desc: "ai_prep_search → document_chunks for vector search", icon: "🔍",  est_ms: 90_000  },
     { id: "agent",     label: "Register AI Agent",         desc: "Log model in MLflow, register in Unity Catalog",     icon: "🤖",  est_ms: 30_000  },
 ];
 
@@ -1419,7 +1419,6 @@ const TASK_STAGE_MAP: Record<string, string> = {
     task_extract: "extract", extract: "extract",
     task_classify:"classify",classify:"classify",
     task_graph:   "graph",   graph:   "graph",
-    task_index:   "index",   index:   "index",   vector_search: "index",
     task_agent:   "agent",   agent:   "agent",
 };
 
@@ -1636,6 +1635,7 @@ function PipelineStagesDisplay({
 
 
 function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRunComplete: () => void }) {
+    const { startRun } = usePipelineRun();
     const [showGuide, setShowGuide]     = useState(false);
     const [step, setStep]               = useState<ProcStep>("configure");
     const [docTypeSchemas, setDocTypeSchemas] = useState<DocTypeSchema[]>([]);
@@ -1647,7 +1647,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     // "ai_infer"   = AI discovers fields for every document using ai_extract + universal schema
     const [schemaMode, setSchemaMode]         = useState<"configured" | "hybrid" | "ai_infer">("hybrid");
     const [volumePath, setVolumePath]         = useState("");
-    const [jobName, setJobName]               = useState("");
+    const [jobName, setJobName]               = useState(`Docintel-${domainId}`);
     const [schedCron, setSchedCron]           = useState("");
     const [schedPreset, setSchedPreset]       = useState("");
     const [useNotifications, setUseNotifications] = useState(false);
@@ -1660,6 +1660,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     const [configLoading, setConfigLoading]   = useState(true);
     const [savingConfig, setSavingConfig]     = useState(false);
     const [configSaved, setConfigSaved]       = useState(false);
+    const [configError, setConfigError]       = useState<string | null>(null);
     const [configLastSaved, setConfigLastSaved] = useState<string | null>(null);
 
     // Volume dropdown
@@ -1712,6 +1713,9 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     useEffect(() => {
         (async () => {
             setConfigLoading(true);
+            // Default the job name to Docintel-<subject area> for this domain;
+            // overridden below if a saved processing-config has an explicit job_name.
+            setJobName(`Docintel-${domainId}`);
             try {
                 const r = await fetch("/api/docintel/doc-type-schemas");
                 if (r.ok) {
@@ -1806,6 +1810,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     // ── Save config ──────────────────────────────────────────────────────────
     async function saveConfig() {
         setSavingConfig(true);
+        setConfigError(null);
         try {
             const body = {
                 domain_id: domainId,
@@ -1820,8 +1825,17 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            if (r.ok) { setConfigSaved(true); setConfigLastSaved(new Date().toISOString()); setTimeout(() => setConfigSaved(false), 3000); }
-        } catch { /* silent */ }
+            if (r.ok) {
+                setConfigSaved(true); setConfigLastSaved(new Date().toISOString());
+                setTimeout(() => setConfigSaved(false), 3000);
+            } else {
+                let detail = `Save failed (HTTP ${r.status})`;
+                try { const d = await r.json(); if (d?.detail) detail = d.detail; } catch { /* ignore */ }
+                setConfigError(detail);
+            }
+        } catch (e: unknown) {
+            setConfigError(e instanceof Error ? e.message : String(e));
+        }
         setSavingConfig(false);
     }
 
@@ -1981,6 +1995,8 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                 // Faster polling for interactive (user watching live), slower for batch
                 const pollMs = mode === "interactive" ? 10_000 : 30_000;
                 if (!pollRef.current) pollRef.current = setInterval(fetchPipelineStatus, pollMs);
+                // Hand live progress to the global popup so it persists across tab navigation.
+                startRun({ domainId, jobName, runId: resp.run_id, runUrl: resp.run_url });
             } else {
                 const errText = !r.ok ? await r.text() : "Unknown error";
                 setPipelineData(prev => prev ? { ...prev, status: "error", message: errText } : { status: "error", message: errText });
@@ -2128,9 +2144,8 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                     { icon: "📄", label: "Parse Documents (AI)",      text: "Auto Loader reads new files from your volume. PDFs and images are processed with ai_parse_document (produces a VARIANT). TXT files are read directly and wrapped in a compatible VARIANT. Already-seen files are skipped automatically." },
                                     { icon: "📝", label: "Extract Document Content",  text: "Reads parsed output from the Bronze table (parsed_documents_raw). De-duplicates, applies volume filter, and joins raw text content for classification." },
                                     { icon: "🏷️", label: "Classify & Extract Fields","text": "ai_classify assigns a document type label to each document. For documents matching a configured schema, ai_extract pulls structured fields (e.g. violation_code, deadline, supplier_name). Documents without a schema go through universal schema discovery." },
-                                    { icon: "🕸️", label: "Build Knowledge Graph",    text: "Writes classified, extracted documents to parsed_documents (Silver). Persists per-doc-type gold tables (gold_health_inspection_report, gold_permit, etc.) and a unified extracted_fields table for ontology mapping." },
-                                    { icon: "🔍", label: "Index for Semantic Search", text: "ai_prep_search chunks each document into context-enriched search passages. Results are written to document_chunks and synced to the Vector Search index for RAG-powered search and the AI Agent." },
-                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this subject area so it can answer questions grounded in the newly processed documents." },
+                                    { icon: "🕸️", label: "Build Knowledge Graph",    text: "Writes classified, extracted documents to parsed_documents (Silver). Persists per-doc-type gold tables (gold_health_inspection_report, gold_permit, etc.) and a unified extracted_fields table for ontology mapping. ai_prep_search also chunks each document into document_chunks for semantic retrieval." },
+                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this subject area so it can answer questions grounded in the newly processed documents. Semantic search is served at query time by ai_similarity over document_chunks — no index to build or sync." },
                                 ].map(s => (
                                     <div key={s.label} className="flex gap-2 items-start">
                                         <span className="text-base shrink-0 mt-0.5">{s.icon}</span>
@@ -2151,8 +2166,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                     { name: `jai_docintel.${domainId}.parsed_documents`,  desc: "All processed documents with doc_type, raw_text, and parsed VARIANT." },
                                     { name: `jai_docintel.${domainId}.extracted_fields`,  desc: "All structured fields extracted per document, in long format (field_name, field_value)." },
                                     { name: `jai_docintel.${domainId}.gold_{doc_type}`,   desc: "Per-doc-type wide tables with each extraction field as a column. Created automatically for each doc type processed." },
-                                    { name: `jai_docintel.vectors.document_chunks`,       desc: "ai_prep_search chunks for semantic search. Fed to Vector Search index." },
-                                    { name: `jai_docintel.vectors.${domainId}_docs_index`,"desc": "Databricks Vector Search index — powers semantic search and the AI Agent." },
+                                    { name: `jai_docintel.${domainId}.document_chunks`,   desc: "ai_prep_search chunks. Ranked at query time by ai_similarity for semantic search and the AI Agent." },
                                     { name: "jai_docintel.platform.file_processing_log",  desc: "Deduplication log. Files already processed (status=success) are never re-processed in batch mode." },
                                     { name: `jai_docintel.${domainId}.suggested_extractions`, desc: "Schema discovery output for documents without a configured schema — review to improve your Schema Setup." },
                                 ].map(t => (
@@ -2447,11 +2461,11 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 <label className="text-xs font-semibold text-gray-600 mb-1 block">Job Name (optional)</label>
                                 <input
                                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                    placeholder={`DocIntel-${domainId}`}
+                                    placeholder={`Docintel-${domainId}`}
                                     value={jobName}
                                     onChange={e => setJobName(e.target.value)}
                                 />
-                                <p className="text-[11px] text-gray-400 mt-1">Leave blank to use the existing job for this domain.</p>
+                                <p className="text-[11px] text-gray-400 mt-1">Defaults to <span className="font-mono">Docintel-{domainId}</span>. Display label only — the domain&apos;s pipeline job is used to run.</p>
                             </div>
                         </div>
                     </div>
@@ -2553,9 +2567,14 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                             >
                                 {savingConfig ? "Saving…" : configSaved ? "✓ Saved" : "Save Configuration"}
                             </button>
-                            {configLastSaved && (
+                            {configLastSaved && !configError && (
                                 <span className="text-[11px] text-gray-400">
                                     Last saved {new Date(configLastSaved).toLocaleString()} · {domainId}
+                                </span>
+                            )}
+                            {configError && (
+                                <span className="text-[11px] text-red-600 max-w-md">
+                                    ⚠ Could not save: {configError}
                                 </span>
                             )}
                         </div>
@@ -2880,20 +2899,17 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                         )}
                     </div>
 
-                    {/* Pipeline stages — only show for runs triggered in THIS session
-                        (prevents previous run's saved status from appearing on mount) */}
+                    {/* Live pipeline progress now renders in the global status popup
+                        (bottom-right), which keeps updating across tab navigation. */}
                     {sessionRunTriggered && (
                       pipelineData?.status === "running" ||
                       pipelineData?.status === "succeeded" ||
                       pipelineData?.status === "failed"
                     ) && (
-                        <PipelineStagesDisplay
-                            pipelineStatus={pipelineData!.status}
-                            startTimeMs={pipelineData!.start_time_ms}
-                            elapsedMs={pipelineData!.duration_ms}
-                            tasks={pipelineData!.tasks}
-                            runMeta={runMeta}
-                        />
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-3 text-xs text-blue-700 flex items-center gap-2">
+                            <span className="animate-pulse">●</span>
+                            Live progress is shown in the status popup (bottom-right) — it keeps updating even if you switch tabs.
+                        </div>
                     )}
                     {/* Show last-run summary when no session run has been triggered yet */}
                     {!sessionRunTriggered && pipelineData && pipelineData.status !== "never_run" && (

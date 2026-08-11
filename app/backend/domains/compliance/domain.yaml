@@ -1,0 +1,5 @@
+id: compliance
+name: Compliance Due Diligence
+# Maps this overlay domain to the live platform domain_configs row + vector schema.
+platform_domain_id: compliance_due_diligence
+schema_vec: compliance_due_diligence

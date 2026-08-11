@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {query: zoning, schema_vec: compliance_due_diligence, k: 2}
+    fake: {rows: [{doc_id: D1, chunk_id: c1, chunk_to_retrieve: "zoning ok"}, {doc_id: D2, chunk_id: c2, chunk_to_retrieve: "more"}]}
+    expect: {status: ok, min_evidence: 2, output_has: [evidence]}
+  - name: missing_input
+    inputs: {schema_vec: compliance_due_diligence}
+    fake: {rows: []}
+    expect: {status: error, error_contains: query}
+  - name: invalid
+    inputs: {query: zoning, schema_vec: compliance_due_diligence, k: "two"}
+    fake: {rows: []}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {query: nonexistent, schema_vec: compliance_due_diligence, k: 5}
+    fake: {rows: []}
+    expect: {status: ok, min_evidence: 0}
+  - name: ambiguous
+    inputs: {query: license, schema_vec: compliance_due_diligence, k: 1}
+    fake: {rows: [{doc_id: D9, chunk_id: c9, chunk_to_retrieve: "partial match"}]}
+    expect: {status: ok, min_evidence: 1}

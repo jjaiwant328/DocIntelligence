@@ -14,6 +14,7 @@ Adds supply chain intelligence endpoints on top of the base app:
 """
 
 import os
+import re
 import json
 import threading
 from fastapi import APIRouter, HTTPException
@@ -32,8 +33,6 @@ SCH_ONT   = os.getenv("DOCINTEL_SCHEMA_ONT", "ontology")
 SCH_AGT   = os.getenv("DOCINTEL_SCHEMA_AGT", "agents")
 SCH_VEC   = os.getenv("DOCINTEL_SCHEMA_VEC", "vectors")
 WH_ID     = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
-VS_ENDPOINT = os.getenv("DOCINTEL_VS_ENDPOINT", "docintel-vs-endpoint")
-VS_INDEX    = os.getenv("DOCINTEL_VS_INDEX", "jai_docintel.vectors.docintel_docs_index")
 AGENT_MODEL = os.getenv("DOCINTEL_AGENT_MODEL", "databricks-claude-sonnet-4-5")
 
 # Ordered fallback list tried when the primary model endpoint is unavailable
@@ -172,6 +171,7 @@ class AgentQueryRequest(BaseModel):
     question: str
     chat_history: Optional[List[dict]] = []
     incident_ref: Optional[str] = None  # inject into system prompt for incident-focused queries
+    approve: bool = False               # confirm consequential deterministic-agent actions (ADR-003)
 
 class LogActionRequest(BaseModel):
     action_type: str          # e.g. "RECALL_NOTIFICATION", "SUPPLIER_CONTACT", "INSPECTION"
@@ -293,6 +293,92 @@ def run_sql(query: str, timeout_secs: int = 50) -> list:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── ai_similarity retrieval (replaces Vector Search similarity_search) ─────────
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_ident(name: str) -> str:
+    """Validate a catalog/schema/table identifier before interpolating it into
+    SQL. Guards against injection via the (config-derived) schema/catalog names —
+    only bare, unquoted SQL identifiers are allowed. Raises ValueError otherwise."""
+    if not name or not _IDENT_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
+
+
+def _vs_search(query: str, schema_vec: str, k: int = 6, doc_type_filter: str = None) -> list:
+    """Query-side semantic retrieval over the per-domain `document_chunks` table.
+
+    Ranks chunks with `ai_similarity(chunk_to_retrieve, <query>)` (ORDER BY score
+    DESC, LIMIT k). Returns rows shaped `[chunk_id, doc_id, doc_type,
+    chunk_to_retrieve]` — the exact 4-column shape the former Vector Search
+    `similarity_search(...).result.data_array` produced — so every call-site stays
+    drop-in (row[1]=doc_id, row[2]=doc_type, row[3]=chunk_to_retrieve).
+
+    Security: the user `query` is passed through `_sql_lit` (single-quote/backslash
+    escaping + length cap) and the catalog/schema identifiers through
+    `_safe_ident`. No raw untrusted string is concatenated into an identifier.
+
+    Graceful degradation: any SQL / ai_similarity failure returns `[]` (matching
+    the best-effort behavior all call-sites already assume) rather than 500-ing.
+    """
+    try:
+        q = (query or "").strip()
+        if not q:
+            return []
+        catalog = _safe_ident(CATALOG)
+        schema  = _safe_ident(schema_vec or "vectors")
+        lit = _sql_lit(q, 4000)
+        try:
+            k = max(1, min(int(k), 50))
+        except Exception:
+            k = 6
+        where = ""
+        if doc_type_filter:
+            where = f"WHERE doc_type = '{_sql_lit(doc_type_filter, 200)}'"
+        rows = run_sql(f"""
+            SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve
+            FROM {catalog}.{schema}.document_chunks
+            {where}
+            ORDER BY ai_similarity(chunk_to_retrieve, '{lit}') DESC
+            LIMIT {k}
+        """, timeout_secs=30) or []
+        return [
+            [r.get("chunk_id"), r.get("doc_id"), r.get("doc_type"), r.get("chunk_to_retrieve")]
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[_vs_search] ai_similarity retrieval failed: {e}")
+        return []
+
+
+def _unwrap_value(raw):
+    """Normalize an ai_extract field_value into a clean scalar string (or None).
+
+    field_value may be a dict {"value": X}, a JSON/Python-repr string, or a plain
+    string. Null/empty forms (including the raw wrapper 'Value:null') return None so
+    raw payloads never leak into the UI.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return _unwrap_value(raw.get("value") or raw.get("text") or raw.get("answer"))
+    s = str(raw).strip()
+    if not s or s.lower() in ("none", "null", "value:null", "{}", '{"value":null}', "{'value': none}"):
+        return None
+    if s.startswith("{"):
+        import json as _json, ast as _ast
+        for _parse in (_json.loads, _ast.literal_eval):
+            try:
+                obj = _parse(s)
+                if isinstance(obj, dict):
+                    return _unwrap_value(obj.get("value") or obj.get("text") or obj.get("answer"))
+            except Exception:
+                pass
+    return s
 
 # ── Classification labels (same as notebooks/03_idp_pipeline.py) ──────────────
 
@@ -481,7 +567,21 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     Multi-domain AI agent query.
     - Supply chain: uses UC Function toolkit + VS (full agent executor)
     - All other domains: uses direct LLM + VS document context (same path as copilot-query)
+
+    ADR-003: when DOCINTEL_AGENT_DETERMINISTIC is truthy, the agent is demoted to
+    a thin caller — the LLM interprets intent only and the deterministic workflow
+    engine/skills do all orchestration. Any failure falls back to the legacy path.
     """
+    if os.getenv("DOCINTEL_AGENT_DETERMINISTIC", "").lower() in ("1", "true", "yes"):
+        try:
+            from skill_routes import deterministic_agent_answer
+            approve = bool(getattr(req, "approve", False))
+            return deterministic_agent_answer(
+                req.question, domain_id,
+                chat_history=req.chat_history, approve=approve)
+        except Exception as e:
+            print(f"[agent] deterministic path failed, falling back to legacy: {e}")
+
     try:
         from databricks_langchain import ChatDatabricks
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -491,7 +591,6 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     _domain = _get_domain_schemas(domain_id)
     _raw = _domain["schema_raw"]
     _vec_schema = _domain.get("schema_vec", "vectors")
-    _domain_vs_index = f"{CATALOG}.{_vec_schema}.{domain_id}_docs_index"
 
     _base_prompt = _domain.get("agent_system_prompt") or (
         f"You are the {domain_id.replace('_', ' ').title()} AI assistant. "
@@ -500,6 +599,10 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     )
     if req.incident_ref:
         _base_prompt += f"\n\nACTIVE CONTEXT: {req.incident_ref}. Focus answers on this context when relevant."
+
+    # ── Compliance Due Diligence: four-agent tool-calling agent ──────────────
+    if domain_id == CDD_DOMAIN_ID:
+        return _cdd_agent_query(req, domain_id, _domain, _base_prompt, _vec_schema)
 
     # ── Supply chain: full UC function agent ─────────────────────────────────
     if domain_id == "supply_chain":
@@ -514,22 +617,12 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
             vs_tool_available = False
             try:
-                from databricks.vector_search.client import VectorSearchClient
                 from langchain_core.tools import tool
-                vsc = VectorSearchClient()
-                vsc.get_index(VS_ENDPOINT, _domain_vs_index)  # validate
 
                 @tool
                 def search_documents(query: str, doc_type_filter: str = None) -> str:
-                    """Search supply chain documents semantically using Vector Search."""
-                    index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-                    results = index.similarity_search(
-                        query_text=query,
-                        columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                        filters={"doc_type": doc_type_filter} if doc_type_filter else None,
-                        num_results=5,
-                    )
-                    data = results.get("result", {}).get("data_array", [])
+                    """Search supply chain documents semantically using ai_similarity ranking."""
+                    data = _vs_search(query, _vec_schema, k=5, doc_type_filter=doc_type_filter)
                     if not data:
                         return "No relevant documents found."
                     return "\n\n---\n\n".join(
@@ -572,17 +665,9 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
         context_text = ""
         cited_docs: list = []
 
-        # 1. Try VS search first
+        # 1. Try semantic (ai_similarity) search first
         try:
-            from databricks.vector_search.client import VectorSearchClient
-            vsc = VectorSearchClient()
-            index = vsc.get_index(VS_ENDPOINT, _domain_vs_index)
-            results = index.similarity_search(
-                query_text=req.question,
-                columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                num_results=6,
-            )
-            data = results.get("result", {}).get("data_array", [])
+            data = _vs_search(req.question, _vec_schema, k=6)
             if data:
                 chunks = []
                 for row in data:
@@ -1148,7 +1233,6 @@ TASK_LABELS = {
     "workflow_extract": "Extract Document Content",
     "idp_pipeline":     "Classify & Extract Fields",
     "ontology_mapping": "Build Knowledge Graph",
-    "vector_search":    "Index for Semantic Search",
     "agent":            "Register AI Agent",
     "demo_scenario":    "Demo Scenario Validation",
 }
@@ -1278,7 +1362,7 @@ async def search_docs(
     """
     Search parsed documents for a domain.
     - keyword: SQL ILIKE on raw_text and filename — always available
-    - semantic: Vector Search similarity_search on document_chunks — requires VS index
+    - semantic: ai_similarity ranking over document_chunks — no VS index required
     Returns a uniform list of { doc_id, filename, doc_type, snippet, score? }
     """
     q = q.strip()
@@ -1293,16 +1377,9 @@ async def search_docs(
 
         if mode == "semantic":
             try:
-                from databricks.vector_search.client import VectorSearchClient
-                vsc = VectorSearchClient()
-                vs_index_name = f"{CATALOG}.{_vec}.{domain_id}_docs_index"
-                index = vsc.get_index(VS_ENDPOINT, vs_index_name)
-                vs_res = index.similarity_search(
-                    query_text=q,
-                    columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                    num_results=limit,
-                )
-                data = vs_res.get("result", {}).get("data_array", [])
+                data = _vs_search(q, _vec, k=limit)
+                if not data:
+                    raise RuntimeError("no ai_similarity results")
                 # Map chunk rows back to filenames via a batch SQL join
                 doc_ids = list({row[1] for row in data if len(row) > 1})
                 filenames: dict = {}
@@ -1381,7 +1458,7 @@ def _ensure_proc_cfg_table():
                 doc_types        STRING,    -- JSON array of doc type strings to process
                 job_name         STRING,
                 schedule_cron    STRING,    -- cron expression, e.g. "0 2 * * *"
-                skip_no_schema   BOOLEAN DEFAULT TRUE,
+                skip_no_schema   BOOLEAN,
                 updated_at       TIMESTAMP
             ) USING DELTA
         """, timeout_secs=30)
@@ -2038,7 +2115,7 @@ def _ensure_action_log_table(table_name: str):
                 priority      STRING,
                 incident_ref  STRING,
                 logged_by     STRING,
-                status        STRING DEFAULT 'OPEN'
+                status        STRING
             )
             USING DELTA
             TBLPROPERTIES ('delta.enableChangeDataFeed' = 'false')
@@ -3570,32 +3647,36 @@ async def copilot_query(req: CopilotQueryRequest):
         if "Interpretations" not in system_prompt:
             system_prompt += format_instruction
 
-        # Retrieve relevant doc context via Vector Search (best-effort)
+        # Per-fact source citation (ALWAYS applied) so the UI can align a source link
+        # to each fact. Each Facts line must end with the source filename in square
+        # brackets, copied from the [Source: <filename>] tags in the provided context.
+        system_prompt += (
+            "\n\nFACTS FORMATTING (mandatory): Under the Facts section, put each fact on its own "
+            "line starting with '- ', and END EACH LINE with the single most relevant source "
+            "document filename in square brackets, copied exactly from the [Source: <filename>] "
+            "tags provided — e.g. '- Alcohol license required; lead time ~60 days. "
+            "[dallas_alcohol_permit.pdf]'. If a fact has no supporting document, end it with "
+            "'[no source]'. Do not put filenames anywhere except in these brackets."
+        )
+
+        # Retrieve relevant doc context via ai_similarity ranking (best-effort)
         context_text = ""
         cited_docs: list = []
         try:
-            from databricks.vector_search.client import VectorSearchClient
             _domain = _get_domain_schemas(req.domain_id)
             _vec = _domain["schema_vec"]
-            domain_index = f"{CATALOG}.{_vec}.{req.domain_id}_docs_index"
-            vsc = VectorSearchClient()
-            index = vsc.get_index(VS_ENDPOINT, domain_index)
-            results = index.similarity_search(
-                query_text=req.query,
-                columns=["chunk_id", "doc_id", "doc_type", "chunk_to_retrieve"],
-                num_results=6,
-            )
-            data = results.get("result", {}).get("data_array", [])
-            if data:
-                chunks = []
-                for row in data:
-                    doc_id = row[1] if len(row) > 1 else "unknown"
-                    doc_type = row[2] if len(row) > 2 else ""
-                    chunk = row[3] if len(row) > 3 else ""
-                    if doc_id not in cited_docs:
-                        cited_docs.append(doc_id)
-                    chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
-                context_text = "\n\n---\n\n".join(chunks)
+            data = _vs_search(req.query, _vec, k=6)
+            if not data:
+                raise RuntimeError("no ai_similarity results")
+            chunks = []
+            for row in data:
+                doc_id = row[1] if len(row) > 1 else "unknown"
+                doc_type = row[2] if len(row) > 2 else ""
+                chunk = row[3] if len(row) > 3 else ""
+                if doc_id not in cited_docs:
+                    cited_docs.append(doc_id)
+                chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
+            context_text = "\n\n---\n\n".join(chunks)
         except Exception as vs_err:
             # Fall back: pull recent parsed doc text snippets from SQL
             try:
@@ -3779,8 +3860,14 @@ async def correspondence_digest(domain_id: str = "supply_chain"):
             LIMIT 200
         """) or []
 
-        # Derive status from deadline
+        # Clean raw field values (unwrap {"value":...}) and derive status from deadline
+        _RISK_LEVELS = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
         for row in rows:
+            for _f in ("jurisdiction", "assigned_owner", "deadline", "statute_number"):
+                row[_f] = _unwrap_value(row.get(_f))
+            _rl = _unwrap_value(row.get("risk_level"))
+            _rl = _rl.strip().upper() if _rl else None
+            row["risk_level"] = _rl if _rl in _RISK_LEVELS else None
             dl = row.get("deadline") or ""
             if not dl:
                 row["status"] = "NO_DEADLINE"
@@ -3900,7 +3987,7 @@ def _ensure_attorney_queue_table():
                 response_summary STRING,
                 flagged_reason   STRING,
                 flagged_at    TIMESTAMP,
-                status        STRING DEFAULT 'PENDING',
+                status        STRING,
                 reviewed_by   STRING,
                 reviewed_at   TIMESTAMP
             ) USING DELTA
@@ -4000,6 +4087,217 @@ async def update_attorney_review(item_id: str, req: AttorneyQueueUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Escalation Rules Engine ───────────────────────────────────────────────────
+# Deterministic rules that turn document/answer signals into escalations. This is
+# the DECISION maker for escalation (replacing the previous LLM-substring
+# "attorney review recommended" heuristic). An LLM hint, if any, is just one
+# optional signal in the context. Backward compatible: with no context signals,
+# no rule fires, so existing callers behave exactly as before.
+
+from datetime import date as _date
+
+_escalation_rules_checked = False
+
+# rule_id, rule_type, params, target
+_DEFAULT_ESCALATION_RULES = [
+    ("low_confidence_default",    "low_confidence",     {"threshold": 0.85}, "attorney_review"),
+    ("deadline_risk_default",     "deadline_risk",      {},                  "priority_bump"),
+    ("requirement_change_default","requirement_change", {},                  "attorney_review"),
+    ("high_value_default",        "high_value",         {},                  "priority_bump"),
+]
+
+
+def _ensure_escalation_rules_table():
+    global _escalation_rules_checked
+    if _escalation_rules_checked:
+        return
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.escalation_rules (
+                rule_id    STRING NOT NULL,
+                domain_id  STRING,           -- '' or NULL = applies to all domains
+                rule_type  STRING,           -- low_confidence | deadline_risk | requirement_change | high_value
+                params     STRING,           -- JSON
+                target     STRING,           -- attorney_review | priority_bump | notify
+                active     BOOLEAN,           -- always written explicitly on insert
+                created_at TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+        existing = run_sql(
+            f"SELECT COUNT(*) AS c FROM {CATALOG}.platform.escalation_rules", timeout_secs=20) or []
+        if existing and int(existing[0].get("c", 0) or 0) == 0:
+            for rid, rtype, params, target in _DEFAULT_ESCALATION_RULES:
+                p = json.dumps(params).replace("'", "\\'")
+                run_sql(f"""
+                    INSERT INTO {CATALOG}.platform.escalation_rules
+                        (rule_id, domain_id, rule_type, params, target, active, created_at)
+                    VALUES ('{rid}', '', '{rtype}', '{p}', '{target}', true, current_timestamp())
+                """, timeout_secs=20)
+        _escalation_rules_checked = True
+    except Exception:
+        _escalation_rules_checked = True  # don't keep retrying on persistent failures
+
+
+def _load_escalation_rules(domain_id: str) -> list:
+    """Active rules for a domain (plus global rules with empty domain_id)."""
+    _ensure_escalation_rules_table()
+    dom = (domain_id or "").replace("'", "\\'")
+    try:
+        rows = run_sql(f"""
+            SELECT rule_id, domain_id, rule_type, params, target, active
+            FROM {CATALOG}.platform.escalation_rules
+            WHERE active = true
+              AND (domain_id = '' OR domain_id IS NULL OR domain_id = '{dom}')
+        """, timeout_secs=20) or []
+        for r in rows:
+            try:
+                r["params"] = json.loads(r.get("params") or "{}")
+            except Exception:
+                r["params"] = {}
+        return rows
+    except Exception:
+        # In-memory defaults if the table is unreachable
+        return [{"rule_id": rid, "domain_id": "", "rule_type": rtype,
+                 "params": params, "target": target, "active": True}
+                for rid, rtype, params, target in _DEFAULT_ESCALATION_RULES]
+
+
+def _apply_escalation_rule(rule: dict, context: dict, today=None):
+    """Pure, deterministic evaluation of one rule against a context dict.
+    Returns a trigger dict when the rule fires, else None. Unit-testable."""
+    today  = today or _date.today()
+    rtype  = rule.get("rule_type")
+    params = rule.get("params") or {}
+    rid    = rule.get("rule_id")
+    target = rule.get("target")
+
+    if rtype == "low_confidence":
+        conf = context.get("confidence")
+        thr  = float(params.get("threshold", 0.85))
+        if conf is not None and float(conf) < thr:
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": f"Confidence {float(conf):.2f} below threshold {thr:.2f}"}
+
+    elif rtype == "deadline_risk":
+        lead      = context.get("license_lead_time_days")
+        open_date = context.get("expected_open_date")
+        if lead is not None and open_date:
+            try:
+                od         = _date.fromisoformat(str(open_date)[:10])
+                days_until = (od - today).days
+                if int(lead) > days_until:
+                    return {"rule_id": rid, "rule_type": rtype, "target": target,
+                            "reason": (f"License lead time {int(lead)}d exceeds "
+                                       f"{days_until}d until open date {od.isoformat()}")}
+            except Exception:
+                return None
+
+    elif rtype == "requirement_change":
+        if context.get("requirement_change"):
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": context.get("change_summary")
+                              or "Regulatory requirement changed vs prior decision"}
+
+    elif rtype == "high_value":
+        if context.get("high_value"):
+            return {"rule_id": rid, "rule_type": rtype, "target": target,
+                    "reason": "High-value / strategic project"}
+
+    return None
+
+
+def evaluate_escalations(domain_id: str, context: dict) -> list:
+    """Deterministically evaluate all active rules for a domain against a context.
+    Returns the list of triggered rule dicts (empty when nothing fires)."""
+    triggered = []
+    for rule in _load_escalation_rules(domain_id):
+        hit = _apply_escalation_rule(rule, context or {})
+        if hit:
+            triggered.append(hit)
+    return triggered
+
+
+def _queue_attorney_review(domain_id: str, query: str, summary: str, reason: str):
+    """Insert a PENDING row into the attorney review queue. Returns id or None."""
+    _ensure_attorney_queue_table()
+    try:
+        import uuid as _uuid
+        item_id = str(_uuid.uuid4())
+        q = (query or "")[:500].replace("'", "\\'")
+        s = (summary or "")[:1000].replace("'", "\\'")
+        r = (reason or "")[:500].replace("'", "\\'")
+        d = (domain_id or "").replace("'", "\\'")
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.attorney_review_queue
+                (id, domain_id, query, response_summary, flagged_reason, flagged_at, status)
+            VALUES ('{item_id}', '{d}', '{q}', '{s}', '{r}', current_timestamp(), 'PENDING')
+        """, timeout_secs=20)
+        return item_id
+    except Exception:
+        return None
+
+
+class EscalationRuleUpsertRequest(BaseModel):
+    rule_id:   str
+    domain_id: str  = ""          # '' = all domains
+    rule_type: str                # low_confidence | deadline_risk | requirement_change | high_value
+    params:    dict = {}
+    target:    str  = "attorney_review"
+    active:    bool = True
+
+
+class EscalationEvaluateRequest(BaseModel):
+    domain_id:     str  = "supply_chain"
+    context:       dict = {}
+    apply_actions: bool = False   # if True, queue attorney reviews for triggered rules
+    query:         str  = ""      # optional label for the queued review
+
+
+@router.get("/escalation-rules")
+async def get_escalation_rules(domain_id: str = ""):
+    rules = _load_escalation_rules(domain_id)
+    return {"rules": rules, "total": len(rules)}
+
+
+@router.post("/escalation-rules")
+async def upsert_escalation_rule(req: EscalationRuleUpsertRequest):
+    _ensure_escalation_rules_table()
+    try:
+        rid    = req.rule_id.replace("'", "\\'")
+        dom    = (req.domain_id or "").replace("'", "\\'")
+        rtype  = req.rule_type.replace("'", "\\'")
+        target = req.target.replace("'", "\\'")
+        p      = json.dumps(req.params or {}).replace("'", "\\'")
+        run_sql(f"DELETE FROM {CATALOG}.platform.escalation_rules WHERE rule_id = '{rid}'",
+                timeout_secs=20)
+        run_sql(f"""
+            INSERT INTO {CATALOG}.platform.escalation_rules
+                (rule_id, domain_id, rule_type, params, target, active, created_at)
+            VALUES ('{rid}', '{dom}', '{rtype}', '{p}', '{target}',
+                    {str(bool(req.active)).lower()}, current_timestamp())
+        """, timeout_secs=20)
+        return {"ok": True, "rule_id": req.rule_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/escalation-evaluate")
+async def escalation_evaluate(req: EscalationEvaluateRequest):
+    """Deterministically evaluate escalation rules for a context (used by
+    action-create and change-detection). Optionally queues attorney reviews."""
+    triggered = evaluate_escalations(req.domain_id, req.context or {})
+    queued = []
+    if req.apply_actions:
+        for t in triggered:
+            if t.get("target") == "attorney_review":
+                qid = _queue_attorney_review(
+                    req.domain_id, req.query or "escalation", "",
+                    t.get("reason") or t.get("rule_type"))
+                if qid:
+                    queued.append(qid)
+    return {"triggered": triggered, "queued_reviews": queued, "domain_id": req.domain_id}
+
+
 # ── Regulatory Changes Feed ───────────────────────────────────────────────────
 
 @router.get("/regulatory-changes")
@@ -4050,6 +4348,561 @@ async def regulatory_changes(domain_id: str = "supply_chain"):
         return {"changes": rows, "total": len(rows)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Compliance Due Diligence (Store Development) — agent tools + change detection
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# domain_id = "compliance_due_diligence" is DISTINCT from the operational
+# "compliance" (RaceTrac) domain. Everything below is additive and gated on this
+# domain_id, so supply_chain / compliance behavior is untouched.
+#
+# The four "agents" from the flagship build are exposed as LangChain tools that
+# agent_query consumes for this domain:
+#   1. Intake    — classify a feasibility request  (ai_classify + ai_extract)
+#   2. Research  — municipality requirements/licenses (Vector Search + DEFINES edges)
+#   3. History   — "have we handled this municipality before?" (VS + prior Responses)
+#   4. Action    — create/track an action (reuses lifecycle + escalation engine)
+#   + Change detection — detect_regulatory_change(municipality, requirement_type)
+
+CDD_DOMAIN_ID = "compliance_due_diligence"
+
+
+def _sql_lit(s, max_len: int = 8000) -> str:
+    """Escape + cap a value for safe inline use in a single-quoted SQL literal."""
+    return str(s or "")[:max_len].replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _unwrap_expr(col: str = "field_value") -> str:
+    """SQL expression that unwraps a `{"value": X}` ai_extract wrapper to a plain
+    string (mirrors the pattern used by the UC-function tools in 06_agent.py)."""
+    return (
+        f"CASE WHEN {col} LIKE '{{\"value\":%' "
+        f"THEN GET_JSON_OBJECT(CAST({col} AS STRING), '$.value') "
+        f"ELSE CAST({col} AS STRING) END"
+    )
+
+
+def _cdd_classification_labels(domain_cfg: dict) -> list:
+    """Return the classification label list for the domain (dict keys or list)."""
+    raw = domain_cfg.get("classification_labels")
+    labels: list = []
+    if raw:
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                labels = list(parsed.keys())
+            elif isinstance(parsed, list):
+                labels = [str(x) for x in parsed]
+        except Exception:
+            labels = []
+    if not labels:
+        labels = [
+            "feasibility_request", "municipal_requirement", "alcohol_license",
+            "tobacco_license", "business_license", "zoning_document", "permit",
+            "historical_response", "regulatory_change", "consultant_correspondence",
+        ]
+    return labels
+
+
+# ── Agent Tool 1: Intake ──────────────────────────────────────────────────────
+def _cdd_intake(domain_id: str, request_text: str) -> dict:
+    """Classify a feasibility request and pull the key structured fields.
+    Reuses Databricks ai_classify (label routing) + ai_extract (field lift)."""
+    dom = _get_domain_schemas(domain_id)
+    labels = _cdd_classification_labels(dom)
+    txt = _sql_lit(request_text, 6000)
+    labels_arr = ", ".join(f"'{_sql_lit(l, 120)}'" for l in labels)
+    fields = ["request_type", "project_id", "store_number", "municipality",
+              "state", "county", "priority", "requester"]
+    fields_arr = ", ".join(f"'{f}'" for f in fields)
+    try:
+        rows = run_sql(f"""
+            SELECT
+                ai_classify('{txt}', ARRAY({labels_arr}))                    AS doc_class,
+                to_json(ai_extract('{txt}', ARRAY({fields_arr})))            AS extracted
+        """, timeout_secs=60) or []
+    except Exception as e:
+        return {"ok": False, "error": str(e), "request_type": None}
+    if not rows:
+        return {"ok": False, "error": "no result", "request_type": None}
+    doc_class = rows[0].get("doc_class")
+    extracted = {}
+    try:
+        raw = rows[0].get("extracted") or "{}"
+        parsed = json.loads(raw)
+        for k, v in (parsed.items() if isinstance(parsed, dict) else []):
+            extracted[k] = _unwrap_value(v)
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "document_class": doc_class,
+        "request_type": extracted.get("request_type") or doc_class,
+        "project": extracted.get("project_id") or extracted.get("store_number"),
+        "store_number": extracted.get("store_number"),
+        "municipality": extracted.get("municipality"),
+        "state": extracted.get("state"),
+        "county": extracted.get("county"),
+        "priority": (extracted.get("priority") or "MEDIUM"),
+        "requester": extracted.get("requester"),
+    }
+
+
+def _cdd_vs_search(schema_vec: str, query: str, doc_type_filter=None, k: int = 6):
+    """Semantic retrieval helper → (context_text, cited_docs).
+
+    Ranks the domain's `document_chunks` with ai_similarity via `_vs_search`
+    (per-domain schema, NOT hardcoded). Returns "" / [] on any failure."""
+    data = _vs_search(query, schema_vec, k=k, doc_type_filter=doc_type_filter)
+    cited, chunks = [], []
+    for r in data:
+        if len(r) < 4:
+            continue
+        doc_id = r[1]
+        if doc_id not in cited:
+            cited.append(doc_id)
+        chunks.append(f"[Source: {r[1]} | Type: {r[2]}]\n{r[3]}")
+    return "\n\n---\n\n".join(chunks), cited
+
+
+# ── Agent Tool 2: Research ────────────────────────────────────────────────────
+def _cdd_research(domain_id: str, municipality: str, requirement_type: str = "",
+                  schema_vec: str = None) -> dict:
+    """Retrieve municipality requirements/licenses via ai_similarity ranking over
+    the per-domain `document_chunks`, enriched with the ontology
+    `Municipality DEFINES ...` edges."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    ont = dom.get("schema_ont") or raw
+    _vec = schema_vec or dom.get("schema_vec", "vectors")
+    query = f"requirements and licenses to open a store in {municipality} {requirement_type}".strip()
+    context_text, cited = _cdd_vs_search(_vec, query)
+
+    # Ontology: Municipality DEFINES requirement/license edges
+    defines: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        defines = run_sql(f"""
+            SELECT r.predicate, e.entity_type AS object_type,
+                   e.display_name, e.attributes
+            FROM {CATALOG}.{ont}.relationships r
+            JOIN {CATALOG}.{ont}.entities e ON e.entity_id = r.object_id
+            WHERE r.predicate = 'DEFINES'
+              AND (LOWER(r.subject_id)   LIKE LOWER('%{muni}%')
+                OR LOWER(COALESCE(e.display_name,'')) LIKE LOWER('%{muni}%'))
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        defines = []
+
+    # Structured requirement/license fields from extracted_fields as a fallback
+    reqs: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        uw = _unwrap_expr("ef.field_value")
+        reqs = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'      THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='requirement_type'  THEN {uw} END) AS requirement_type,
+                MAX(CASE WHEN ef.field_name='license_type'      THEN {uw} END) AS license_type,
+                MAX(CASE WHEN ef.field_name='authority'         THEN {uw} END) AS authority,
+                MAX(CASE WHEN ef.field_name='issuing_authority' THEN {uw} END) AS issuing_authority,
+                MAX(CASE WHEN ef.field_name='lead_time'         THEN {uw} END) AS lead_time,
+                MAX(CASE WHEN ef.field_name='effective_date'    THEN {uw} END) AS effective_date
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            ORDER BY effective_date DESC NULLS LAST
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        reqs = []
+
+    return {
+        "ok": True, "municipality": municipality, "requirement_type": requirement_type,
+        "context": context_text, "cited_docs": cited,
+        "defines_edges": defines, "requirements": reqs,
+    }
+
+
+# ── Agent Tool 3: Historical Knowledge ────────────────────────────────────────
+def _cdd_history(domain_id: str, municipality: str, schema_vec: str = None) -> dict:
+    """"Have we handled this municipality before?" — ai_similarity over prior
+    responses plus `Response`/`HAS_HISTORY_OF` edges, returning cited prior
+    answers with dates."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    ont = dom.get("schema_ont") or raw
+    _vec = schema_vec or dom.get("schema_vec", "vectors")
+    query = f"prior feasibility response history for {municipality}"
+    context_text, cited = _cdd_vs_search(_vec, query, doc_type_filter="historical_response")
+    if not context_text:  # fall back to an unfiltered search
+        context_text, cited = _cdd_vs_search(_vec, query)
+
+    priors: list = []
+    try:
+        muni = _sql_lit(municipality, 200)
+        uw = _unwrap_expr("ef.field_value")
+        priors = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'  THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='responder'     THEN {uw} END) AS responder,
+                MAX(CASE WHEN ef.field_name='response_date' THEN {uw} END) AS response_date,
+                MAX(CASE WHEN ef.field_name='request_type'  THEN {uw} END) AS request_type
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              WHERE pd.doc_type IN ('historical_response','consultant_correspondence')
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            ORDER BY response_date DESC NULLS LAST
+            LIMIT 25
+        """, timeout_secs=30) or []
+    except Exception:
+        priors = []
+
+    has_history = bool(priors) or bool(context_text)
+    return {
+        "ok": True, "municipality": municipality, "has_history": has_history,
+        "prior_responses": priors, "context": context_text, "cited_docs": cited,
+    }
+
+
+# ── Agent Tool 4: Action (reuses lifecycle + escalation engine) ───────────────
+def _cdd_action(domain_id: str, description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
+                priority: str = "MEDIUM", source_doc_ids=None,
+                requirement_change: bool = None, high_value: bool = None,
+                license_lead_time_days: int = None, expected_open_date: str = None,
+                logged_by: str = "cdd_agent") -> dict:
+    """Create + track an action. Reuses _create_action_master_core, so the Phase-1
+    escalation engine (evaluate_escalations) runs identically."""
+    docs = source_doc_ids or []
+    if isinstance(docs, str):
+        docs = [docs]
+    req = ActionMasterCreateRequest(
+        domain_id=domain_id, action_type=action_type, description=description,
+        priority=priority, logged_by=logged_by,
+        source_doc_ids=json.dumps(docs),
+        requirement_change=requirement_change, high_value=high_value,
+        license_lead_time_days=license_lead_time_days,
+        expected_open_date=expected_open_date,
+    )
+    return _create_action_master_core(req)
+
+
+# ── Change detection ──────────────────────────────────────────────────────────
+def _ensure_regulatory_change_history_table():
+    """Gold persistence for detected regulatory changes (new table, not a dup)."""
+    try:
+        run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {CATALOG}.platform.regulatory_change_history (
+                change_id               STRING NOT NULL,
+                domain_id               STRING,
+                municipality            STRING,
+                requirement_type        STRING,
+                previous_doc_id         STRING,
+                previous_effective_date STRING,
+                previous_summary        STRING,
+                new_doc_id              STRING,
+                new_effective_date      STRING,
+                new_summary             STRING,
+                affected_projects       STRING,   -- JSON array
+                impact                  STRING,
+                escalated               BOOLEAN,
+                action_id               STRING,
+                detected_at             TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+    except Exception as e:
+        print(f"[cdd] ensure regulatory_change_history failed: {e}")
+
+
+def detect_regulatory_change(municipality: str, requirement_type: str = "",
+                             domain_id: str = CDD_DOMAIN_ID,
+                             persist: bool = True) -> dict:
+    """Compare the latest ingested requirement for a municipality/requirement_type
+    against the prior effective_date version. On a material change emit a
+    structured REGULATORY CHANGE DETECTED result, fire the escalation engine
+    (requirement_change) → escalated action, and persist to the Gold history."""
+    dom = _get_domain_schemas(domain_id)
+    raw = dom["schema_raw"]
+    uw = _unwrap_expr("ef.field_value")
+    muni = _sql_lit(municipality, 200)
+    rt = _sql_lit(requirement_type, 200)
+    rt_pred = (
+        f"AND (LOWER(COALESCE(requirement_type,'')) LIKE LOWER('%{rt}%') "
+        f"OR LOWER(COALESCE(license_type,'')) LIKE LOWER('%{rt}%'))"
+    ) if requirement_type else ""
+
+    try:
+        versions = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id, pd.doc_type,
+                MAX(CASE WHEN ef.field_name='municipality'      THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='requirement_type'  THEN {uw} END) AS requirement_type,
+                MAX(CASE WHEN ef.field_name='license_type'      THEN {uw} END) AS license_type,
+                MAX(CASE WHEN ef.field_name='authority'         THEN {uw} END) AS authority,
+                MAX(CASE WHEN ef.field_name='issuing_authority' THEN {uw} END) AS issuing_authority,
+                MAX(CASE WHEN ef.field_name='effective_date'    THEN {uw} END) AS effective_date,
+                MAX(CASE WHEN ef.field_name='requirement'       THEN {uw} END) AS requirement,
+                MAX(CASE WHEN ef.field_name='lead_time'         THEN {uw} END) AS lead_time
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              JOIN {CATALOG}.{raw}.parsed_documents pd ON pd.doc_id = ef.doc_id
+              GROUP BY ef.doc_id, pd.doc_type
+            )
+            SELECT * FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+            {rt_pred}
+            ORDER BY effective_date DESC NULLS LAST
+            LIMIT 5
+        """, timeout_secs=45) or []
+    except Exception as e:
+        return {"ok": False, "detected": False, "error": str(e),
+                "municipality": municipality, "requirement_type": requirement_type}
+
+    if len(versions) < 2:
+        return {"ok": True, "detected": False, "municipality": municipality,
+                "requirement_type": requirement_type, "versions_found": len(versions),
+                "message": "Not enough versions to compare."}
+
+    latest, prior = versions[0], versions[1]
+
+    def _sig(v: dict) -> str:
+        return " | ".join(str(v.get(f) or "") for f in
+                          ("requirement_type", "license_type", "authority",
+                           "issuing_authority", "requirement", "lead_time"))
+
+    material = (_sig(latest) != _sig(prior)) or \
+               ((latest.get("effective_date") or "") != (prior.get("effective_date") or ""))
+    if not material:
+        return {"ok": True, "detected": False, "municipality": municipality,
+                "requirement_type": requirement_type,
+                "message": "Latest version matches prior — no material change."}
+
+    # Affected projects for this municipality
+    affected: list = []
+    try:
+        affected_rows = run_sql(f"""
+            WITH d AS (
+              SELECT ef.doc_id,
+                MAX(CASE WHEN ef.field_name='municipality'  THEN {uw} END) AS municipality,
+                MAX(CASE WHEN ef.field_name='project_id'    THEN {uw} END) AS project_id,
+                MAX(CASE WHEN ef.field_name='store_number'  THEN {uw} END) AS store_number
+              FROM {CATALOG}.{raw}.extracted_fields ef
+              GROUP BY ef.doc_id
+            )
+            SELECT DISTINCT COALESCE(project_id, store_number) AS project
+            FROM d
+            WHERE LOWER(COALESCE(municipality,'')) LIKE LOWER('%{muni}%')
+              AND COALESCE(project_id, store_number) IS NOT NULL
+            LIMIT 50
+        """, timeout_secs=30) or []
+        affected = [r["project"] for r in affected_rows if r.get("project")]
+    except Exception:
+        affected = []
+
+    prev_sum = f"{prior.get('requirement_type') or prior.get('license_type') or ''}: " \
+               f"{prior.get('requirement') or prior.get('authority') or ''} " \
+               f"(eff {prior.get('effective_date') or 'n/a'})"
+    new_sum = f"{latest.get('requirement_type') or latest.get('license_type') or ''}: " \
+              f"{latest.get('requirement') or latest.get('authority') or ''} " \
+              f"(eff {latest.get('effective_date') or 'n/a'})"
+    change_summary = (
+        f"Regulatory change in {municipality} "
+        f"({requirement_type or latest.get('requirement_type') or latest.get('license_type') or 'requirement'}): "
+        f"'{prev_sum.strip()}' → '{new_sum.strip()}'"
+    )
+    impact = (f"{len(affected)} project(s) affected: {', '.join(affected)}"
+              if affected else "No active projects currently linked to this municipality.")
+
+    # Fire escalation engine → escalated action (reuses Phase-1 engine)
+    escalations, action_id, escalated = [], None, False
+    try:
+        result = _cdd_action(
+            domain_id=domain_id,
+            action_type="REGULATORY_CHANGE_REVIEW",
+            description=change_summary + " | " + impact,
+            priority="HIGH",
+            source_doc_ids=[latest.get("doc_id"), prior.get("doc_id")],
+            requirement_change=True,
+        )
+        action_id = result.get("action_id")
+        escalations = result.get("escalations", [])
+        escalated = bool(result.get("attorney_review")) or bool(escalations)
+    except Exception as e:
+        print(f"[cdd] change-detection escalation failed: {e}")
+
+    if persist:
+        _ensure_regulatory_change_history_table()
+        try:
+            import uuid as _uuid
+            cid = str(_uuid.uuid4())
+            run_sql(f"""
+                INSERT INTO {CATALOG}.platform.regulatory_change_history
+                    (change_id, domain_id, municipality, requirement_type,
+                     previous_doc_id, previous_effective_date, previous_summary,
+                     new_doc_id, new_effective_date, new_summary,
+                     affected_projects, impact, escalated, action_id, detected_at)
+                VALUES ('{cid}', '{_sql_lit(domain_id,100)}', '{_sql_lit(municipality,200)}',
+                        '{_sql_lit(requirement_type or latest.get('requirement_type') or '',200)}',
+                        '{_sql_lit(prior.get('doc_id'),300)}', '{_sql_lit(prior.get('effective_date'),50)}',
+                        '{_sql_lit(prev_sum,2000)}',
+                        '{_sql_lit(latest.get('doc_id'),300)}', '{_sql_lit(latest.get('effective_date'),50)}',
+                        '{_sql_lit(new_sum,2000)}',
+                        '{_sql_lit(json.dumps(affected),4000)}', '{_sql_lit(impact,2000)}',
+                        {str(bool(escalated)).lower()}, '{_sql_lit(action_id or '',100)}',
+                        current_timestamp())
+            """, timeout_secs=30)
+        except Exception as e:
+            print(f"[cdd] persist regulatory_change_history failed: {e}")
+
+    return {
+        "ok": True, "detected": True, "municipality": municipality,
+        "requirement_type": requirement_type or latest.get("requirement_type"),
+        "previous": prior, "new": latest,
+        "affected_projects": affected, "impact": impact,
+        "change_summary": change_summary,
+        "escalations": escalations, "escalated": escalated, "action_id": action_id,
+        "banner": "REGULATORY CHANGE DETECTED",
+    }
+
+
+class RegulatoryChangeDetectRequest(BaseModel):
+    municipality:     str
+    requirement_type: str  = ""
+    domain_id:        str  = CDD_DOMAIN_ID
+    persist:          bool = True
+
+
+@router.post("/regulatory-change/detect")
+async def regulatory_change_detect(req: RegulatoryChangeDetectRequest):
+    """Detect a material regulatory change for a municipality/requirement_type,
+    escalate via the Phase-1 engine, and persist to the Gold history table."""
+    return detect_regulatory_change(
+        req.municipality, req.requirement_type, req.domain_id, req.persist)
+
+
+@router.get("/regulatory-change/history")
+async def regulatory_change_history(domain_id: str = CDD_DOMAIN_ID, limit: int = 100):
+    """Return persisted regulatory change history (Gold) for the domain."""
+    _ensure_regulatory_change_history_table()
+    try:
+        rows = run_sql(f"""
+            SELECT change_id, domain_id, municipality, requirement_type,
+                   previous_doc_id, previous_effective_date, previous_summary,
+                   new_doc_id, new_effective_date, new_summary,
+                   affected_projects, impact, escalated, action_id,
+                   CAST(detected_at AS STRING) AS detected_at
+            FROM {CATALOG}.platform.regulatory_change_history
+            WHERE domain_id = '{_sql_lit(domain_id,100)}'
+            ORDER BY detected_at DESC
+            LIMIT {int(limit)}
+        """, timeout_secs=30) or []
+        for r in rows:
+            try:
+                r["affected_projects"] = json.loads(r.get("affected_projects") or "[]")
+            except Exception:
+                r["affected_projects"] = []
+        return {"changes": rows, "total": len(rows), "domain_id": domain_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── The CDD agent: four tools orchestrated inside the existing agent_query ─────
+def _cdd_agent_query(req, domain_id: str, domain_cfg: dict,
+                     base_prompt: str, schema_vec: str) -> dict:
+    """Build a tool-calling agent whose tools ARE the four CDD 'agents'
+    (Intake / Research / History / Action) plus change detection. Falls back to
+    a direct-LLM answer over document context if the agent stack is unavailable."""
+    try:
+        from langchain.agents import AgentExecutor, create_tool_calling_agent
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+        from langchain_core.tools import tool
+
+        @tool
+        def intake_request(request_text: str) -> str:
+            """Classify a feasibility/store-development request and extract its
+            request_type, project/store, municipality, state and priority."""
+            return json.dumps(_cdd_intake(domain_id, request_text))
+
+        @tool
+        def research_municipality(municipality: str, requirement_type: str = "") -> str:
+            """Retrieve the regulatory requirements and licenses for a municipality
+            (e.g. Tampa FL, Dallas TX). Uses Vector Search over the domain document
+            index plus the ontology 'Municipality DEFINES' edges. Cite doc IDs."""
+            return json.dumps(_cdd_research(domain_id, municipality, requirement_type, schema_vec))
+
+        @tool
+        def municipality_history(municipality: str) -> str:
+            """Answer 'have we handled this municipality before?'. Returns prior
+            responses/correspondence with their dates and cited document IDs."""
+            return json.dumps(_cdd_history(domain_id, municipality, schema_vec))
+
+        @tool
+        def create_tracked_action(description: str, action_type: str = "FEASIBILITY_FOLLOWUP",
+                                  priority: str = "MEDIUM") -> str:
+            """Create and track an action in the platform action register. Runs the
+            escalation engine automatically. Use to log follow-ups or open items."""
+            return json.dumps(_cdd_action(domain_id, description, action_type, priority))
+
+        @tool
+        def detect_change(municipality: str, requirement_type: str = "") -> str:
+            """Detect whether a municipality's regulatory requirement changed vs its
+            prior effective-dated version. Emits REGULATORY CHANGE DETECTED and
+            escalates when material."""
+            return json.dumps(detect_regulatory_change(municipality, requirement_type, domain_id))
+
+        tools = [intake_request, research_municipality, municipality_history,
+                 create_tracked_action, detect_change]
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", base_prompt),
+            MessagesPlaceholder("chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder("agent_scratchpad"),
+        ])
+        llm, _used_model = _get_llm(max_tokens=2048)
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        executor = AgentExecutor(agent=agent, tools=tools, verbose=False, max_iterations=8)
+        result = executor.invoke({
+            "input": req.question,
+            "chat_history": req.chat_history or [],
+        })
+        return {
+            "answer": result.get("output", ""),
+            "question": req.question,
+            "tools_used": len(tools),
+            "vector_search_active": True,
+            "model": AGENT_MODEL,
+            "domain_id": domain_id,
+        }
+    except Exception as e:
+        # Graceful fallback: direct LLM over VS/SQL document context
+        context_text, cited = _cdd_vs_search(schema_vec, req.question)
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            human = req.question
+            if context_text:
+                human = (f"Use these document excerpts as your primary source:\n\n"
+                         f"{context_text}\n\n---\n\nQuestion: {req.question}")
+            llm, _used_model = _get_llm(max_tokens=2048)
+            resp = llm.invoke([SystemMessage(content=base_prompt),
+                               HumanMessage(content=human)])
+            return {"answer": resp.content.strip(), "question": req.question,
+                    "tools_used": 0, "vector_search_active": bool(context_text),
+                    "cited_docs": cited, "fallback": True, "error": str(e),
+                    "domain_id": domain_id}
+        except Exception as e2:
+            return {"answer": f"I encountered an error: {e2}", "question": req.question,
+                    "fallback": True, "error": str(e2), "domain_id": domain_id}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4111,7 +4964,7 @@ def _ensure_copilot_prompts_table():
             domain_id   STRING  NOT NULL,
             name        STRING  NOT NULL,
             prompt_text STRING  NOT NULL,
-            is_active   BOOLEAN DEFAULT FALSE,
+            is_active   BOOLEAN,
             created_at  TIMESTAMP,
             updated_at  TIMESTAMP,
             created_by  STRING
@@ -4308,6 +5161,13 @@ class ActionMasterCreateRequest(BaseModel):
     incident_ref:  str  = ""
     logged_by:     str  = "app_user"
     source_doc_ids: str = ""   # JSON array string e.g. '["doc1","doc2"]'
+    # Optional escalation-context signals, evaluated deterministically on create.
+    # Omitted by existing callers → no rule fires → identical behavior.
+    confidence:             Optional[float] = None   # e.g. answer/extraction confidence 0..1
+    license_lead_time_days: Optional[int]   = None
+    expected_open_date:     Optional[str]   = None    # YYYY-MM-DD
+    requirement_change:     Optional[bool]  = None
+    high_value:             Optional[bool]  = None
 
 class ActionMasterUpdateRequest(BaseModel):
     new_status:          str
@@ -4351,7 +5211,7 @@ def _ensure_action_master_table():
             priority             STRING,
             source_doc_ids       STRING,
             incident_ref         STRING,
-            status               STRING  DEFAULT 'OPEN',
+            status               STRING,
             owner                STRING,
             due_date             DATE,
             eta                  DATE,
@@ -4412,6 +5272,17 @@ async def create_action_master(req: ActionMasterCreateRequest):
     Create a new action in the platform-wide action_master table.
     Also writes the initial OPEN history row.
     """
+    return _create_action_master_core(req)
+
+
+def _create_action_master_core(req: ActionMasterCreateRequest) -> dict:
+    """Synchronous core of POST /action-master.
+
+    Extracted verbatim so in-process callers (CDD Action agent tool, regulatory
+    change detection) can create+track actions and run the SAME Phase-1
+    escalation engine without an HTTP round-trip. Behavior is identical to the
+    original route body — no change for supply_chain / compliance callers.
+    """
     _ensure_action_master_table()
     _ensure_action_history_table()
     import uuid as _uuid
@@ -4431,7 +5302,42 @@ async def create_action_master(req: ActionMasterCreateRequest):
                 current_timestamp(), current_timestamp())
     """, timeout_secs=30)
     _write_action_history(action_id, "", "OPEN", req.logged_by, "Action created", {})
-    return {"action_id": action_id, "status": "OPEN", "created": True}
+
+    # ── Deterministic escalation evaluation ──
+    context = {
+        "confidence":             req.confidence,
+        "license_lead_time_days": req.license_lead_time_days,
+        "expected_open_date":     req.expected_open_date,
+        "requirement_change":     req.requirement_change,
+        "high_value":             req.high_value,
+    }
+    triggered, escalated, bumped = [], False, False
+    try:
+        triggered = evaluate_escalations(req.domain_id, context)
+    except Exception as _e:
+        print(f"[escalation] evaluate failed: {_e}")
+    for t in triggered:
+        tgt = t.get("target")
+        if tgt == "attorney_review":
+            _queue_attorney_review(
+                req.domain_id, req.description,
+                f"Action {action_id} ({req.action_type})",
+                t.get("reason") or t.get("rule_type"))
+            escalated = True
+        elif tgt == "priority_bump" and not bumped:
+            try:
+                run_sql(f"""
+                    UPDATE {CATALOG}.platform.action_master
+                    SET priority = 'HIGH', updated_at = current_timestamp()
+                    WHERE action_id = '{action_id}' AND priority NOT IN ('HIGH','CRITICAL')
+                """, timeout_secs=20)
+                bumped = True
+            except Exception as _e:
+                print(f"[escalation] priority bump failed: {_e}")
+
+    return {"action_id": action_id, "status": "OPEN", "created": True,
+            "escalations": triggered, "attorney_review": escalated,
+            "priority_bumped": bumped}
 
 
 @router.get("/action-master")
@@ -4631,8 +5537,9 @@ async def get_action_reports(domain_id: str = "supply_chain"):
         for r in stats:
             s = r.get("status","?")
             p = r.get("priority","?")
-            by_status[s]    = by_status.get(s,0) + r.get("cnt",0)
-            by_priority[p]  = by_priority.get(p,0) + r.get("cnt",0)
+            # run_sql returns all values as strings; coerce cnt to int before adding
+            by_status[s]    = by_status.get(s,0) + int(r.get("cnt") or 0)
+            by_priority[p]  = by_priority.get(p,0) + int(r.get("cnt") or 0)
 
         return {
             "domain_id":    domain_id,

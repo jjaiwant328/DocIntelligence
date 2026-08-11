@@ -1,0 +1,88 @@
+MUNICIPAL REQUIREMENTS SUMMARY — STORE DEVELOPMENT FEASIBILITY
+
+Document ID: MUNI-REQ-2024-SD201-HILLSBOROUGH
+Document Type: municipal_requirement
+Project ID: SD-2024-201
+Store Number: 5201
+Address: 8820 N Dale Mabry Hwy, Tampa, FL 33614
+Market: Tampa FL
+State: FL
+Municipality: City of Tampa
+County: Hillsborough County
+Requirement Type: municipal_licensing_summary
+Authority: Hillsborough County Development Services; City of Tampa Planning & Development
+Prepared By: Kendra Patel, Senior Development Analyst — RaceTrac Store Development
+Response Date: 2024-04-03
+Source Document: FEASY-EMAIL-2024-SD201
+Responder: Kendra Patel
+
+EXECUTIVE SUMMARY
+Site at 8820 N Dale Mabry Hwy, Tampa FL (Hillsborough County) is feasible for a
+convenience retail / fuel station. CI zoning is compatible with the proposed use. Key
+requirements and lead times are listed below. No material obstacles identified.
+
+SECTION 1 — ZONING AND LAND USE
+Authority: City of Tampa Development Services, (813) 274-3100
+Current Zoning: CI (Commercial Intensive) — Tampa Code of Ordinances § 27-158
+Proposed Use: Convenience retail + motor fuel sales (SIC 5541)
+Compatibility: CONFIRMED COMPATIBLE. Fuel stations are a permitted-by-right use under CI.
+Variance Required: None for principal use. Minor site plan approval required for canopy setback
+  if within 10 ft of right-of-way (verify during site plan review).
+Requirement Type: zoning_clearance
+Lead Time: 2–3 weeks for zoning verification letter
+Effective Date: N/A (existing zoning)
+
+SECTION 2 — ALCOHOL LICENSE (BEER & WINE OFF-PREMISE)
+Authority: Florida Division of Alcoholic Beverages and Tobacco (DABT)
+License Type: 2-APS (Beer and Wine, Package Store, Off-Premise Consumption)
+Issuing Authority: Florida DABT — Tampa District
+Applicable Law: Florida Statutes Chapter 561–565; § 562.11 (age verification)
+Requirements:
+  - DABT quota: Hillsborough County is NOT in a quota county for 2-APS. License available.
+  - Distance restriction: Must be ≥ 500 ft from schools and churches (Florida Statute § 561.44).
+    Site survey confirms nearest school (Carver Elementary) is 0.72 miles away — COMPLIANT.
+  - Designated manager background check required.
+  - Certificate of Use / CO required before license activation.
+Lead Time: 8–10 weeks from complete application submission
+Renewal Period: Annual (October 1 renewal deadline)
+Effective Date: Upon approval (estimated August 2024)
+License Fee: $1,820 (2-APS annual fee)
+
+SECTION 3 — TOBACCO DEALER PERMIT
+Authority: Florida Department of Revenue — Division of Taxes
+License Type: Tobacco Products Dealer Permit
+Applicable Law: Florida Statutes § 210.15–210.185
+Requirements:
+  - Florida business registration active
+  - Sales tax registration (Form DR-1)
+  - No prior tobacco tax violations
+Lead Time: 2–4 weeks
+Renewal Period: Annual (July 1 renewal deadline)
+Permit Fee: $50 annual
+
+SECTION 4 — BUSINESS TAX RECEIPT
+Authority: Hillsborough County Tax Collector — Business Tax Division
+License Type: Occupational License / Business Tax Receipt (BTR)
+Applicable Law: Hillsborough County Code § 15 — Business Tax
+Requirements:
+  - Completed BTR application
+  - Certificate of Use from City of Tampa (confirms zoning compliance)
+  - State business license copy
+Lead Time: 1–2 weeks after Certificate of Use issued
+Renewal Period: Annual (September 30 renewal deadline)
+License Fee: $125–$200 (convenience retail classification)
+
+SECTION 5 — BUILDING AND SITE PLAN PERMITS
+Authority: City of Tampa Construction Services; Hillsborough County EPC
+Requirements:
+  - Site Plan Review (Development Review Committee) — submit by May 2024
+  - Building permit for new construction (canopy, dispensers, store structure)
+  - Hillsborough County EPC: UST permit for underground storage tanks (3 tanks)
+  - FDEP: UST registration prior to fuel operations
+Lead Time: Building permit — 12–16 weeks. UST registration — 4 weeks.
+Effective Date: N/A (new construction)
+
+OVERALL FEASIBILITY ASSESSMENT: FEASIBLE — NO MATERIAL OBSTACLES
+Recommended next step: Submit alcohol license pre-application; file site plan review by May 1, 2024.
+
+Prepared By: Kendra Patel    Date: April 3, 2024

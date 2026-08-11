@@ -1,0 +1,6 @@
+# Requirements are configuration, not skill code (docs Phase 10).
+new_store:
+  - zoning
+  - alcohol_license
+  - environmental_permit
+  - business_license

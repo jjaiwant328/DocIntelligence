@@ -109,8 +109,40 @@ const nodeColor: Record<string,string> = {
   Contract:            "#374151",  // dark slate
   Restaurant:          "#b45309",  // brown/tan
   TemperatureExcursion:"#be185d",  // rose
+  // Compliance / store-development entity types
+  Store:               "#0ea5e9",
+  Inspector:           "#f59e0b",
+  Vendor:              "#ea580c",
+  Permit:              "#8b5cf6",
+  Audit:               "#14b8a6",
+  Regulation:          "#4f46e5",
+  Violation:           "#e11d48",
+  CorrectiveAction:    "#16a34a",
+  Certification:       "#0d9488",
+  Project:             "#2563eb",
+  Municipality:        "#9333ea",
+  RegulatoryRequirement:"#c2410c",
+  License:             "#0891b2",
+  Response:            "#65a30d",
+  FeasibilityRequest:  "#db2777",
+  Action:              "#4338ca",
   default:             "#64748b",
 };
+
+// Distinct, stable color for every entity type. Known types use the curated map
+// above; any other type gets a deterministic palette color so a new domain still
+// shows one distinct color per entity type.
+const TYPE_COLOR_PALETTE = [
+  "#2563eb", "#7c3aed", "#dc2626", "#0891b2", "#d97706", "#db2777", "#059669",
+  "#ea580c", "#6d28d9", "#0284c7", "#b45309", "#be185d", "#16a34a", "#9333ea",
+  "#c2410c", "#0d9488", "#4f46e5", "#ca8a04", "#e11d48", "#065f46",
+];
+function colorForType(type: string): string {
+  if (type && nodeColor[type]) return nodeColor[type];
+  let h = 0;
+  for (let i = 0; i < (type?.length ?? 0); i++) h = (h * 31 + type.charCodeAt(i)) >>> 0;
+  return TYPE_COLOR_PALETTE[h % TYPE_COLOR_PALETTE.length];
+}
 
 // ── Action Playbooks ──────────────────────────────────────────────────────────
 
@@ -452,7 +484,6 @@ function buildTabs(domainId: string) {
       tooltip: "Paste your guiding instructions, analyze data readiness, and run AI-powered intelligence queries against your documents",
       subs: [
         { id: "setup",     label: "Setup & Readiness" },
-        { id: "briefings", label: "Intelligence Briefings" },
         { id: "ask",       label: "Ask Copilot" },
         { id: "legal",     label: "Legal Queue" },
       ],
@@ -483,9 +514,48 @@ interface CopilotResult {
 
 function StructuredCopilotResponse({ result, onDocClick }: { result: CopilotResult; onDocClick?: (docId: string) => void }) {
   const sections = result?.sections ?? {};
-  const citedDocs = result?.cited_docs ?? [];
   const rawAnswer = result?.raw_answer ?? "";
   const hasStructure = Object.values(sections).some(v => v && v.trim().length > 0);
+
+  // Open the source document in the in-tab viewer (never navigate away).
+  const openDoc = (docId: string) => { const id = (docId || "").trim(); if (id && onDocClick) onDocClick(id); };
+
+  const SourceChip = ({ doc }: { doc: string }) => (
+    <button
+      onClick={() => openDoc(doc)}
+      title="Open source document"
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 border border-blue-200 text-blue-700 text-[10px] font-medium hover:bg-blue-200 hover:border-blue-400 transition-colors cursor-pointer shrink-0"
+    >
+      <span className="font-mono truncate max-w-[150px]">{doc.replace(/\.pdf$/i, "")}</span>
+      <span className="text-blue-400 text-[9px]">↗</span>
+    </button>
+  );
+
+  // Render the Facts block as aligned rows: fact text (left) + its source chip (right),
+  // parsed from a trailing "[filename]" token on each line.
+  const renderFacts = (text: string) => {
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    return (
+      <div className="space-y-2">
+        {lines.map((line, i) => {
+          let body = line.replace(/^[-•*]\s*/, "");
+          let src: string | null = null;
+          const m = body.match(/\[([^\]]+)\]\s*$/);
+          if (m && typeof m.index === "number") {
+            const tok = m[1].trim();
+            body = body.slice(0, m.index).trim();
+            if (tok && !/^no source$/i.test(tok)) src = tok.replace(/^source:\s*/i, "").trim();
+          }
+          return (
+            <div key={i} className="flex items-start justify-between gap-3">
+              <span className="flex-1 text-sm text-blue-900 leading-relaxed">{body}</span>
+              {src && <SourceChip doc={src} />}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   if (!hasStructure) {
     return (
@@ -495,10 +565,11 @@ function StructuredCopilotResponse({ result, onDocClick }: { result: CopilotResu
     );
   }
 
+  // "Sources" is intentionally omitted — the source for each fact is shown inline
+  // next to that fact (Req: remove the separate Sources section + bottom panel).
   const sectionDefs = [
     { key: "facts",          label: "Facts",                   icon: "📋", bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-800",   head: "text-blue-700" },
     { key: "interpretations",label: "Interpretations",         icon: "🔍", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-800", head: "text-purple-700" },
-    { key: "sources",        label: "Sources",                 icon: "📂", bg: "bg-green-50",  border: "border-green-200",  text: "text-green-800",  head: "text-green-700" },
     { key: "risks",          label: "Risks",                   icon: "⚠️", bg: "bg-red-50",    border: "border-red-200",    text: "text-red-800",    head: "text-red-700" },
     { key: "open_questions", label: "Open Questions",          icon: "❓", bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-800",  head: "text-amber-700" },
     { key: "next_steps",     label: "Recommended Next Steps",  icon: "✅", bg: "bg-indigo-50", border: "border-indigo-200", text: "text-indigo-800", head: "text-indigo-700" },
@@ -548,40 +619,14 @@ function StructuredCopilotResponse({ result, onDocClick }: { result: CopilotResu
               <span>{sec.icon}</span>
               <span>{sec.label}</span>
             </div>
-            <div className={`text-sm ${sec.text} whitespace-pre-wrap leading-relaxed`}>
-              {content}
-            </div>
+            {sec.key === "facts" ? renderFacts(content) : (
+              <div className={`text-sm ${sec.text} whitespace-pre-wrap leading-relaxed`}>
+                {content}
+              </div>
+            )}
           </div>
         );
       })}
-      {citedDocs.length > 0 && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-2">
-            📄 Source Documents Referenced
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {citedDocs.map((d) => (
-              <button
-                key={d}
-                onClick={() => {
-                  if (onDocClick) {
-                    onDocClick(d);
-                  } else {
-                    // Default fallback: navigate to Library with correct JSON payload
-                    try { sessionStorage.setItem("docintel_highlight_doc", JSON.stringify({ doc_id: d, domain_id: "supply_chain" })); } catch {}
-                    window.location.href = `/document-intelligence?domain_id=supply_chain&step=library`;
-                  }
-                }}
-                title="Click to view this document in the Library"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-medium hover:bg-blue-100 hover:border-blue-400 transition-colors cursor-pointer"
-              >
-                <span className="font-mono truncate max-w-[160px]">{d.replace(/\.pdf$/i, "")}</span>
-                <span className="text-blue-400 text-[9px]">↗</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -634,16 +679,26 @@ interface PromptRecord {
   created_by: string;
 }
 
-function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }: {
+function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, onDocClick }: {
   domainId: string; sub: string; apiBase: string;
   onSwitchToSetup?: () => void;
   onSwitchSub?: (s: string) => void;
+  onDocClick?: (docId: string) => void;
 }) {
+  // Persist key UI state to sessionStorage so it survives tab navigation (per domain).
+  const _skey = `docintel_copilot_${domainId}`;
+  const _p: {
+    draftPrompt?: string; draftName?: string; gapReport?: GapReport | null;
+    briefings?: (CopilotResult | null)[]; askQuery?: string; askResult?: CopilotResult | null;
+  } = (() => { try { return JSON.parse(sessionStorage.getItem(_skey) || "{}"); } catch { return {}; } })();
+
+  const briefingQueries = getBriefingQueries(domainId);
+
   const [savedPrompt,   setSavedPrompt]   = useState<string | null>(null);
   const [savedAt,       setSavedAt]       = useState<string | null>(null);
-  const [draftPrompt,   setDraftPrompt]   = useState("");
-  const [draftName,     setDraftName]     = useState("");
-  const [gapReport,     setGapReport]     = useState<GapReport | null>(null);
+  const [draftPrompt,   setDraftPrompt]   = useState(_p.draftPrompt || "");
+  const [draftName,     setDraftName]     = useState(_p.draftName || "");
+  const [gapReport,     setGapReport]     = useState<GapReport | null>(_p.gapReport || null);
   const [analyzing,     setAnalyzing]     = useState(false);
   const [saving,        setSaving]        = useState(false);
   const [saveStep,      setSaveStep]      = useState("");   // e.g. "Creating…" / "Activating…"
@@ -656,17 +711,29 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [showAddNew,      setShowAddNew]      = useState(false);
 
-  // Briefings state
-  const briefingQueries = getBriefingQueries(domainId);
+  // Briefings state (restored from session if present)
   const [briefings, setBriefings] = useState<(CopilotResult | null | "loading")[]>(
-    briefingQueries.map(() => null)
+    () => (Array.isArray(_p.briefings) && _p.briefings.length === briefingQueries.length)
+      ? _p.briefings
+      : briefingQueries.map(() => null)
   );
 
-  // Ask state
-  const [askQuery,   setAskQuery]   = useState("");
-  const [askResult,  setAskResult]  = useState<CopilotResult | null>(null);
+  // Ask state (restored from session if present)
+  const [askQuery,   setAskQuery]   = useState(_p.askQuery || "");
+  const [askResult,  setAskResult]  = useState<CopilotResult | null>(_p.askResult || null);
   const [askLoading, setAskLoading] = useState(false);
   const [addToLegal, setAddToLegal] = useState(false);
+
+  // Save session state whenever the persisted pieces change.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(_skey, JSON.stringify({
+        draftPrompt, draftName, gapReport,
+        briefings: briefings.map(b => (b === "loading" ? null : b)),
+        askQuery, askResult,
+      }));
+    } catch { /* ignore quota errors */ }
+  }, [_skey, draftPrompt, draftName, gapReport, briefings, askQuery, askResult]);
 
   // Load prompt library — returns a Promise so callers can await it
   const loadPromptLibrary = useCallback((): Promise<void> => {
@@ -697,9 +764,10 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
     loadPromptLibrary();
   }, [domainId, apiBase, loadPromptLibrary]);
 
-  // Auto-run briefings when switching to that sub-tab (if prompt is saved)
+  // Auto-run briefings when the Ask Copilot tab opens (if a prompt is saved).
+  // Briefings now render below the Ask panel (no separate sub-tab).
   useEffect(() => {
-    if (sub !== "briefings" || !savedPrompt) return;
+    if (sub !== "ask" || !savedPrompt) return;
     // Only run briefings that haven't been loaded yet
     briefingQueries.forEach((q, i) => {
       if (briefings[i] !== null) return;
@@ -926,10 +994,10 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
             </div>
             <div className="flex flex-col gap-1.5 shrink-0">
               <button
-                onClick={() => { onSwitchSub?.("briefings"); setSaveSuccess(null); }}
+                onClick={() => { onSwitchSub?.("ask"); setSaveSuccess(null); }}
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 cursor-pointer"
               >
-                → View Briefings
+                → Ask Copilot &amp; Briefings
               </button>
               <button
                 onClick={() => setSaveSuccess(null)}
@@ -1148,34 +1216,20 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
     );
   }
 
-  // ── Briefings sub-view ──
-  if (sub === "briefings") {
-    if (!savedPrompt) {
-      return (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center text-sm text-amber-700">
-          No guiding prompt saved yet. Go to the <strong>Setup &amp; Readiness</strong> tab to paste your instructions first.
-        </div>
-      );
-    }
+  // ── Intelligence Briefings — rendered below the Ask Copilot panel (same tab) ──
+  const renderBriefings = () => {
+    if (!savedPrompt) return null;
     return (
-      <div className="space-y-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-gray-800">Intelligence Briefings</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Auto-generated insights from your parsed documents, guided by your saved prompt.</p>
-          </div>
-          <button
-            onClick={() => onSwitchToSetup ? onSwitchToSetup() : setEditMode(true)}
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
-          >
-            ✏️ Edit Prompt
-          </button>
+      <div className="space-y-4 pt-4 mt-2 border-t border-gray-200">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-800">Intelligence Briefings</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Auto-generated insights from your parsed documents, guided by the active prompt.</p>
         </div>
         <div className="space-y-4">
           {briefingQueries.map((q, i) => {
             const b = briefings[i];
             return (
-              <details key={i} className="bg-white border border-gray-200 rounded-lg overflow-hidden" open={i === 0}>
+              <details key={i} className="bg-white border border-gray-200 rounded-lg overflow-hidden" open={false}>
                 <summary className="px-4 py-3 text-sm font-semibold text-gray-800 cursor-pointer hover:bg-gray-50 flex items-center gap-2">
                   <span className="text-blue-500 flex-shrink-0">#{i + 1}</span>
                   {q}
@@ -1189,7 +1243,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
                       <span className="animate-spin">⟳</span> Consulting document knowledge base…
                     </div>
                   ) : b && typeof b === "object" ? (
-                    <StructuredCopilotResponse result={b as CopilotResult} />
+                    <StructuredCopilotResponse result={b as CopilotResult} onDocClick={onDocClick} />
                   ) : (
                     <p className="text-xs text-gray-400 py-2">Waiting to load…</p>
                   )}
@@ -1200,7 +1254,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
         </div>
       </div>
     );
-  }
+  };
 
   // ── Legal Queue sub-view ──
   if (sub === "legal") {
@@ -1292,7 +1346,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
       {/* Result */}
       {askResult && askResult.sections !== undefined && (
         <>
-          <StructuredCopilotResponse result={askResult} />
+          <StructuredCopilotResponse result={askResult} onDocClick={onDocClick} />
           {/* Manual "Add to Legal Review" */}
           <div className="flex items-center gap-3 pt-2">
             {!addToLegal ? (
@@ -1331,6 +1385,9 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub }:
           )}
         </div>
       )}
+
+      {/* Intelligence Briefings (moved here from the separate sub-tab) */}
+      {renderBriefings()}
     </div>
   );
 }
@@ -1755,13 +1812,16 @@ function ComplianceMapTab({ domainId, sub, apiBase }: { domainId: string; sub: s
                     <td className="px-3 py-2.5 text-gray-600">{item.assigned_owner || "—"}</td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{item.deadline || "—"}</td>
                     <td className="px-3 py-2.5">
-                      {item.risk_level ? (
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          item.risk_level === "CRITICAL" ? "bg-red-600 text-white" :
-                          item.risk_level === "HIGH" ? "bg-red-100 text-red-700" :
-                          item.risk_level === "MEDIUM" ? "bg-amber-100 text-amber-700" :
-                          "bg-gray-100 text-gray-600"}`}>{item.risk_level}</span>
-                      ) : "—"}
+                      {["CRITICAL","HIGH","MEDIUM","LOW"].includes((item.risk_level || "").toUpperCase()) ? (() => {
+                        const rl = (item.risk_level || "").toUpperCase();
+                        return (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            rl === "CRITICAL" ? "bg-red-600 text-white" :
+                            rl === "HIGH" ? "bg-red-100 text-red-700" :
+                            rl === "MEDIUM" ? "bg-amber-100 text-amber-700" :
+                            "bg-gray-100 text-gray-600"}`}>{rl}</span>
+                        );
+                      })() : "—"}
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${digestStatusStyle[item.status] ?? "bg-gray-100 text-gray-500"}`}>
@@ -1859,6 +1919,10 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
   const [dragging,    setDragging]    = useState(false);
   const [dragStart,   setDragStart]   = useState({ x: 0, y: 0 });
   const [graphSearch, setGraphSearch] = useState("");
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  const toggleType = (t: string) => setHiddenTypes(prev => {
+    const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
+  });
   const [emailOpen,    setEmailOpen]    = useState(false);
   const [emailTo,      setEmailTo]      = useState("");
   const [emailCopied,  setEmailCopied]  = useState(false);
@@ -1934,7 +1998,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
             className={`flex items-center gap-2 text-xs rounded-md px-2.5 py-2 border cursor-pointer transition-colors
               ${selected===n.id ? "bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200" : "bg-gray-50 border-gray-100 hover:bg-white hover:border-gray-300"}`}
           >
-            <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: nodeColor[n.type] ?? nodeColor.default }} />
+            <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorForType(n.type) }} />
             <div className="min-w-0">
               <p className="font-medium text-gray-800 truncate">{n.label}</p>
               <p className="text-gray-400 text-[10px]">{n.type}</p>
@@ -2027,7 +2091,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
           {selectedNode && (
             <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-xs flex-shrink-0">
               <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-                style={{ backgroundColor: nodeColor[selectedNode.type] ?? nodeColor.default }}>
+                style={{ backgroundColor: colorForType(selectedNode.type) }}>
                 {selectedNode.type.slice(0,2).toUpperCase()}
               </div>
               <span className="font-semibold text-indigo-800">{selectedNode.label}</span>
@@ -2188,7 +2252,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
             <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
               <defs>
                 {presentTypes.map(type => {
-                  const c = nodeColor[type] ?? nodeColor.default;
+                  const c = colorForType(type);
                   return (
                     <marker key={type} id={`arr-${type}`} markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
                       <path d="M0,0 L0,6 L8,3 z" fill={c} />
@@ -2207,11 +2271,12 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
               {graph.edges.map((e, i) => {
                 const s = nodeById[e.source], t = nodeById[e.target];
                 if (!s || !t) return null;
+                if (hiddenTypes.has(s.type) || hiddenTypes.has(t.type)) return null;
                 const isSel  = !!(selected && (e.source === selected || e.target === selected));
                 const isHov  = !selected && (hovered === e.source || hovered === e.target);
                 const isEHov = hoveredEdge === i;
                 const highlight = isSel || isHov || isEHov;
-                const srcColor  = nodeColor[s.type] ?? nodeColor.default;
+                const srcColor  = colorForType(s.type);
                 const dimmed    = !!(selected && !isSel);
                 const d = edgePath(s.x, s.y, t.x, t.y);
                 const dx = t.x - s.x, dy = t.y - s.y;
@@ -2245,7 +2310,8 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
 
               {/* Nodes */}
               {graph.nodes.map(n => {
-                const color  = nodeColor[n.type] ?? nodeColor.default;
+                if (hiddenTypes.has(n.type)) return null;
+                const color  = colorForType(n.type);
                 const isHov  = hovered === n.id;
                 const isSel  = selected === n.id;
                 const degree = connCount[n.id] ?? 0;
@@ -2295,14 +2361,32 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
           </svg>
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5 px-3 py-2.5 border-t border-gray-100">
-          {presentTypes.map(type => (
-            <div key={type} className="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: nodeColor[type] ?? nodeColor.default }} />
-              {type}
-            </div>
-          ))}
+        {/* Legend / entity-type filter — click a type to show or hide it */}
+        <div className="px-3 py-2.5 border-t border-gray-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Filter by entity type</span>
+            {hiddenTypes.size > 0 && (
+              <button onClick={() => setHiddenTypes(new Set())} className="text-[10px] text-blue-600 hover:underline cursor-pointer">Show all</button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+            {presentTypes.map(type => {
+              const hidden = hiddenTypes.has(type);
+              const count = graph.nodes.filter(n => n.type === type).length;
+              return (
+                <button
+                  key={type}
+                  onClick={() => toggleType(type)}
+                  title={hidden ? "Show this type" : "Hide this type"}
+                  className={`flex items-center gap-1.5 text-[11px] rounded-full border px-2 py-0.5 transition-colors cursor-pointer ${hidden ? "border-gray-200 text-gray-300 line-through bg-gray-50" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+                >
+                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hidden ? "#cbd5e1" : colorForType(type) }} />
+                  {type}
+                  <span className="text-gray-400">({count})</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -2316,7 +2400,7 @@ function OntologyMap({ graph, sub, domainName = "Domain" }: { graph: OntGraph; s
 
           <div className="flex items-center gap-2 mb-3">
             <div className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
-              style={{ backgroundColor: nodeColor[selectedNode.type] ?? nodeColor.default }}>
+              style={{ backgroundColor: colorForType(selectedNode.type) }}>
               {selectedNode.type.slice(0, 2).toUpperCase()}
             </div>
             <div>
@@ -2420,14 +2504,17 @@ function ActionCard({ pb, onLogged, domainId = "supply_chain", incidentRef = "RC
   async function takeAction() {
     setSubmitting(true);
     try {
-      // Write to legacy action_log (backward compat)
-      await postJson(`/api/docintel/log-action?domain_id=${encodeURIComponent(domainId)}`, {
-        action_type: pb.action_type,
-        description: desc,
-        priority: pb.priority,
-        incident_ref: incidentRef,
-        logged_by: loggedBy,
-      });
+      // Write to legacy action_log (backward compat) — best-effort; must not block
+      // the platform.action_master write that Action Center / Reports read.
+      try {
+        await postJson(`/api/docintel/log-action?domain_id=${encodeURIComponent(domainId)}`, {
+          action_type: pb.action_type,
+          description: desc,
+          priority: pb.priority,
+          incident_ref: incidentRef,
+          logged_by: loggedBy,
+        });
+      } catch { /* legacy log optional */ }
       // Also write to platform.action_master for lifecycle tracking
       try {
         const res = await fetch(`${apiBase}/api/docintel/action-master`, {
@@ -3203,7 +3290,7 @@ interface IncidentSummary {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-export default function SupplyChainPage({ domain: domainProp }: { domain?: import("@/context/DomainContext").DomainInfo }) {
+function SupplyChainPageInner({ domain: domainProp }: { domain?: import("@/context/DomainContext").DomainInfo }) {
   const { domain: domainCtx } = useDomain();
   const domain = domainProp ?? domainCtx;
   const domainId = domain?.domain_id || "supply_chain";
@@ -3298,7 +3385,7 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
   function switchTab(tabId: string) {
     setTab(tabId);
     const t = TABS.find(t=>t.id===tabId);
-    if (t && t.subs.length > 0) setSub(t.subs[0].id);
+    if (t && t.subs && t.subs.length > 0) setSub(t.subs[0].id);
   }
 
   const currentTab = TABS.find(t=>t.id===tab) ?? TABS[0];
@@ -3451,6 +3538,7 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
         </div>
 
         {/* ── Level 2: Sub-tabs (change with primary tab) ── */}
+        {currentTab.subs && currentTab.subs.length > 0 && (
         <div className="px-8 py-2 flex gap-1 flex-wrap bg-gray-50">
           {currentTab.subs.map(s => (
             <button
@@ -3466,6 +3554,7 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
             </button>
           ))}
         </div>
+        )}
       </header>
 
       {error && (
@@ -3650,7 +3739,7 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
                   <h2 className="text-base font-semibold text-gray-800">Action Center — {domainName}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {getDomainPlaybooks(domainId).length} predefined response actions across {getDomainCategories(domainId).length - 1} categories ·
-                  All actions logged with timestamp to <code className="bg-gray-100 px-1 rounded">jai_docintel.agents.action_log</code>
+                  Logged actions are tracked in <code className="bg-gray-100 px-1 rounded">jai_docintel.platform.action_master</code>
                 </p>
               </div>
               <PanelErrorBoundary label="Action Center">
@@ -3681,6 +3770,7 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
                 apiBase={getApiBaseUrl()}
                 onSwitchToSetup={() => setSub("setup")}
                 onSwitchSub={(s) => setSub(s)}
+                onDocClick={openDocViewer}
               />
             </div>
           )}
@@ -3703,4 +3793,15 @@ export default function SupplyChainPage({ domain: domainProp }: { domain?: impor
     )}
     </>
   );
+}
+
+// Mount gate: this is a client-only dashboard. Returning null until mounted avoids a
+// static-export prerender crash (undefined.map during SSR of /supply-chain) and has no
+// user-visible effect in the browser beyond a single initial tick. Keeps `next build`
+// (and deploy.sh) green so frontend changes can deploy.
+export default function SupplyChainPage(props: { domain?: import("@/context/DomainContext").DomainInfo }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+  return <SupplyChainPageInner {...props} />;
 }

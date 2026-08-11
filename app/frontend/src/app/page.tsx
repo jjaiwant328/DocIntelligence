@@ -5,6 +5,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { DomainContext, DomainInfo } from "@/context/DomainContext";
 import Link from "next/link";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
+import { PipelineRunProvider } from "@/context/PipelineRunContext";
+import { PipelineStatusPopup } from "@/components/PipelineStatusPopup";
 
 // Lazy-load each domain workspace module — now each receives domain as an explicit prop
 const DocIntelligence = dynamic(() => import("./document-intelligence/page"), {
@@ -59,15 +61,10 @@ const WORKSPACE_TABS = [
     badgeColor: "bg-green-100 text-green-700",
     description: "Incident overview, ontology map, supplier risk rankings, and action center.",
   },
-  {
-    id: "agent",
-    icon: "🤖",
-    label: "AI Agent",
-    shortLabel: "AI Agent",
-    badge: "FMAPIs · UC Tools",
-    badgeColor: "bg-purple-100 text-purple-700",
-    description: "Ask natural-language questions across documents, Delta tables, and the knowledge graph.",
-  },
+  // AI Agent tab removed — redundant with Copilot Studio → Ask Copilot, which uses the
+  // same Vector Search + LLM path for these domains and is a richer superset (structured
+  // answers, per-fact source links, briefings, prompt management). The agent route
+  // (app/agent/page.tsx) remains on disk for easy restore.
 ];
 
 const STATUS_COLOR: Record<string, string> = {
@@ -337,6 +334,7 @@ export default function Home() {
 
   return (
     <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState }}>
+      <PipelineRunProvider>
       <main className="flex-1 flex flex-col bg-gray-50">
         {/* Domain + tab bar */}
         <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-0 min-h-[48px]">
@@ -411,7 +409,6 @@ export default function Home() {
           {activeTab === "doc"     && <DocIntelligence domain={activeDomain!} />}
           {activeTab === "library" && <DocIntelligence domain={activeDomain!} initialStep="library" />}
           {activeTab === "tower"   && <ControlTower domain={activeDomain!} />}
-          {activeTab === "agent"   && <AIAgent domain={activeDomain!} />}
         </div>
       </main>
 
@@ -520,6 +517,8 @@ export default function Home() {
           onClose={() => setViewDocId(null)}
         />
       )}
+      <PipelineStatusPopup />
+      </PipelineRunProvider>
     </DomainContext.Provider>
   );
 }
@@ -1072,7 +1071,7 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
               { stage: "2 · Content Extraction", nb: "02_extract_document_content.py", svc: "Delta Lake",                                            api: "ai_extract() SQL function" },
               { stage: "3 · IDP Pipeline",       nb: "03_idp_pipeline.py",             svc: "Delta Lake (Silver), SQL Warehouse",                    api: "ai_classify() + ai_extract()" },
               { stage: "4 · Ontology Mapping",   nb: "04_ontology_mapping.py",         svc: "Delta entities + relationships tables, SQL Warehouse",  api: "ai_extract() (entity/rel extraction)" },
-              { stage: "5 · Vector Search",      nb: "05_vector_search.py",            svc: "Vector Search endpoint, Delta Sync Index",              api: "databricks-gte-large-en (embeddings)" },
+              { stage: "5 · Semantic Retrieval", nb: "app/backend/docintel_routes.py",  svc: "SQL Warehouse over document_chunks",                    api: "ai_similarity() (query-time ranking)" },
               { stage: "6 · AI Agent",           nb: "06_agent.py",                    svc: "UC Functions (6 tools), MLflow, Model Serving",         api: (liveModelConfig?.agent_model ?? "databricks-claude-sonnet-4-5") + " (LLM)" },
               { stage: "Setup · Domain Provision",nb: "00_setup.py",                   svc: "Unity Catalog schema, Volume creation",                 api: "None" },
             ].map((row, i) => (
@@ -1109,12 +1108,12 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
                   badge:    "bg-purple-100 text-purple-800",
                 },
                 {
-                  role:     "embed",
-                  endpoint: liveModelConfig?.embed_model ?? "databricks-gte-large-en",
-                  use:      "Document embeddings — converts text chunks to vectors for semantic search",
-                  location: "notebooks/05_vector_search.py → EMBED_MODEL (line 60)",
-                  how:      "Edit the notebook variable, then re-run the vector_search pipeline task.",
-                  alts:     ["databricks-bge-large-en", "databricks-e5-large-v2"],
+                  role:     "retrieval",
+                  endpoint: "ai_similarity()",
+                  use:      "Semantic retrieval — ranks document_chunks against the query at query time (no embedding index to maintain)",
+                  location: "app/backend/docintel_routes.py → _vs_search()",
+                  how:      "Managed built-in SQL function — no model endpoint to configure.",
+                  alts:     [],
                   color:    "border-teal-200 bg-teal-50",
                   badge:    "bg-teal-100 text-teal-800",
                 },

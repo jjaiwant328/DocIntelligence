@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {gaps: [{requirement: zoning}], evidence: []}
+    fake: {model: '{"risk":"medium","rationale":"one gap","confidence":0.7,"evidence":[]}'}
+    expect: {status: ok, output_has: [risk], confidence_present: true}
+  - name: missing_input
+    inputs: {evidence: []}
+    fake: {model: '{"risk":"low","rationale":"x","confidence":0.9,"evidence":[]}'}
+    expect: {status: error, error_contains: gaps}
+  - name: invalid
+    inputs: {gaps: "nope"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {gaps: []}
+    fake: {model: '{"risk":"low","rationale":"no gaps","confidence":0.9,"evidence":[]}'}
+    expect: {status: ok, output_has: [risk], confidence_present: true}
+  - name: ambiguous
+    inputs: {gaps: [{requirement: a}, {requirement: b}]}
+    fake: {model: '{"risk":"high","rationale":"many gaps","confidence":0.6,"evidence":[]}'}
+    expect: {status: ok, output_has: [risk], confidence_present: true}

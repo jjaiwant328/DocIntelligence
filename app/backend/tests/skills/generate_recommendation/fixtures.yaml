@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {risk: medium, gaps: [{requirement: zoning}]}
+    fake: {model: '{"recommendation":"proceed_with_conditions — close zoning","proposed_actions":[{"action_type":"obtain_zoning","description":"file zoning app","priority":"high"}],"evidence":[]}'}
+    expect: {status: ok, output_has: [recommendation, proposed_actions]}
+  - name: missing_input
+    inputs: {risk: medium}
+    fake: {model: '{"recommendation":"hold","proposed_actions":[],"evidence":[]}'}
+    expect: {status: error, error_contains: gaps}
+  - name: invalid
+    inputs: {risk: medium, gaps: "nope"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {risk: low, gaps: []}
+    fake: {model: '{"recommendation":"proceed — no gaps","proposed_actions":[],"evidence":[]}'}
+    expect: {status: ok, output_has: [recommendation]}
+  - name: ambiguous
+    inputs: {risk: high, gaps: [{requirement: a}, {requirement: b}]}
+    fake: {model: '{"recommendation":"hold — multiple gaps","proposed_actions":[{"action_type":"review","description":"escalate","priority":"high"}],"evidence":[]}'}
+    expect: {status: ok, output_has: [recommendation, proposed_actions]}

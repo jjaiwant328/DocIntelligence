@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {requirements: [zoning], evidence: [{document_id: D1, source_text: "zoning approved"}]}
+    fake: {model: '{"assessments":[{"requirement":"zoning","status":"satisfied","rationale":"approved","confidence":0.9}],"evidence":[{"document_id":"D1","source_text":"zoning approved","method":"reasoning"}]}'}
+    expect: {status: ok, output_has: [assessments], min_evidence: 1}
+  - name: missing_input
+    inputs: {requirements: [zoning]}
+    fake: {model: '{"assessments":[],"evidence":[]}'}
+    expect: {status: error, error_contains: evidence}
+  - name: invalid
+    inputs: {requirements: "zoning", evidence: []}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {requirements: [alcohol_license], evidence: []}
+    fake: {model: '{"assessments":[{"requirement":"alcohol_license","status":"insufficient_evidence","rationale":"no evidence","confidence":0.1}],"evidence":[]}'}
+    expect: {status: ok, output_has: [assessments]}
+  - name: ambiguous
+    inputs: {requirements: [environmental_permit], evidence: [{document_id: D2, source_text: "conflicting notes"}]}
+    fake: {model: '{"assessments":[{"requirement":"environmental_permit","status":"gap","rationale":"conflicting","confidence":0.4}],"evidence":[{"document_id":"D2","source_text":"conflicting notes","method":"reasoning"}]}'}
+    expect: {status: ok, output_has: [assessments]}
