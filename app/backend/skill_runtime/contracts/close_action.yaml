@@ -1,0 +1,17 @@
+id: close_action
+version: "1.0"
+category: workflow
+description: Close an action, recording resolution status.
+adapter: internal_call
+implementation: close_action
+inputs:
+  action_id: {type: string, required: true}
+  resolution: {type: string, required: false}
+outputs:
+  action_id: {type: string}
+  status:    {type: string}
+required_capabilities: [sql]
+ontology_dependencies: [Action]
+evidence_requirements: optional
+side_effects: {creates_actions: false, writes: true}
+test_method: tests/skills/close_action/

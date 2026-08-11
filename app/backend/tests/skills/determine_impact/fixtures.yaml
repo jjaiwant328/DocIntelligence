@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"changes": [{"field": "fee"}]}
+    fake: {model: '{"impact":"higher cost","impacted":["Store 1827"],"evidence":[]}'}
+    expect: {status: ok, output_has: ["impact"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"impact":"higher cost","impacted":["Store 1827"],"evidence":[]}'}
+    expect: {status: error, error_contains: changes}
+  - name: invalid
+    inputs: {"changes": "notarray"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"changes": [{"field": "fee"}]}
+    fake: {model: '{"impact":"higher cost","impacted":["Store 1827"],"evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"changes": [{"field": "fee"}]}
+    fake: {model: '{"impact":"higher cost","impacted":["Store 1827"],"evidence":[]}'}
+    expect: {status: ok}

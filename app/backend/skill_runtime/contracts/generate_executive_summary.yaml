@@ -1,0 +1,18 @@
+id: generate_executive_summary
+version: "1.0"
+category: communication
+description: Produce an executive summary of a work object's findings/risk/actions.
+adapter: llm_schema
+implementation: prompts/generate_executive_summary.md
+inputs:
+  findings:       {type: array,  required: true}
+  risk:           {type: string, required: false}
+  recommendation: {type: string, required: false}
+outputs:
+  summary:  {type: string}
+  evidence: {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/generate_executive_summary/

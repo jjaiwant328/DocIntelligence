@@ -83,13 +83,55 @@ def build_live_context(domain_id: str) -> Context:
             ids.append(aid)
         return {"action_ids": ids}, []
 
+    def create_finding(inputs, ctx):
+        tbl = f"{routes.CATALOG}.{agt_schema}.findings"
+        routes.run_sql(f"""
+            CREATE TABLE IF NOT EXISTS {tbl} (
+                finding_id STRING, work_object_id STRING, finding_type STRING,
+                description STRING, created_at TIMESTAMP
+            ) USING DELTA
+        """, timeout_secs=30)
+        fid = "FND-" + str(uuid.uuid4())[:8].upper()
+        desc = str(inputs.get("description", "")).replace("'", "''")
+        routes.run_sql(f"""
+            INSERT INTO {tbl} VALUES (
+                '{fid}', '{str(inputs.get("work_object_id","")).replace("'","''")}',
+                '{str(inputs.get("finding_type","")).replace("'","''")}',
+                '{desc}', TIMESTAMP '{_now_sql()}')
+        """, timeout_secs=30)
+        return {"finding_id": fid}, []
+
+    def _update_action(action_id, sets: str):
+        tbl = f"{routes.CATALOG}.{agt_schema}.action_log"
+        routes._ensure_action_log_table(tbl)
+        aid = str(action_id).replace("'", "''")
+        routes.run_sql(f"UPDATE {tbl} SET {sets} WHERE action_id = '{aid}'",
+                       timeout_secs=30)
+
+    def assign_action(inputs, ctx):
+        who = str(inputs.get("assigned_to", "")).replace("'", "''")
+        _update_action(inputs["action_id"], f"status = 'ASSIGNED', logged_by = '{who}'")
+        return {"action_id": inputs["action_id"], "status": "ASSIGNED"}, []
+
+    def escalate_action(inputs, ctx):
+        _update_action(inputs["action_id"], "priority = 'CRITICAL', status = 'ESCALATED'")
+        return {"action_id": inputs["action_id"], "status": "ESCALATED"}, []
+
+    def close_action(inputs, ctx):
+        _update_action(inputs["action_id"], "status = 'CLOSED'")
+        return {"action_id": inputs["action_id"], "status": "CLOSED"}, []
+
     return Context(
         run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
         vs_search=vs_search,
         chat_completion=chat_completion,
         resolve_model=routes._resolve_model,
         internal={"create_work_object": create_work_object,
-                  "create_action": create_action},
+                  "create_action": create_action,
+                  "create_finding": create_finding,
+                  "assign_action": assign_action,
+                  "escalate_action": escalate_action,
+                  "close_action": close_action},
     )
 
 

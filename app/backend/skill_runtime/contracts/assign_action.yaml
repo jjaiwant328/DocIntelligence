@@ -1,0 +1,17 @@
+id: assign_action
+version: "1.0"
+category: workflow
+description: Assign an existing action to an owner.
+adapter: internal_call
+implementation: assign_action
+inputs:
+  action_id:   {type: string, required: true}
+  assigned_to: {type: string, required: true}
+outputs:
+  action_id: {type: string}
+  status:    {type: string}
+required_capabilities: [sql]
+ontology_dependencies: [Action]
+evidence_requirements: optional
+side_effects: {creates_actions: false, writes: true}
+test_method: tests/skills/assign_action/

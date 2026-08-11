@@ -1,0 +1,18 @@
+id: verify_evidence
+version: "1.0"
+category: workflow
+description: Verify that an evidence set actually supports a stated conclusion.
+adapter: llm_schema
+implementation: prompts/verify_evidence.md
+inputs:
+  conclusion: {type: string, required: true}
+  evidence:   {type: array,  required: true}
+outputs:
+  verified:   {type: boolean}
+  rationale:  {type: string}
+  evidence:   {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/verify_evidence/

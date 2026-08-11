@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from skill_runtime.loader import load_registry  # noqa: E402
 from skill_runtime.models import _ALLOWED_ADAPTERS  # noqa: E402
 
-SLICE = {
+DUE_DILIGENCE_SKILLS = {
     "create_work_object", "extract_requirements", "find_supporting_evidence",
     "assess_requirement", "identify_gap", "assess_risk",
     "generate_recommendation", "create_action",
@@ -19,9 +19,12 @@ def test_registry_loads_and_validates():
     assert reg.validate() == [], reg.validate()
 
 
-def test_enabled_ids_are_the_slice():
+def test_full_library_enabled():
     reg = load_registry()
-    assert set(reg.enabled_ids()) == SLICE
+    ids = set(reg.enabled_ids())
+    # Scope A: full 25-skill library enabled; the DD subset is a subset of it.
+    assert len(ids) == 25
+    assert DUE_DILIGENCE_SKILLS <= ids
 
 
 def test_every_enabled_has_contract_with_known_adapter():
@@ -32,12 +35,11 @@ def test_every_enabled_has_contract_with_known_adapter():
         assert c.id == sid and c.version
 
 
-def test_list_all_includes_stubs():
+def test_list_all_matches_enabled():
     reg = load_registry()
     all_rows = reg.list(enabled_only=False)
     enabled = reg.list(enabled_only=True)
-    assert len(all_rows) > len(enabled)   # stubs present
-    assert len(enabled) == 8
+    assert len(all_rows) == len(enabled) == 25
 
 
 if __name__ == "__main__":

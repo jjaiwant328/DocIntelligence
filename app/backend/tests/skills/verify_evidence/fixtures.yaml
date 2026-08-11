@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"conclusion": "zoning ok", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"verified":true,"rationale":"supported","evidence":[]}'}
+    expect: {status: ok, output_has: ["verified"]}
+  - name: missing_input
+    inputs: {"evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"verified":true,"rationale":"supported","evidence":[]}'}
+    expect: {status: error, error_contains: conclusion}
+  - name: invalid
+    inputs: {"conclusion": 123, "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"conclusion": "zoning ok", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"verified":true,"rationale":"supported","evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"conclusion": "zoning ok", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"verified":true,"rationale":"supported","evidence":[]}'}
+    expect: {status: ok}

@@ -1,0 +1,17 @@
+id: escalate_action
+version: "1.0"
+category: workflow
+description: Escalate an action's priority/owner per escalation rules.
+adapter: internal_call
+implementation: escalate_action
+inputs:
+  action_id: {type: string, required: true}
+  reason:    {type: string, required: false}
+outputs:
+  action_id: {type: string}
+  status:    {type: string}
+required_capabilities: [sql]
+ontology_dependencies: [Action]
+evidence_requirements: optional
+side_effects: {creates_actions: false, writes: true}
+test_method: tests/skills/escalate_action/

@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"question": "is zoning ok?", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"response":"Yes per D1","evidence":[]}'}
+    expect: {status: ok, output_has: ["response"]}
+  - name: missing_input
+    inputs: {"evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"response":"Yes per D1","evidence":[]}'}
+    expect: {status: error, error_contains: question}
+  - name: invalid
+    inputs: {"question": 123, "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"question": "is zoning ok?", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"response":"Yes per D1","evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"question": "is zoning ok?", "evidence": [{"document_id": "D1"}]}
+    fake: {model: '{"response":"Yes per D1","evidence":[]}'}
+    expect: {status: ok}

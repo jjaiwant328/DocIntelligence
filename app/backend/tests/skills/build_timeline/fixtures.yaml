@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"events": [{"date": "2025-01-01", "event": "filed"}]}
+    fake: {model: '{"timeline":[{"date":"2025-01-01","event":"filed"}],"evidence":[]}'}
+    expect: {status: ok, output_has: ["timeline"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"timeline":[{"date":"2025-01-01","event":"filed"}],"evidence":[]}'}
+    expect: {status: error, error_contains: events}
+  - name: invalid
+    inputs: {"events": "notarray"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"events": [{"date": "2025-01-01", "event": "filed"}]}
+    fake: {model: '{"timeline":[{"date":"2025-01-01","event":"filed"}],"evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"events": [{"date": "2025-01-01", "event": "filed"}]}
+    fake: {model: '{"timeline":[{"date":"2025-01-01","event":"filed"}],"evidence":[]}'}
+    expect: {status: ok}

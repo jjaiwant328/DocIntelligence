@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"findings": [{"x": 1}], "risk": "low", "recommendation": "proceed"}
+    fake: {model: '{"summary":"All clear","evidence":[]}'}
+    expect: {status: ok, output_has: ["summary"]}
+  - name: missing_input
+    inputs: {"risk": "low", "recommendation": "proceed"}
+    fake: {model: '{"summary":"All clear","evidence":[]}'}
+    expect: {status: error, error_contains: findings}
+  - name: invalid
+    inputs: {"findings": "notarray", "risk": "low", "recommendation": "proceed"}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"findings": [{"x": 1}], "risk": "low", "recommendation": "proceed"}
+    fake: {model: '{"summary":"All clear","evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"findings": [{"x": 1}], "risk": "low", "recommendation": "proceed"}
+    fake: {model: '{"summary":"All clear","evidence":[]}'}
+    expect: {status: ok}

@@ -1,0 +1,17 @@
+id: generate_response
+version: "1.0"
+category: communication
+description: Draft a response to a question grounded only in supplied evidence.
+adapter: llm_schema
+implementation: prompts/generate_response.md
+inputs:
+  question: {type: string, required: true}
+  evidence: {type: array,  required: false}
+outputs:
+  response: {type: string}
+  evidence: {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/generate_response/

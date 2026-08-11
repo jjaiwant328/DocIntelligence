@@ -1,0 +1,18 @@
+id: find_related_documents
+version: "1.0"
+category: retrieval
+description: Find documents related to a seed document/topic via ai_similarity.
+adapter: uc_function
+implementation: _vs_search
+inputs:
+  query:      {type: string, required: true}
+  schema_vec: {type: string, required: true}
+  k:          {type: integer, required: false}
+  doc_type:   {type: string, required: false}
+outputs:
+  evidence: {type: array}
+required_capabilities: [retrieval]
+ontology_dependencies: []
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/find_related_documents/

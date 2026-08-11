@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"query": "license", "schema_vec": "v", "k": 2}
+    fake: {rows: [{doc_id: D1, chunk_id: c1, chunk_to_retrieve: "text"}]}
+    expect: {status: ok, min_evidence: 1, output_has: ["evidence"]}
+  - name: missing_input
+    inputs: {"schema_vec": "v", "k": 2}
+    fake: {rows: []}
+    expect: {status: error, error_contains: query}
+  - name: invalid
+    inputs: {"query": "license", "schema_vec": "v", "k": "two"}
+    fake: {rows: []}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"query": "license", "schema_vec": "v", "k": 2}
+    fake: {rows: []}
+    expect: {status: ok, min_evidence: 0}
+  - name: ambiguous
+    inputs: {"query": "license", "schema_vec": "v", "k": 2}
+    fake: {rows: [{doc_id: D1, chunk_id: c1, chunk_to_retrieve: "text"}]}
+    expect: {status: ok, min_evidence: 1}

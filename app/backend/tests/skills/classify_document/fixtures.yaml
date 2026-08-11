@@ -1,0 +1,21 @@
+cases:
+  - name: happy
+    inputs: {"text": "a zoning permit application"}
+    fake: {model: '{"doc_type":"zoning","confidence":0.9,"evidence":[]}'}
+    expect: {status: ok, output_has: ["doc_type"]}
+  - name: missing_input
+    inputs: {}
+    fake: {model: '{"doc_type":"zoning","confidence":0.9,"evidence":[]}'}
+    expect: {status: error, error_contains: text}
+  - name: invalid
+    inputs: {"text": 123}
+    fake: {model: '{}'}
+    expect: {status: error}
+  - name: insufficient_evidence
+    inputs: {"text": "a zoning permit application"}
+    fake: {model: '{"doc_type":"zoning","confidence":0.9,"evidence":[]}'}
+    expect: {status: ok}
+  - name: ambiguous
+    inputs: {"text": "a zoning permit application"}
+    fake: {model: '{"doc_type":"zoning","confidence":0.9,"evidence":[]}'}
+    expect: {status: ok}

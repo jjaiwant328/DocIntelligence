@@ -1,0 +1,16 @@
+id: extract_dates
+version: "1.0"
+category: understanding
+description: Extract dates and their roles (effective, expiry, deadline) from text.
+adapter: llm_schema
+implementation: prompts/extract_dates.md
+inputs:
+  text: {type: string, required: true}
+outputs:
+  dates:    {type: array}
+  evidence: {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: optional
+side_effects: {creates_actions: false}
+test_method: tests/skills/extract_dates/
