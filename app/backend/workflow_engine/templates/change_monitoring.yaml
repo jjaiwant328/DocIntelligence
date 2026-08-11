@@ -1,0 +1,20 @@
+# Change Monitoring template — what changed, what it means, who's affected, what actions.
+id: change_monitoring
+version: "1.0"
+approval_before: create_action
+steps:
+  - id: detect
+    skill: detect_change
+    inputs_map: {current: $input.current, previous: $input.previous}
+  - id: impact
+    skill: determine_impact
+    inputs_map: {changes: $steps.detect.changes, affected_entities: $steps.detect.affected_entities}
+  - id: risk
+    skill: assess_risk
+    inputs_map: {gaps: $steps.impact.impacted}
+  - id: actions
+    skill: create_action
+    inputs_map: {domain: $input.domain, project: $input.project, proposed_actions: $steps.impact.impacted}
+  - id: escalate
+    skill: escalate_action
+    inputs_map: {action_id: $steps.actions.action_ids}

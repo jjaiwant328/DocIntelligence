@@ -1,0 +1,35 @@
+# Investigation template — what happened, why, what evidence, what next.
+id: investigation
+version: "1.0"
+approval_before: create_action
+steps:
+  - id: create_case
+    skill: create_work_object
+    inputs_map: {domain: $input.domain, project: $input.project, type: investigation}
+  - id: classify
+    skill: classify_document
+    inputs_map: {text: $input.context}
+  - id: entities
+    skill: extract_entities
+    inputs_map: {text: $input.context}
+  - id: timeline
+    skill: build_timeline
+    inputs_map: {events: $steps.entities.entities}
+  - id: related
+    skill: find_related_documents
+    inputs_map: {query: $input.project, schema_vec: $input.schema_vec, k: 6}
+  - id: collect_evidence
+    skill: find_supporting_evidence
+    inputs_map: {query: $input.project, schema_vec: $input.schema_vec, k: 6}
+  - id: gaps
+    skill: identify_gap
+    inputs_map: {assessments: $steps.timeline.timeline}
+  - id: risk
+    skill: assess_risk
+    inputs_map: {gaps: $steps.gaps.gaps, evidence: $steps.collect_evidence.evidence}
+  - id: recommendation
+    skill: generate_recommendation
+    inputs_map: {risk: $steps.risk.risk, gaps: $steps.gaps.gaps}
+  - id: actions
+    skill: create_action
+    inputs_map: {domain: $input.domain, project: $input.project, proposed_actions: $steps.recommendation.proposed_actions}
