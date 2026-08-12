@@ -1787,27 +1787,6 @@ def serve_static_asset(asset_path: str):
     return serve_react_app(asset_path)
 
 def serve_react_app(full_path: str):
-    """Handle Next.js page routes - serve appropriate index.html"""
-    # If the request is for a specific HTML file, serve it
-    if full_path.endswith('.html'):
-        file_path = f"{target_dir}/{full_path}"
-        if os.path.exists(file_path):
-            return FileResponse(file_path)
-    
-    
-    # Route each Next.js page to its pre-rendered index.html
-    page_routes = [
-        "next-steps",
-        "document-intelligence",
-        "supply-chain",
-        "agent",
-        "setup",
-    ]
-    for route in page_routes:
-        if full_path.startswith(route):
-            file_path = f"{target_dir}/{route}/index.html"
-            if os.path.exists(file_path):
-                return FileResponse(file_path)
-
-    # For all other routes, serve the main index.html
-    return FileResponse(f"{target_dir}/index.html") 
+    """Handle Next.js page routes - serve the appropriate pre-rendered index.html."""
+    from static_routing import resolve_page_file
+    return FileResponse(resolve_page_file(target_dir, full_path))
