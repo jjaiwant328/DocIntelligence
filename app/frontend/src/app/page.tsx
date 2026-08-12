@@ -13,17 +13,23 @@ const DocIntelligence = dynamic(() => import("./document-intelligence/page"), {
   ssr: false,
   loading: () => <LoadingPane label="Document Intelligence" />,
 });
-const ControlTower = dynamic(() => import("./supply-chain/page"), {
+// Control Tower retired — Overview/Knowledge Graph/Action Center/Compliance Map
+// are now produced as workflow outputs (see Executions). Copilot kept as its own tab.
+const SkillsTab = dynamic(() => import("./skills/page"), {
   ssr: false,
-  loading: () => <LoadingPane label="Control Tower" />,
+  loading: () => <LoadingPane label="Skills" />,
 });
-const AIAgent = dynamic(() => import("./agent/page"), {
+const WorkflowsTab = dynamic(() => import("./workflows/page"), {
   ssr: false,
-  loading: () => <LoadingPane label="AI Agent" />,
+  loading: () => <LoadingPane label="Workflows" />,
 });
-const SkillsStudio = dynamic(() => import("./skills/page"), {
+const ExecutionsTab = dynamic(() => import("./executions/page"), {
   ssr: false,
-  loading: () => <LoadingPane label="Skills Studio" />,
+  loading: () => <LoadingPane label="Executions" />,
+});
+const CopilotTab = dynamic(() => import("./copilot/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Copilot" />,
 });
 
 function LoadingPane({ label }: { label: string }) {
@@ -57,22 +63,40 @@ const WORKSPACE_TABS = [
     description: "Browse all parsed and extracted documents, run pipelines, and manage the document corpus.",
   },
   {
-    id: "tower",
-    icon: "📊",
-    label: "Control Tower",
-    shortLabel: "Control Tower",
-    badge: "Live Analytics",
-    badgeColor: "bg-green-100 text-green-700",
-    description: "Incident overview, ontology map, supplier risk rankings, and action center.",
-  },
-  {
     id: "skills",
     icon: "🧩",
-    label: "Skills Studio",
+    label: "Skills",
     shortLabel: "Skills",
-    badge: "Skills · Workflows",
+    badge: "Apply to Docs",
     badgeColor: "bg-purple-100 text-purple-700",
-    description: "Invoke reusable skills, compose deterministic workflows, and inspect executions — scoped to this subject area.",
+    description: "Apply reusable skills to this subject area's parsed documents and inspect evidence-backed output.",
+  },
+  {
+    id: "workflows",
+    icon: "🔀",
+    label: "Workflows",
+    shortLabel: "Workflows",
+    badge: "Compose · Run",
+    badgeColor: "bg-teal-100 text-teal-700",
+    description: "Visually assemble skills into deterministic workflow templates, save them per subject area, and run them.",
+  },
+  {
+    id: "executions",
+    icon: "▶",
+    label: "Executions",
+    shortLabel: "Executions",
+    badge: "Runs · Outputs",
+    badgeColor: "bg-green-100 text-green-700",
+    description: "Every workflow and skill run with its outputs — actions, entities, findings — each traceable to evidence.",
+  },
+  {
+    id: "copilot",
+    icon: "🧠",
+    label: "Copilot",
+    shortLabel: "Copilot",
+    badge: "Ask · Cited",
+    badgeColor: "bg-sky-100 text-sky-700",
+    description: "Ask questions across this subject area's documents; grounded answers with cited sources.",
   },
   // AI Agent tab removed — redundant with Copilot Studio → Ask Copilot, which uses the
   // same Vector Search + LLM path for these domains and is a richer superset (structured
@@ -419,10 +443,12 @@ export default function Home() {
 
         {/* Module content — domain passed as explicit prop to eliminate context drift */}
         <div className="flex-1">
-          {activeTab === "doc"     && <DocIntelligence domain={activeDomain!} />}
-          {activeTab === "library" && <DocIntelligence domain={activeDomain!} initialStep="library" />}
-          {activeTab === "tower"   && <ControlTower domain={activeDomain!} />}
-          {activeTab === "skills"  && <SkillsStudio domain={activeDomain!} />}
+          {activeTab === "doc"        && <DocIntelligence domain={activeDomain!} />}
+          {activeTab === "library"    && <DocIntelligence domain={activeDomain!} initialStep="library" />}
+          {activeTab === "skills"     && <SkillsTab domain={activeDomain!} />}
+          {activeTab === "workflows"  && <WorkflowsTab domain={activeDomain!} />}
+          {activeTab === "executions" && <ExecutionsTab domain={activeDomain!} />}
+          {activeTab === "copilot"    && <CopilotTab domain={activeDomain!} />}
         </div>
       </main>
 
