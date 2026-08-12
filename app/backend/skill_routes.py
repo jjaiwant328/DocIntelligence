@@ -150,12 +150,53 @@ class SkillInvokeRequest(BaseModel):
     skill: str
     domain_id: str = "compliance"
     inputs: dict = {}
+    doc_ids: Optional[list] = None       # apply the skill to these parsed documents
+
+
+@router.get("/parsed-documents")
+async def parsed_documents(domain_id: str = "compliance"):
+    """List a subject area's parsed documents (for the Skills 'apply to' picker)."""
+    import docintel_routes as routes
+    dom = domain_loader(domain_id)
+    schemas = routes._get_domain_schemas(dom.platform_domain_id)
+    raw = schemas["schema_raw"]
+    try:
+        rows = routes.run_sql(f"""
+            SELECT doc_id, doc_type
+            FROM {routes.CATALOG}.{raw}.parsed_documents
+            ORDER BY processed_ts DESC NULLS LAST
+            LIMIT 200
+        """, timeout_secs=30)
+    except Exception as e:
+        return {"documents": [], "error": str(e)}
+    return {"documents": rows or [], "total": len(rows or [])}
+
+
+def _fetch_doc_rows(routes, raw_schema: str, doc_ids: list) -> list:
+    """Fetch doc_id/doc_type/text for the given docs from parsed_documents."""
+    if not doc_ids:
+        return []
+    ids = ", ".join("'" + str(d).replace("'", "''") + "'" for d in doc_ids)
+    try:
+        return routes.run_sql(f"""
+            SELECT doc_id, doc_type,
+                   SUBSTRING(CAST(parsed_content AS STRING), 1, 4000) AS text
+            FROM {routes.CATALOG}.{raw_schema}.parsed_documents
+            WHERE doc_id IN ({ids})
+        """, timeout_secs=40) or []
+    except Exception as e:
+        print(f"[skill-invoke] fetch doc rows failed: {e}")
+        return []
 
 
 @router.post("/skill-invoke")
 async def skill_invoke(req: SkillInvokeRequest):
-    """Playground: invoke ONE skill directly with user-supplied inputs."""
+    """Playground: invoke ONE skill. If doc_ids given, auto-build inputs from those
+    parsed documents; otherwise use the supplied inputs dict."""
     import docintel_routes as routes
+    from skill_runtime.doc_inputs import map_docs_to_inputs
+    from skill_runtime.models import InputError
+
     dom = domain_loader(req.domain_id)
     logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
                              catalog=routes.CATALOG)
@@ -165,8 +206,19 @@ async def skill_invoke(req: SkillInvokeRequest):
         print(f"[skill-invoke] ensure_table failed: {e}")
     ctx = build_live_context(dom.platform_domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
-    inputs = dict(req.inputs or {})
-    inputs.setdefault("schema_vec", dom.schema_vec)   # convenience for retrieval skills
+
+    base = dict(req.inputs or {})
+    base.setdefault("schema_vec", dom.schema_vec)
+    if req.doc_ids:
+        schemas = routes._get_domain_schemas(dom.platform_domain_id)
+        rows = _fetch_doc_rows(routes, schemas["schema_raw"], req.doc_ids)
+        try:
+            inputs = map_docs_to_inputs(_REGISTRY.get(req.skill), rows, base_inputs=base)
+        except InputError as e:
+            return {"status": "error", "outputs": {}, "evidence": [], "error": str(e)}
+    else:
+        inputs = base
+
     result = dispatcher.invoke(req.skill, inputs)
     return result.to_dict()
 
