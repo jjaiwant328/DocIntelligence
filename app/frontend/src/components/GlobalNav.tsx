@@ -20,12 +20,6 @@ export function GlobalNav() {
           DocIntelligence
         </Link>
 
-        {/* Skills/Workflow overlay nav */}
-        <span className="h-4 border-l border-gray-200" />
-        <Link href="/workflow" className="text-xs text-gray-600 hover:text-blue-700">Workflow</Link>
-        <Link href="/builder" className="text-xs text-gray-600 hover:text-blue-700">Builder</Link>
-        <Link href="/playground" className="text-xs text-gray-600 hover:text-blue-700">Playground</Link>
-
         {/* Right side — workspace badge */}
         <div className="ml-auto hidden md:flex items-center gap-1 text-[10px] text-gray-400 flex-shrink-0 font-mono">
           <span>jai_docintel</span>

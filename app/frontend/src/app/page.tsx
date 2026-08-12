@@ -21,6 +21,10 @@ const AIAgent = dynamic(() => import("./agent/page"), {
   ssr: false,
   loading: () => <LoadingPane label="AI Agent" />,
 });
+const SkillsStudio = dynamic(() => import("./skills/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Skills Studio" />,
+});
 
 function LoadingPane({ label }: { label: string }) {
   return (
@@ -60,6 +64,15 @@ const WORKSPACE_TABS = [
     badge: "Live Analytics",
     badgeColor: "bg-green-100 text-green-700",
     description: "Incident overview, ontology map, supplier risk rankings, and action center.",
+  },
+  {
+    id: "skills",
+    icon: "🧩",
+    label: "Skills Studio",
+    shortLabel: "Skills",
+    badge: "Skills · Workflows",
+    badgeColor: "bg-purple-100 text-purple-700",
+    description: "Invoke reusable skills, compose deterministic workflows, and inspect executions — scoped to this subject area.",
   },
   // AI Agent tab removed — redundant with Copilot Studio → Ask Copilot, which uses the
   // same Vector Search + LLM path for these domains and is a richer superset (structured
@@ -409,6 +422,7 @@ export default function Home() {
           {activeTab === "doc"     && <DocIntelligence domain={activeDomain!} />}
           {activeTab === "library" && <DocIntelligence domain={activeDomain!} initialStep="library" />}
           {activeTab === "tower"   && <ControlTower domain={activeDomain!} />}
+          {activeTab === "skills"  && <SkillsStudio domain={activeDomain!} />}
         </div>
       </main>
 
