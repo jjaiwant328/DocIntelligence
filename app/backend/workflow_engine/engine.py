@@ -58,18 +58,29 @@ class WorkflowRun:
 
 class WorkflowEngine:
     def __init__(self, dispatcher, templates_dir: Optional[str] = None,
-                 domain_loader=None, default_retries: int = 1):
+                 domain_loader=None, default_retries: int = 1,
+                 template_loader=None):
         self.dispatcher = dispatcher
         self.templates_dir = templates_dir or DEFAULT_TEMPLATES_DIR
         self.domain_loader = domain_loader   # callable(domain_id) -> DomainConfig
         self.default_retries = default_retries
+        # optional callable(domain_id, template_id) -> template dict | None.
+        # Checked BEFORE the YAML files (DB-first), so user-saved templates win.
+        self.template_loader = template_loader
 
-    def _load_template(self, template_id: str) -> dict:
+    def _load_template(self, template_id: str, domain: Optional[str] = None) -> dict:
+        if self.template_loader and domain:
+            try:
+                db = self.template_loader(domain, template_id)
+                if db:
+                    return db
+            except Exception as e:
+                print(f"[engine] template_loader failed for {template_id}: {e}")
         with open(os.path.join(self.templates_dir, f"{template_id}.yaml")) as f:
             return yaml.safe_load(f)
 
     def run(self, template_id: str, domain: str, inputs: dict) -> WorkflowRun:
-        tmpl = self._load_template(template_id)
+        tmpl = self._load_template(template_id, domain)
         domain_cfg = self.domain_loader(domain) if self.domain_loader else None
         run = WorkflowRun(template_id=tmpl["id"],
                           template_version=str(tmpl.get("version", "1.0")),

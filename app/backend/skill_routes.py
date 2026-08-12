@@ -50,7 +50,8 @@ def deterministic_agent_answer(question: str, platform_domain_id: str,
 
     ctx = build_live_context(dom.platform_domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
-    engine = WorkflowEngine(dispatcher, domain_loader=domain_loader)
+    engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
+                            template_loader=_db_template_loader(routes))
 
     templates = ["due_diligence"]
     intent = classify(question, ctx.chat_completion, templates, _REGISTRY.enabled_ids())
@@ -129,8 +130,8 @@ async def list_skills():
     return {"skills": detailed, "enabled": _REGISTRY.enabled_ids()}
 
 
-@router.get("/templates")
-async def list_templates():
+def _starter_templates() -> list:
+    """The file-based starter templates (global seeds, clonable per domain)."""
     import os as _os
     import yaml as _yaml
     from workflow_engine.engine import DEFAULT_TEMPLATES_DIR
@@ -142,8 +143,92 @@ async def list_templates():
             t = _yaml.safe_load(f)
         out.append({"id": t["id"], "version": t.get("version"),
                     "approval_before": t.get("approval_before"),
-                    "steps": [{"id": s["id"], "skill": s["skill"]} for s in t["steps"]]})
-    return {"templates": out}
+                    "steps": [{"id": s["id"], "skill": s["skill"],
+                               "inputs_map": s.get("inputs_map", {})} for s in t["steps"]],
+                    "source": "starter"})
+    return out
+
+
+def _db_template_loader(routes):
+    """Return a callable(domain_id, template_id) -> template dict | None (DB)."""
+    from skill_runtime import template_store as tstore
+
+    def _load(domain_id, template_id):
+        try:
+            return tstore.get_template(
+                lambda q: routes.run_sql(q, timeout_secs=40),
+                domain_id, template_id, catalog=routes.CATALOG)
+        except Exception:
+            return None
+    return _load
+
+
+@router.get("/templates")
+async def list_templates(domain_id: str = "compliance"):
+    """Merge this domain's saved templates (DB) with the starter templates."""
+    import docintel_routes as routes
+    from skill_runtime import template_store as tstore
+    user = []
+    try:
+        tstore.ensure_templates_table(lambda q: routes.run_sql(q, timeout_secs=40),
+                                      catalog=routes.CATALOG)
+        user = tstore.list_templates(lambda q: routes.run_sql(q, timeout_secs=40),
+                                     domain_id, catalog=routes.CATALOG)
+    except Exception as e:
+        print(f"[templates] db list failed: {e}")
+    user_ids = {t["id"] for t in user}
+    starters = [t for t in _starter_templates() if t["id"] not in user_ids]
+    return {"templates": user + starters}
+
+
+class TemplateSaveRequest(BaseModel):
+    template_id: str
+    domain_id: str = "compliance"
+    name: str
+    steps: list                       # [{id, skill[, inputs_map]}]
+    approval_before: Optional[str] = None
+    description: str = ""
+    autowire: bool = True             # infer inputs_map from step order + contracts
+
+
+@router.post("/templates")
+async def save_template(req: TemplateSaveRequest):
+    import docintel_routes as routes
+    from skill_runtime import template_store as tstore
+    from skill_runtime.autowire import infer_inputs_map
+    steps = infer_inputs_map(req.steps, _REGISTRY) if req.autowire else req.steps
+    try:
+        res = tstore.save_template(
+            lambda q: routes.run_sql(q, timeout_secs=40),
+            req.domain_id, req.template_id, req.name, steps,
+            approval_before=req.approval_before, description=req.description,
+            catalog=routes.CATALOG)
+        return {**res, "steps": steps}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.delete("/templates/{template_id}")
+async def delete_template(template_id: str, domain_id: str = "compliance"):
+    import docintel_routes as routes
+    from skill_runtime import template_store as tstore
+    try:
+        tstore.delete_template(lambda q: routes.run_sql(q, timeout_secs=40),
+                               domain_id, template_id, catalog=routes.CATALOG)
+        return {"status": "archived", "template_id": template_id}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+class AutowireRequest(BaseModel):
+    steps: list
+
+
+@router.post("/autowire")
+async def autowire(req: AutowireRequest):
+    """Preview: given an ordered step list, return steps with inferred inputs_map."""
+    from skill_runtime.autowire import infer_inputs_map
+    return {"steps": infer_inputs_map(req.steps, _REGISTRY)}
 
 
 class SkillInvokeRequest(BaseModel):
@@ -237,7 +322,8 @@ async def workflow_run(req: WorkflowRunRequest):
 
     ctx = build_live_context(dom.platform_domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
-    engine = WorkflowEngine(dispatcher, domain_loader=domain_loader)
+    engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
+                            template_loader=_db_template_loader(routes))
 
     inputs = {
         "domain": req.domain_id,
