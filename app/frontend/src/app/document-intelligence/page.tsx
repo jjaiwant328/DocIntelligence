@@ -732,7 +732,7 @@ function DomainSchemaWizard({
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Schema Setup — {domainName}</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Build extraction schemas per document type. Each schema is saved to a global library for reuse across all subject areas.
+              Build extraction schemas per document type. Each schema is saved to a global library for reuse across all projects.
               {isConfigured && savedAt && <span className="ml-2 text-green-600 font-medium">✓ Last saved {new Date(savedAt).toLocaleDateString()}</span>}
             </p>
           </div>
@@ -773,7 +773,7 @@ function DomainSchemaWizard({
                   <span>② <strong>Extraction fields</strong> — for <code className="bg-blue-100 px-0.5 rounded">ai_extract()</code></span>
                   <span>③ <strong>Parse instructions</strong> — for <code className="bg-blue-100 px-0.5 rounded">ai_parse_document()</code></span>
                 </p>
-                <p className="mt-1 text-blue-600">Schemas are stored globally and shared across all subject areas.</p>
+                <p className="mt-1 text-blue-600">Schemas are stored globally and shared across all projects.</p>
               </div>
             </div>
 
@@ -1713,7 +1713,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
     useEffect(() => {
         (async () => {
             setConfigLoading(true);
-            // Default the job name to Docintel-<subject area> for this domain;
+            // Default the job name to Docintel-<project> for this domain;
             // overridden below if a saved processing-config has an explicit job_name.
             setJobName(`Docintel-${domainId}`);
             try {
@@ -2056,7 +2056,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                             <p className="leading-relaxed text-gray-600">
                                 Document processing runs in three steps: <strong>Configure</strong> (set volume, doc types, schedule),
                                 <strong> Preview</strong> (test extraction on a sample file), and <strong>Run</strong> (trigger interactive or batch pipeline).
-                                The pipeline is fully generic — it works for any subject area and any document type you have configured.
+                                The pipeline is fully generic — it works for any project and any document type you have configured.
                             </p>
                         </div>
 
@@ -2067,7 +2067,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 Before processing documents, configure at least one document type schema in the <strong>Schema Setup</strong> tab.
                                 Each schema tells the AI what fields to extract for that document type.
                                 24 pre-built schemas are available in the global library (health inspections, contracts, permits, COAs, etc.) —
-                                select one and save it to your subject area, or create a custom schema from a sample file.
+                                select one and save it to your project, or create a custom schema from a sample file.
                             </p>
                             <p className="text-amber-600 mt-1">
                                 <strong>Tip:</strong> You can still process documents without a schema — they will be parsed and search-indexed
@@ -2092,7 +2092,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 </div>
                                 <div>
                                     <span className="font-semibold text-gray-800">⚙️ Job Name:</span>
-                                    <span className="text-gray-600"> Leave blank to use the existing Databricks job for this subject area.
+                                    <span className="text-gray-600"> Leave blank to use the existing Databricks job for this project.
                                     Provide a name only if you want to create or target a specific job.</span>
                                 </div>
                                 <div>
@@ -2127,7 +2127,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 </div>
                                 <div>
                                     <span className="font-semibold text-gray-800">🔄 Batch Mode:</span>
-                                    <span className="text-gray-600"> Runs the full pipeline job for this subject area. Uses Auto Loader with file-notification or
+                                    <span className="text-gray-600"> Runs the full pipeline job for this project. Uses Auto Loader with file-notification or
                                     directory-listing mode to detect and process only new files since the last run.
                                     Runs according to the schedule set in Configure, or manually triggered here.
                                     Deduplication is automatic — files already in the processing log are skipped.</span>
@@ -2145,7 +2145,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                     { icon: "📝", label: "Extract Document Content",  text: "Reads parsed output from the Bronze table (parsed_documents_raw). De-duplicates, applies volume filter, and joins raw text content for classification." },
                                     { icon: "🏷️", label: "Classify & Extract Fields","text": "ai_classify assigns a document type label to each document. For documents matching a configured schema, ai_extract pulls structured fields (e.g. violation_code, deadline, supplier_name). Documents without a schema go through universal schema discovery." },
                                     { icon: "🕸️", label: "Build Knowledge Graph",    text: "Writes classified, extracted documents to parsed_documents (Silver). Persists per-doc-type gold tables (gold_health_inspection_report, gold_permit, etc.) and a unified extracted_fields table for ontology mapping. ai_prep_search also chunks each document into document_chunks for semantic retrieval." },
-                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this subject area so it can answer questions grounded in the newly processed documents. Semantic search is served at query time by ai_similarity over document_chunks — no index to build or sync." },
+                                    { icon: "🤖", label: "Register AI Agent",         text: "Updates the AI agent configuration for this project so it can answer questions grounded in the newly processed documents. Semantic search is served at query time by ai_similarity over document_chunks — no index to build or sync." },
                                 ].map(s => (
                                     <div key={s.label} className="flex gap-2 items-start">
                                         <span className="text-base shrink-0 mt-0.5">{s.icon}</span>
@@ -2186,7 +2186,7 @@ function ProcessDocuments({ domainId, onRunComplete }: { domainId: string; onRun
                                 { q: "What happens to files with no matching schema?", a: "They are still parsed and search-indexed. ai_extract runs universal schema discovery on them and stores results in suggested_extractions. Turn on 'skip files with no schema' only if you want to exclude them completely." },
                                 { q: "Do I need to pre-create gold tables?",           a: "No. The pipeline creates gold_{doc_type} tables automatically the first time a document of that type is processed." },
                                 { q: "How does the AI know which file is which doc type?", a: "ai_classify reads the parsed document content and assigns one of your configured labels. The more descriptive your classification examples in Schema Setup, the more accurate the classification." },
-                                { q: "How do I add a new document type?",              a: "Go to Schema Setup, enter the document type name, optionally pick from 24 pre-built templates or upload a sample file to auto-generate fields, confirm, and save to your subject area." },
+                                { q: "How do I add a new document type?",              a: "Go to Schema Setup, enter the document type name, optionally pick from 24 pre-built templates or upload a sample file to auto-generate fields, confirm, and save to your project." },
                             ].map(item => (
                                 <div key={item.q}>
                                     <p className="font-semibold text-gray-700">Q: {item.q}</p>

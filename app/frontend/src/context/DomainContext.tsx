@@ -16,7 +16,7 @@ export interface DomainInfo {
   schema_ready?: boolean;
 }
 
-/** A project/case within a subject area (from platform.projects). */
+/** A project/case within a project (from platform.projects). */
 export interface ProjectInfo {
   project_id: string;
   name?: string;

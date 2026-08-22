@@ -293,7 +293,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         {ctxProject?.project_id
           ? <> · project <span className="font-semibold text-gray-700">📁 {projectLabel}</span></>
           : <> · <span className="italic">no project selected (pick one in the header)</span></>}.
-        Steps auto-wire by contract; save it per subject area and run it — every run is saved to Executions.
+        Steps auto-wire by contract; save it per project and run it — every run is saved to Executions.
       </p>
 
       <div className="flex flex-wrap gap-3 items-end border border-gray-200 rounded-lg bg-white p-3 mb-4">
