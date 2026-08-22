@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { DomainContext, DomainInfo, ProjectInfo, DEMO_USERS } from "@/context/DomainContext";
 import { ProjectPicker } from "@/components/ProjectPicker";
 import { ProjectDocuments } from "@/components/ProjectDocuments";
-import Link from "next/link";
+import { NewProjectWizard } from "@/components/NewProjectWizard";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
 import { PipelineRunProvider } from "@/context/PipelineRunContext";
 import { PipelineStatusPopup } from "@/components/PipelineStatusPopup";
@@ -319,7 +319,7 @@ export default function Home() {
           <span className="text-xs font-bold text-gray-700 mr-5 hidden sm:block">DocIntelligence</span>
           {([
             { id: "overview", icon: "🗺", label: "Platform Overview",  desc: "Architecture, how-to guide, and available connectors." },
-            { id: "areas",    icon: "📂", label: "Subject Areas",      desc: "Select or create a subject area to open its workspace." },
+            { id: "areas",    icon: "📂", label: "Projects",           desc: "Open a project (use case) or create a new one from a blueprint." },
           ] as const).map(t => (
             <button
               key={t.id}
@@ -347,7 +347,7 @@ export default function Home() {
                 onClick={() => setLandingTab("areas")}
                 className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5"
               >
-                📂 {domainsLoading ? "…" : `${domains.length} Subject Area${domains.length !== 1 ? "s" : ""}`} →
+                📂 {domainsLoading ? "…" : `${domains.length} Project${domains.length !== 1 ? "s" : ""}`} →
               </button>
             )}
             {landingTab === "areas" && !domainsLoading && (
@@ -384,10 +384,10 @@ export default function Home() {
           {/* Back to landing */}
           <button
             onClick={() => { setLandingTab("areas"); closeDomain(); }}
-            title="Back to Subject Areas"
+            title="Back to Projects"
             className="flex items-center gap-1.5 mr-3 text-xs font-medium text-gray-400 hover:text-gray-700 py-3 border-r border-gray-100 pr-3 flex-shrink-0"
           >
-            ← <span className="hidden sm:inline text-gray-500">Subject Areas</span>
+            ← <span className="hidden sm:inline text-gray-500">Projects</span>
           </button>
 
           {/* Domain badge */}
@@ -794,7 +794,10 @@ const CONNECTOR_STATUS_STYLE: Record<string, { badge: string; label: string }> =
   partner:   { badge: "bg-purple-100 text-purple-700",label: "Partner" },
 };
 
-// ── Subject Areas Panel (standalone tab) ────────────────────────────────────
+// ── Projects Panel (standalone tab) ─────────────────────────────────────────
+// A "Project" is a use case (the top-level container, provisioned from a
+// blueprint). Each has its own document pipeline, ontology, and AI agent, and
+// holds one or more Cases (the sub-level, picked inside the workspace).
 function SubjectAreasPanel({
   domains,
   domainsLoading,
@@ -804,14 +807,25 @@ function SubjectAreasPanel({
   domainsLoading: boolean;
   onOpenDomain: (d: DomainInfo) => void;
 }) {
+  const [showWizard, setShowWizard] = useState(false);
   return (
     <div className="flex-1 bg-gray-50 p-6 overflow-auto">
+      {showWizard && (
+        <NewProjectWizard
+          onClose={() => setShowWizard(false)}
+          onCreated={(useCaseId, name) => {
+            setShowWizard(false);
+            onOpenDomain({ domain_id: useCaseId, name, status: "active" });
+          }}
+        />
+      )}
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <h2 className="text-xl font-bold text-gray-900">Subject Areas</h2>
+          <h2 className="text-xl font-bold text-gray-900">Projects</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Select a subject area to open its workspace, or configure a new one.
-            Each subject area has its own document pipeline, ontology, and AI agent.
+            A project is a use case — open one to work in it, or create a new one
+            from a blueprint. Each project has its own document pipeline, ontology,
+            and AI agent.
           </p>
         </div>
 
@@ -865,21 +879,21 @@ function SubjectAreasPanel({
               );
             })}
 
-            {/* Add New Subject Area */}
-            <Link
-              href="/setup"
+            {/* New Project — provision a use case from a blueprint (P3) */}
+            <button
+              onClick={() => setShowWizard(true)}
               className="group text-left bg-white rounded-xl border-2 border-dashed border-gray-200 p-6 hover:border-blue-400 hover:shadow-xl hover:-translate-y-1 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 flex flex-col items-center justify-center min-h-[180px]"
             >
               <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-3 group-hover:bg-blue-100 transition-colors">
                 <span className="text-2xl font-bold text-blue-500">+</span>
               </div>
               <h3 className="text-sm font-bold text-gray-700 group-hover:text-blue-700 mb-1.5 text-center">
-                New Subject Area
+                New Project
               </h3>
               <p className="text-xs text-gray-400 text-center leading-relaxed">
-                Compliance, Procurement, HR, Finance, or any custom domain
+                Supplier Performance, AP 3-Way Match, or a blank use case — from a blueprint
               </p>
-            </Link>
+            </button>
           </div>
         )}
 

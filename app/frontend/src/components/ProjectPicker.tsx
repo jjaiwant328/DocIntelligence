@@ -36,7 +36,7 @@ export function ProjectPicker({
   useEffect(load, [overlay, actingUser, enforceAccess]);   // eslint-disable-line
 
   async function create() {
-    if (!newName.trim()) { setErr("Project name required."); return; }
+    if (!newName.trim()) { setErr("Case name required."); return; }
     setErr(null);
     try {
       // only the name is needed — backend generates the id; creator becomes owner
@@ -68,7 +68,7 @@ export function ProjectPicker({
 
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[11px] text-gray-400">📁 Project</span>
+      <span className="text-[11px] text-gray-400">📁 Case</span>
       <select
         className="text-xs border rounded px-2 py-1 max-w-[220px]"
         value={project?.project_id ?? ""}
@@ -90,19 +90,19 @@ export function ProjectPicker({
         </span>
       )}
       {project?.project_id && (!sel?.owner || sel.owner === actingUser) && (
-        <button onClick={del} title="Delete this project"
+        <button onClick={del} title="Delete this case"
           className="text-[11px] text-red-400 hover:text-red-600 px-1">🗑</button>
       )}
       {creating ? (
         <span className="flex items-center gap-1">
-          <input className="text-xs border rounded px-1.5 py-1 w-40" placeholder="Project name"
+          <input className="text-xs border rounded px-1.5 py-1 w-40" placeholder="Case name"
             autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") create(); }} />
           <button onClick={create} className="text-xs bg-blue-600 text-white rounded px-2 py-1">Add</button>
           <button onClick={() => { setCreating(false); setErr(null); }} className="text-xs text-gray-400 px-1">✕</button>
         </span>
       ) : (
-        <button onClick={() => setCreating(true)} title="New project/case"
+        <button onClick={() => setCreating(true)} title="New case"
           className="text-xs text-gray-400 hover:text-gray-700 px-1">+ New</button>
       )}
       {err && <span className="text-[10px] text-red-500">{err}</span>}
