@@ -362,7 +362,7 @@ export default function Home() {
           <AppOverview onGoToAreas={() => setLandingTab("areas")} liveModelConfig={modelConfig} />
         )}
         {landingTab === "areas" && (
-          <SubjectAreasPanel
+          <ProjectsPanel
             domains={domains}
             domainsLoading={domainsLoading}
             onOpenDomain={openDomain}
@@ -632,53 +632,53 @@ const PIPELINE_STAGES = [
   },
   {
     icon: "📊",
-    label: "Govern & Act",
+    label: "Reconcile & Act",
     color: "border-emerald-400 bg-emerald-50",
     text: "text-emerald-700",
-    items: ["Unity Catalog lineage", "Action log & reports", "Control Tower UI", "Scheduled pipeline"],
+    items: ["Reconcile skill → findings", "Performance scorecard", "Actions behind approval gate", "Lossless run history"],
   },
 ];
 
 const HOW_TO_STEPS = [
   {
     step: "1",
-    title: "Upload Documents",
-    tab: "Docs tab",
-    color: "bg-blue-600",
-    desc: "Go to Document Intelligence → upload one or more PDFs. Files land in the Unity Catalog Volume.",
-    tip: "Supported: PDF, TXT. Any document type — contracts, invoices, reports, emails.",
+    title: "Pick or create a Project",
+    tab: "Projects screen",
+    color: "bg-gray-700",
+    desc: "Open an existing project, or click + New Project and pick a blueprint (Supplier Performance, AP 3-Way Match, or Blank). One call provisions the schema, document types, skills, and a starter workflow — no wizard, no redeploy.",
+    tip: "A project is a use case. Blueprints are declarative, so a new one stands up in seconds.",
   },
   {
     step: "2",
-    title: "Run the Pipeline",
-    tab: "Docs tab",
+    title: "Add documents",
+    tab: "Document Intelligence · Library",
     color: "bg-blue-600",
-    desc: "Click ▶ Run Pipeline Now in the Document Library panel. The pipeline parses, classifies, extracts fields, builds the knowledge graph, and indexes for search.",
-    tip: "Takes ~5–10 min for a batch of 10–20 docs. Also runs automatically nightly at 2 AM UTC.",
+    desc: "Upload PDFs (or use a seeded corpus). The pipeline parses with ai_parse_document, classifies each doc type, extracts typed fields, and indexes for search. Tag documents to a case in the Library.",
+    tip: "Any document type — contracts, invoices, delivery schedules, purchase orders, goods receipts.",
   },
   {
     step: "3",
-    title: "Explore Control Tower",
-    tab: "Control Tower tab",
-    color: "bg-green-600",
-    desc: "View the incident dashboard, ontology map, supplier risk scores, and take actions. Actions are logged for audit and reporting.",
-    tip: "Click any node in the ontology graph to see entity details and relationships.",
+    title: "Assemble a Workflow",
+    tab: "Workflows tab",
+    color: "bg-teal-600",
+    desc: "Drag reusable skills into a template — they auto-wire by contract. Declare typed run-time inputs, and set an approval gate before any consequential action.",
+    tip: "One template, many runs. The engine orders the steps deterministically — no orchestration hidden in a prompt.",
   },
   {
     step: "4",
-    title: "Ask the AI Agent",
-    tab: "AI Agent tab",
-    color: "bg-purple-600",
-    desc: "Ask natural-language questions like 'Which restaurants received the recalled product?' or 'What is our financial exposure?' The agent reasons across all documents and structured tables.",
-    tip: "Suggested questions appear at the top of the chat. The agent cites specific lot numbers, dates, and amounts.",
+    title: "Run & review",
+    tab: "Executions tab",
+    color: "bg-green-600",
+    desc: "Run the workflow; it reconciles the documents and halts at the approval gate. Executions shows the scorecard, severity-tagged findings with $ impact, and the evidence behind each — then approve to create the actions.",
+    tip: "Every run is auto-saved losslessly and reopens with full detail for audit.",
   },
   {
     step: "5",
-    title: "Spin up a new Project",
-    tab: "Home → + New Project",
-    color: "bg-gray-700",
-    desc: "On the Projects screen, click + New Project and pick a blueprint (Supplier Performance, AP 3-Way Match, or Blank). One call provisions the schema, document types, skills, and a starter workflow — no wizard, no redeploy.",
-    tip: "Blueprints are declarative — a new use case is standing up and ready to open in seconds.",
+    title: "Ask Copilot",
+    tab: "Copilot tab",
+    color: "bg-sky-600",
+    desc: "Ask natural-language questions across the project's documents — e.g. 'Where are we billed above the contracted price?' Answers are grounded, with per-fact source links.",
+    tip: "Copilot answers only from this project's indexed documents and cites the source of every claim.",
   },
 ];
 
@@ -796,7 +796,7 @@ const CONNECTOR_STATUS_STYLE: Record<string, { badge: string; label: string }> =
 // A "Project" is a use case (the top-level container, provisioned from a
 // blueprint). Each has its own document pipeline, ontology, and AI agent, and
 // holds one or more Cases (the sub-level, picked inside the workspace).
-function SubjectAreasPanel({
+function ProjectsPanel({
   domains,
   domainsLoading,
   onOpenDomain,
@@ -923,7 +923,7 @@ function SubjectAreasPanel({
         {/* Platform info strip */}
         <div className="mt-8 bg-white rounded-xl border border-gray-200 px-5 py-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-gray-500">
           <span className="font-semibold text-gray-700 self-center">HOW IT WORKS</span>
-          {["Upload documents", "AI parses & classifies", "Fields extracted", "Ontology built", "Vector index created", "AI Agent answers questions"].map((s, i) => (
+          {["Add documents", "AI parses & classifies", "Fields extracted", "Assemble a workflow", "Reconcile & score", "Findings & actions"].map((s, i) => (
             <span key={s} className="flex items-center gap-1.5">
               <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-700 font-bold text-[10px] flex items-center justify-center flex-shrink-0">{i + 1}</span>
               {s}
@@ -953,11 +953,12 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
                 Multi-Domain Document Intelligence Platform
               </h1>
               <p className="text-sm text-gray-500 max-w-2xl">
-                Transforms unstructured documents into a governed semantic knowledge layer —
-                combining Document AI, Ontology, Vector Search, and Databricks AI Agents (FMAPIs) on the Databricks Lakehouse.
+                Stand up a document use case from a blueprint, then let reusable skills and a
+                deterministic workflow engine reconcile the documents — cited findings, a performance
+                scorecard, and actions — on Document AI, Vector Search, and the Databricks Lakehouse.
               </p>
               <div className="flex flex-wrap gap-2 mt-3">
-                {["Unity Catalog", "Delta Lake", "AI Functions", "Vector Search", "Databricks AI Agents", "Auto Loader"].map(t => (
+                {["Blueprints", "Reusable Skills", "Workflow Engine", "Vector Search", "Unity Catalog", "Lakebase"].map(t => (
                   <span key={t} className="text-[10px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{t}</span>
                 ))}
               </div>
@@ -965,8 +966,8 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
             <div className="hidden lg:flex flex-col items-end gap-3 flex-shrink-0">
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { v: "5",   l: "Pipeline Stages" },
-                  { v: "3",   l: "App Modules" },
+                  { v: "26",  l: "Reusable Skills" },
+                  { v: "3",   l: "Blueprints" },
                   { v: "12+", l: "Connectors" },
                 ].map(({ v, l }) => (
                   <div key={l} className="text-center bg-gray-50 rounded-lg px-4 py-3">
@@ -987,9 +988,9 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
           {/* Mental model */}
           <div className="grid grid-cols-3 gap-4">
             {[
-              { q: "What happened?",     a: "Documents", icon: "📄", color: "border-blue-200 bg-blue-50",    tc: "text-blue-700" },
-              { q: "What does it mean?", a: "Ontology",  icon: "🕸", color: "border-amber-200 bg-amber-50",  tc: "text-amber-700" },
-              { q: "What should we do?", a: "AI Agent",  icon: "🤖", color: "border-purple-200 bg-purple-50", tc: "text-purple-700" },
+              { q: "What happened?",     a: "Documents & Ontology", icon: "📄", color: "border-blue-200 bg-blue-50",    tc: "text-blue-700" },
+              { q: "What's wrong?",      a: "Findings & Scorecard", icon: "🔎", color: "border-amber-200 bg-amber-50",  tc: "text-amber-700" },
+              { q: "What should we do?", a: "Workflows & Actions",  icon: "✅", color: "border-emerald-200 bg-emerald-50", tc: "text-emerald-700" },
             ].map(({ q, a, icon, color, tc }) => (
               <div key={q} className={`rounded-lg border p-4 ${color}`}>
                 <p className="text-xl mb-1">{icon}</p>

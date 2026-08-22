@@ -460,7 +460,7 @@ function buildTabs(domainId: string) {
       id: "actions",
       icon: "⚡",
       label: "Action Center",
-      tooltip: "Log actions, track open items, and generate response reports for this subject area",
+      tooltip: "Log actions, track open items, and generate response reports for this project",
       subs: [
         ...categories.map(c => ({ id: c.toLowerCase(), label: c })),
         { id: "reports", label: "Action Reports" },
@@ -951,7 +951,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
           <div>
             <h2 className="text-base font-semibold text-gray-800">Copilot Studio — Setup &amp; Readiness</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              Define the guiding instructions for this subject area&apos;s AI.
+              Define the guiding instructions for this project&apos;s AI.
             </p>
           </div>
           {!showAddNew && !saving && (
@@ -968,10 +968,10 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-2">
           <p className="text-xs font-bold text-blue-900">ℹ️ How Copilot Studio works</p>
           <ul className="text-xs text-blue-800 space-y-1 pl-3 list-disc">
-            <li>The <strong>active prompt</strong> is the guiding principle for this subject area — it sets the AI&apos;s focus, tone, and reasoning framework.</li>
+            <li>The <strong>active prompt</strong> is the guiding principle for this project — it sets the AI&apos;s focus, tone, and reasoning framework.</li>
             <li>It drives <strong>Intelligence Briefings</strong>, <strong>Ask Copilot</strong> queries, and the <strong>AI Agent</strong> for this domain.</li>
             <li>No model is trained or saved to the catalog. The prompt is sent at query time to the Databricks Foundation Model API (DBRX / Llama 3). Your documents are retrieved via Vector Search and injected as context.</li>
-            <li>You can save <strong>multiple named prompts</strong> and switch the active one at any time. Only <strong>one prompt is active</strong> per subject area.</li>
+            <li>You can save <strong>multiple named prompts</strong> and switch the active one at any time. Only <strong>one prompt is active</strong> per project.</li>
             {promptLibrary.length > 0 && (
               <li className="font-semibold text-blue-900">
                 {promptLibrary.length} prompt{promptLibrary.length > 1 ? "s" : ""} saved for this domain —&nbsp;

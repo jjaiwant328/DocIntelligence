@@ -260,7 +260,7 @@ export default function SkillsTab({ domain }: { domain?: DomainInfo }) {
                     )}
                     <div className="mt-2 border rounded max-h-56 overflow-y-auto">
                       {docs.length === 0 ? (
-                        <p className="text-xs text-gray-400 p-3">No parsed documents in this subject area yet.</p>
+                        <p className="text-xs text-gray-400 p-3">No parsed documents in this project yet.</p>
                       ) : docs.map((d) => {
                         const cats = docCategories(d);
                         return (
@@ -331,8 +331,8 @@ const DOC_FED_INPUTS = new Set(["text", "context", "current", "previous", "concl
 const MANUAL_INPUT_NAMES = new Set(["query", "question", "labels", "entity_types", "doc_type"]);
 function inputSource(name: string): string {
   if (DOC_FED_INPUTS.has(name)) return "from the selected document(s)";
-  if (name === "schema_vec") return "auto (the subject area's vector schema)";
-  if (name === "domain" || name === "project") return "auto (current subject area / project)";
+  if (name === "schema_vec") return "auto (the project's vector schema)";
+  if (name === "domain" || name === "project") return "auto (current project / project)";
   if (MANUAL_INPUT_NAMES.has(name)) return "you type it";
   return "produced by an earlier workflow step";
 }
