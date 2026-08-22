@@ -25,16 +25,15 @@ def run_one(domain_id, project, approve, profile):
     from workflow_engine.engine import WorkflowEngine
     import docintel_routes as routes
 
-    dom = domain_loader(domain_id)
     logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
                              catalog=routes.CATALOG)
     ensure_table(logger.run_sql, catalog=routes.CATALOG)
-    ctx = build_live_context(dom.platform_domain_id)
+    ctx = build_live_context(domain_id)
     d = Dispatcher(load_registry(), ctx, logger=logger)
     engine = WorkflowEngine(d, domain_loader=domain_loader)
 
     inputs = {"domain": domain_id, "project": project,
-              "schema_vec": dom.schema_vec, "context": "", "approve": approve}
+              "schema_vec": domain_id, "context": "", "approve": approve}
     print(f"\n=== {domain_id} / {project} (approve={approve}) ===")
     run = engine.run("due_diligence", domain_id, inputs)
     print("run status:", run.status, "| halted_at:", run.halted_at,

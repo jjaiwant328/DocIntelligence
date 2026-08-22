@@ -29,23 +29,17 @@ router = APIRouter(prefix="/api/docintel", tags=["Skills"])
 
 _REGISTRY = load_registry()
 
-# Overlay-to-platform domain id mapping for the deterministic agent path.
-_OVERLAY_DOMAIN = {"compliance_due_diligence": "compliance", "compliance": "compliance",
-                   "supply_chain": "supply_chain"}
 
-
-def deterministic_agent_answer(question: str, platform_domain_id: str,
+def deterministic_agent_answer(question: str, use_case_id: str,
                                chat_history=None, approve: bool = False) -> dict:
     """ADR-003 deterministic agent: LLM interprets intent only; the engine/skills
     do all orchestration. Consequential intents require explicit confirmation.
 
+    `use_case_id` is the canonical id (= project = Lakehouse schema; no overlay).
     Returns a dict shaped like agent_query's response (answer/question/model/...)
     plus `intent` and, for workflow runs, the structured `run`.
     """
     import docintel_routes as routes
-
-    overlay_domain = _OVERLAY_DOMAIN.get(platform_domain_id, "compliance")
-    dom = domain_loader(overlay_domain)
 
     logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
                              catalog=routes.CATALOG)
@@ -54,7 +48,7 @@ def deterministic_agent_answer(question: str, platform_domain_id: str,
     except Exception as e:
         print(f"[det-agent] ensure_table failed: {e}")
 
-    ctx = build_live_context(dom.platform_domain_id)
+    ctx = build_live_context(use_case_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
     engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
                             template_loader=_db_template_loader(routes))
@@ -72,9 +66,9 @@ def deterministic_agent_answer(question: str, platform_domain_id: str,
         }
 
     if intent.kind == "workflow_run":
-        inputs = {"domain": overlay_domain, "project": intent.project or question,
-                  "schema_vec": dom.schema_vec, "context": "", "approve": approve}
-        run = engine.run(intent.template or "due_diligence", overlay_domain, inputs)
+        inputs = {"domain": use_case_id, "project": intent.project or question,
+                  "schema_vec": use_case_id, "context": "", "approve": approve}
+        run = engine.run(intent.template or "due_diligence", use_case_id, inputs)
         return {
             "answer": _summarize_run(run),
             "question": question, "model": routes.AGENT_MODEL,
@@ -90,7 +84,7 @@ def deterministic_agent_answer(question: str, platform_domain_id: str,
         }
 
     # conversational → deterministic retrieval + answer (no tool-order decisions)
-    evidence = ctx.vs_search(question, dom.schema_vec, 6, None) or []
+    evidence = ctx.vs_search(question, use_case_id, 6, None) or []
     context_text = "\n\n---\n\n".join(
         f"[Source: {r.get('doc_id','?')}]\n{r.get('chunk_to_retrieve','')}" for r in evidence)
     prompt = (f"Answer using only these excerpts; cite document ids.\n\n{context_text}"
@@ -112,7 +106,7 @@ def _summarize_run(run) -> str:
 
 class WorkflowRunRequest(BaseModel):
     template: str = "due_diligence"
-    domain_id: str = "compliance"      # overlay domain id: compliance | supply_chain
+    domain_id: str = "compliance_due_diligence"      # use_case_id (= project = schema)
     project: str
     context: Optional[str] = None
     approve: bool = False
@@ -175,7 +169,7 @@ def _db_template_loader(routes):
 
 
 @router.get("/templates")
-async def list_templates(domain_id: str = "compliance"):
+async def list_templates(domain_id: str = "compliance_due_diligence"):
     """Merge this domain's saved templates (DB) with the starter templates."""
     import docintel_routes as routes
     from skill_runtime import template_store as tstore
@@ -194,7 +188,7 @@ async def list_templates(domain_id: str = "compliance"):
 
 class TemplateSaveRequest(BaseModel):
     template_id: str
-    domain_id: str = "compliance"
+    domain_id: str = "compliance_due_diligence"
     name: str
     steps: list                       # [{id, skill[, inputs_map]}]
     approval_before: Optional[str] = None
@@ -220,7 +214,7 @@ async def save_template(req: TemplateSaveRequest):
 
 
 @router.delete("/templates/{template_id}")
-async def delete_template(template_id: str, domain_id: str = "compliance"):
+async def delete_template(template_id: str, domain_id: str = "compliance_due_diligence"):
     import docintel_routes as routes
     from skill_runtime import template_store as tstore
     try:
@@ -244,7 +238,7 @@ async def autowire(req: AutowireRequest):
 
 class SkillInvokeRequest(BaseModel):
     skill: str
-    domain_id: str = "compliance"
+    domain_id: str = "compliance_due_diligence"
     inputs: dict = {}
     doc_ids: Optional[list] = None       # apply the skill to these parsed documents
 
@@ -266,7 +260,7 @@ def _parse_collaborators(v) -> list:
 
 
 @router.get("/projects")
-async def list_projects(domain_id: str = "compliance",
+async def list_projects(domain_id: str = "compliance_due_diligence",
                         as_user: Optional[str] = None, enforce: bool = False):
     """Real projects/cases for a subject area, from platform.projects.
 
@@ -277,8 +271,7 @@ async def list_projects(domain_id: str = "compliance",
     rewired to real access control later.
     """
     import docintel_routes as routes
-    dom = domain_loader(domain_id)
-    pdid = dom.platform_domain_id
+    pdid = domain_id
     try:
         # Fast path: Lakebase (sub-second). Falls back to the warehouse on any error.
         rows = opstore.list_projects(pdid)
@@ -309,7 +302,7 @@ async def list_projects(domain_id: str = "compliance",
 
 
 class ProjectCreateRequest(BaseModel):
-    domain_id: str = "compliance"
+    domain_id: str = "compliance_due_diligence"
     name: str
     project_id: Optional[str] = None   # auto-generated from name when omitted
     municipality: str = ""
@@ -318,7 +311,7 @@ class ProjectCreateRequest(BaseModel):
 
 
 class ProjectMembersRequest(BaseModel):
-    domain_id: str = "compliance"
+    domain_id: str = "compliance_due_diligence"
     owner: Optional[str] = None            # set/transfer owner
     collaborators: Optional[list] = None   # full replacement list
 
@@ -336,8 +329,7 @@ async def create_project(req: ProjectCreateRequest):
     """Create a project/case for a subject area. Only the name is required; the
     project_id is auto-generated from it when not supplied."""
     import docintel_routes as routes
-    dom = domain_loader(req.domain_id)
-    pdid = dom.platform_domain_id
+    pdid = req.domain_id
     if not (req.name or "").strip():
         return {"status": "error", "error": "project name is required"}
     name = req.name.strip()
@@ -389,8 +381,7 @@ async def create_project(req: ProjectCreateRequest):
 async def update_project_members(project_id: str, req: ProjectMembersRequest):
     """Set a project's owner and/or its collaborator list (demo identity metadata)."""
     import docintel_routes as routes
-    dom = domain_loader(req.domain_id)
-    pdid = dom.platform_domain_id
+    pdid = req.domain_id
     pid = str(project_id).replace("'", "''")
 
     try:
@@ -420,11 +411,10 @@ async def update_project_members(project_id: str, req: ProjectMembersRequest):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str, domain_id: str = "compliance"):
+async def delete_project(project_id: str, domain_id: str = "compliance_due_diligence"):
     """Delete a project and its document tags. Hard delete (demo data)."""
     import docintel_routes as routes
-    dom = domain_loader(domain_id)
-    pdid = dom.platform_domain_id
+    pdid = domain_id
     pid = str(project_id).replace("'", "''")
     try:
         opstore.delete_project(domain_id=pdid, project_id=str(project_id))
@@ -447,7 +437,7 @@ async def delete_project(project_id: str, domain_id: str = "compliance"):
 
 
 class ProjectDocsRequest(BaseModel):
-    domain_id: str = "compliance"
+    domain_id: str = "compliance_due_diligence"
     project_id: str
     doc_ids: list                      # documents to add or remove
 
@@ -456,8 +446,7 @@ class ProjectDocsRequest(BaseModel):
 async def add_project_documents(req: ProjectDocsRequest):
     """Tag one or more documents to a project (idempotent per doc)."""
     import docintel_routes as routes
-    dom = domain_loader(req.domain_id)
-    pdid = dom.platform_domain_id
+    pdid = req.domain_id
     pid = str(req.project_id).replace("'", "''")
     try:
         added = opstore.add_tags(domain_id=pdid, project_id=str(req.project_id),
@@ -489,8 +478,7 @@ async def add_project_documents(req: ProjectDocsRequest):
 async def remove_project_documents(req: ProjectDocsRequest):
     """Untag documents from a project."""
     import docintel_routes as routes
-    dom = domain_loader(req.domain_id)
-    pdid = dom.platform_domain_id
+    pdid = req.domain_id
     pid = str(req.project_id).replace("'", "''")
     try:
         removed = opstore.remove_tags(domain_id=pdid, project_id=str(req.project_id),
@@ -513,12 +501,11 @@ async def remove_project_documents(req: ProjectDocsRequest):
 
 
 @router.get("/all-documents")
-async def all_documents(domain_id: str = "compliance", project_id: Optional[str] = None):
+async def all_documents(domain_id: str = "compliance_due_diligence", project_id: Optional[str] = None):
     """Every parsed doc in the subject area, each flagged with whether it is in
     `project_id` — powers the 'assemble documents for a project' picker."""
     import docintel_routes as routes
-    dom = domain_loader(domain_id)
-    pdid = dom.platform_domain_id
+    pdid = domain_id
     schemas = routes._get_domain_schemas(pdid)
     raw = schemas["schema_raw"]
     tagged = set(_project_doc_ids(routes, pdid, project_id)) if project_id else set()
@@ -539,7 +526,7 @@ async def all_documents(domain_id: str = "compliance", project_id: Optional[str]
 
 
 @router.get("/parsed-documents")
-async def parsed_documents(domain_id: str = "compliance",
+async def parsed_documents(domain_id: str = "compliance_due_diligence",
                            project_id: Optional[str] = None):
     """List a subject area's parsed documents (for the Skills 'apply to' picker).
 
@@ -547,10 +534,9 @@ async def parsed_documents(domain_id: str = "compliance",
     platform.document_project_tags.
     """
     import docintel_routes as routes
-    dom = domain_loader(domain_id)
-    schemas = routes._get_domain_schemas(dom.platform_domain_id)
+    pdid = domain_id
+    schemas = routes._get_domain_schemas(pdid)
     raw = schemas["schema_raw"]
-    pdid = dom.platform_domain_id
     # A document can carry more than one classification (multiple doc_type rows)
     # and/or more than one project tag. Aggregate so each doc_id appears ONCE
     # with all its categories collected into doc_types.
@@ -598,7 +584,7 @@ async def parsed_documents(domain_id: str = "compliance",
     return {"documents": rows or [], "total": len(rows or [])}
 
 
-def _project_doc_ids(routes, platform_domain_id: str, project_id: str) -> list:
+def _project_doc_ids(routes, use_case_id: str, project_id: str) -> list:
     """The doc_ids tagged to a project. Single choke point for tag lookups, so
     it also isolates the tags store: Lakebase first, warehouse fallback. This is
     what lets `document_project_tags` live in Lakebase while parsed_documents
@@ -606,7 +592,7 @@ def _project_doc_ids(routes, platform_domain_id: str, project_id: str) -> list:
     if not project_id:
         return []
     try:
-        return opstore.doc_ids_for_project(domain_id=platform_domain_id,
+        return opstore.doc_ids_for_project(domain_id=use_case_id,
                                            project_id=str(project_id))
     except LakebaseUnavailable:
         pass
@@ -617,7 +603,7 @@ def _project_doc_ids(routes, platform_domain_id: str, project_id: str) -> list:
         rows = routes.run_sql(f"""
             SELECT DISTINCT doc_id
             FROM {routes.CATALOG}.platform.document_project_tags
-            WHERE domain_id = '{platform_domain_id}' AND project_id = '{pid}'
+            WHERE domain_id = '{use_case_id}' AND project_id = '{pid}'
         """, timeout_secs=30) or []
     except Exception as e:
         print(f"[workflow-run] project doc lookup failed: {e}")
@@ -655,25 +641,24 @@ async def skill_invoke(req: SkillInvokeRequest):
     from skill_runtime.doc_inputs import map_docs_to_inputs
     from skill_runtime.models import InputError
 
-    dom = domain_loader(req.domain_id)
     logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
                              catalog=routes.CATALOG)
     try:
         ensure_table(logger.run_sql, catalog=routes.CATALOG)
     except Exception as e:
         print(f"[skill-invoke] ensure_table failed: {e}")
-    ctx = build_live_context(dom.platform_domain_id)
+    ctx = build_live_context(req.domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
 
     from skill_runtime.skill_modes import classify_skill
     contract = _REGISTRY.get(req.skill)
     base = dict(req.inputs or {})
-    base.setdefault("schema_vec", dom.schema_vec)
+    base.setdefault("schema_vec", req.domain_id)
 
     if not req.doc_ids:
         return dispatcher.invoke(req.skill, base).to_dict()
 
-    schemas = routes._get_domain_schemas(dom.platform_domain_id)
+    schemas = routes._get_domain_schemas(req.domain_id)
     rows = _fetch_doc_rows(routes, schemas["schema_raw"], req.doc_ids)
 
     # Document-reading skills (classify/summarize/extract…) apply to ONE document
@@ -715,7 +700,6 @@ async def skill_invoke(req: SkillInvokeRequest):
 async def workflow_run(req: WorkflowRunRequest):
     import docintel_routes as routes
 
-    dom = domain_loader(req.domain_id)
     logger = ExecutionLogger(run_sql=lambda q: routes.run_sql(q, timeout_secs=50),
                              catalog=routes.CATALOG)
     try:
@@ -723,21 +707,21 @@ async def workflow_run(req: WorkflowRunRequest):
     except Exception as e:
         print(f"[workflow-run] ensure_table failed: {e}")
 
-    ctx = build_live_context(dom.platform_domain_id)
+    ctx = build_live_context(req.domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
     engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
                             template_loader=_db_template_loader(routes))
 
     # Assemble the workflow's document set: explicit doc_ids if given, else the
     # project's tagged documents. Doc-consuming steps resolve text from these.
-    schemas = routes._get_domain_schemas(dom.platform_domain_id)
-    doc_ids = req.doc_ids or _project_doc_ids(routes, dom.platform_domain_id, req.project)
+    schemas = routes._get_domain_schemas(req.domain_id)
+    doc_ids = req.doc_ids or _project_doc_ids(routes, req.domain_id, req.project)
     docs = _fetch_doc_rows(routes, schemas["schema_raw"], doc_ids) if doc_ids else []
 
     inputs = {
         "domain": req.domain_id,
         "project": req.project,
-        "schema_vec": dom.schema_vec,
+        "schema_vec": req.domain_id,
         "context": req.context or "",
         "approve": req.approve,
     }
@@ -748,7 +732,7 @@ async def workflow_run(req: WorkflowRunRequest):
         from skill_runtime.run_store import record_run
         label = req.label or f"{req.template} · {req.project}".strip(" ·")
         rid = record_run(lambda q: routes.run_sql(q, timeout_secs=40),
-                         dom.platform_domain_id, req.project, result,
+                         req.domain_id, req.project, result,
                          label=label, catalog=routes.CATALOG)
         result["run_id"] = rid
         result["saved"] = True
@@ -758,15 +742,14 @@ async def workflow_run(req: WorkflowRunRequest):
 
 
 @router.get("/workflow-runs")
-async def workflow_runs(domain_id: str = "compliance",
+async def workflow_runs(domain_id: str = "compliance_due_diligence",
                         project_id: Optional[str] = None,
                         saved_only: bool = False):
     """Run summaries for the Executions tab, grouped by project when given."""
     import docintel_routes as routes
     from skill_runtime.run_store import list_runs
-    dom = domain_loader(domain_id)
     rows = list_runs(lambda q: routes.run_sql(q, timeout_secs=40),
-                     dom.platform_domain_id, project_id, saved_only=saved_only,
+                     domain_id, project_id, saved_only=saved_only,
                      catalog=routes.CATALOG)
     return {"runs": rows or [], "total": len(rows or [])}
 

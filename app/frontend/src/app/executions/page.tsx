@@ -18,9 +18,6 @@ interface ActionRow { action_id: string; action_type: string; description: strin
 interface OntNode { id: string; label: string; type: string; }
 interface OntEdge { source: string; target: string; label: string; }
 
-function overlayToPlatform(d: string): string {
-  return d === "supply_chain" ? "supply_chain" : "compliance_due_diligence";
-}
 function statusColor(s: string): string {
   if (["ok", "completed", "satisfied", "CLOSED", "ASSIGNED"].includes(s)) return "bg-green-100 text-green-800";
   if (["error", "failed"].includes(s)) return "bg-red-100 text-red-800";
@@ -31,8 +28,8 @@ function statusColor(s: string): string {
 
 export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
   const { project } = useDomain();
-  const overlay = (domain?.domain_id ?? "compliance") === "supply_chain" ? "supply_chain" : "compliance";
-  const platformDomain = overlayToPlatform(overlay);
+  // P4: one canonical use_case_id — no overlay/platform split.
+  const domainId = domain?.domain_id ?? "compliance_due_diligence";
 
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [actions, setActions] = useState<ActionRow[]>([]);
@@ -53,17 +50,17 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
   function refresh() {
     const pid = project?.project_id;
     const projQ = pid ? `&project_id=${encodeURIComponent(pid)}` : "";
-    apiCall<{ runs: RunRow[] }>(`/api/docintel/workflow-runs?domain_id=${overlay}${projQ}`)
+    apiCall<{ runs: RunRow[] }>(`/api/docintel/workflow-runs?domain_id=${domainId}${projQ}`)
       .then((r) => setRuns(r.runs || [])).catch(() => setRuns([]));
     // Actions are tied to a project via action_log.incident_ref = project_id
     // (set by the create_action skill). Scope to the selected project.
     const actQ = pid ? `&incident_ref=${encodeURIComponent(pid)}` : "";
-    apiCall<{ actions: ActionRow[] }>(`/api/docintel/action-log?domain_id=${platformDomain}${actQ}`)
+    apiCall<{ actions: ActionRow[] }>(`/api/docintel/action-log?domain_id=${domainId}${actQ}`)
       .then((r) => setActions(r.actions || [])).catch(() => setActions([]));
-    apiCall<{ nodes: OntNode[]; edges: OntEdge[] }>(`/api/docintel/ontology-graph?domain_id=${platformDomain}`)
+    apiCall<{ nodes: OntNode[]; edges: OntEdge[] }>(`/api/docintel/ontology-graph?domain_id=${domainId}`)
       .then((r) => setGraph({ nodes: r.nodes || [], edges: r.edges || [] })).catch(() => setGraph(null));
   }
-  useEffect(refresh, [platformDomain, overlay, project?.project_id]);
+  useEffect(refresh, [domainId, project?.project_id]);
 
   // group workflow runs by project so the Executions tab reads project-first
   const runsByProject: Record<string, RunRow[]> = {};
@@ -76,7 +73,7 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
     <div className="px-4 py-4">
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-gray-500">
-          Runs and their outputs for <span className="font-semibold text-gray-700">{domain?.name ?? overlay}</span>
+          Runs and their outputs for <span className="font-semibold text-gray-700">{domain?.name ?? domainId}</span>
           {project?.project_id
             ? <> · project <span className="font-semibold text-gray-700">📁 {project.name || project.project_id}</span></>
             : <> · all projects</>} —

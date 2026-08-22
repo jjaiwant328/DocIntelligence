@@ -5,11 +5,6 @@ import { apiCall } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
 import type { ProjectInfo } from "@/context/DomainContext";
 
-/** Map the shell's domain id to the overlay id the backend routes expect. */
-function overlayDomain(d: string): string {
-  return d === "supply_chain" ? "supply_chain" : "compliance";
-}
-
 export function ProjectPicker({
   domainId, project, onChange,
 }: {
@@ -18,7 +13,8 @@ export function ProjectPicker({
   onChange: (p: ProjectInfo | null) => void;
 }) {
   const { actingUser, enforceAccess } = useDomain();
-  const overlay = overlayDomain(domainId);
+  // P4: the use_case_id is canonical — the routes take domain_id directly.
+  const overlay = domainId;
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");

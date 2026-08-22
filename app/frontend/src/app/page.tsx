@@ -114,7 +114,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 const DOMAIN_ICONS: Record<string, string> = {
   supply_chain: "🏭",
-  compliance:   "⚖️",
+  compliance_due_diligence: "⚖️",
   procurement:  "🛒",
   finance:      "💰",
   hr:           "👥",

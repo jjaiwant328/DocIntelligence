@@ -29,9 +29,6 @@ interface SkillResult {
 
 const CATEGORY_ORDER = ["understanding", "retrieval", "reasoning", "workflow", "communication"];
 
-function overlayDomain(domainId: string): string {
-  return domainId === "supply_chain" ? "supply_chain" : "compliance";
-}
 // A doc's categories, tolerant of doc_types arriving as an array, a JSON string
 // (SQL collect_set serialized by run_sql), or a comma-joined doc_type string.
 function docCategories(d: ParsedDoc): string[] {
@@ -56,7 +53,7 @@ function statusColor(s: string): string {
 
 export default function SkillsTab({ domain }: { domain?: DomainInfo }) {
   const { project } = useDomain();
-  const domainId = overlayDomain(domain?.domain_id ?? "compliance");
+  const domainId = domain?.domain_id ?? "compliance_due_diligence";
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [docs, setDocs] = useState<ParsedDoc[]>([]);
   const [selected, setSelected] = useState<SkillMeta | null>(null);

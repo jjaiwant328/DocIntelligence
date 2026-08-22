@@ -394,13 +394,13 @@ const DEFAULT_PLAYBOOKS: Playbook[] = [
 // Domain-specific category sets
 const CATEGORIES_BY_DOMAIN: Record<string, string[]> = {
   supply_chain: ["All", "Recall", "Supplier", "Carrier", "Investigation", "Financial", "Communication"],
-  compliance:   ["All", "Violation", "Permit", "Inspection", "Training", "Vendor", "Filing"],
+  compliance_due_diligence: ["All", "Violation", "Permit", "Inspection", "Training", "Vendor", "Filing"],
 };
 const DEFAULT_CATEGORIES = ["All", "Action", "Review", "Communication", "Filing", "Investigation"];
 
 function getDomainPlaybooks(domainId: string): Playbook[] {
   if (domainId === "supply_chain") return SC_PLAYBOOKS;
-  if (domainId === "compliance")   return COMPLIANCE_PLAYBOOKS;
+  if (domainId === "compliance_due_diligence") return COMPLIANCE_PLAYBOOKS;
   return DEFAULT_PLAYBOOKS;
 }
 function getDomainCategories(domainId: string): string[] {
@@ -651,7 +651,7 @@ const BRIEFING_QUERIES_BY_DOMAIN: Record<string, string[]> = {
     "What shipments or lots have temperature excursions or quality issues pending resolution?",
     "What contract obligations or SLA violations are at risk in the next 30 days?",
   ],
-  compliance: [
+  compliance_due_diligence: [
     "Summarize all compliance correspondence and identify open action items, owners, and deadlines.",
     "What regulatory risks are currently identified across all documents? Cite sources.",
     "Which stores or jurisdictions have the most pending violations or corrective actions?",

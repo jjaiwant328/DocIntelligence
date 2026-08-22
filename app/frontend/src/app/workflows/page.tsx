@@ -57,7 +57,6 @@ function validateSteps(steps: Step[], byId: Record<string, SkillMeta>, hasDocs: 
   });
   return issues;
 }
-function overlayDomain(d: string): string { return d === "supply_chain" ? "supply_chain" : "compliance"; }
 // Rich hover text for a palette skill: what it does, produces, and any dependency.
 function paletteTooltip(s: SkillMeta): string {
   const parts: string[] = [];
@@ -98,7 +97,7 @@ function statusColor(s: string): string {
 
 export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   const { project: ctxProject } = useDomain();
-  const domainId = overlayDomain(domain?.domain_id ?? "compliance");
+  const domainId = domain?.domain_id ?? "compliance_due_diligence";
   // The run's project id comes from the shared project picker; fall back to a
   // sensible default when no project is selected so a run still works.
   const project = ctxProject?.project_id

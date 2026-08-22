@@ -7,10 +7,6 @@ import type { DomainInfo } from "@/context/DomainContext";
 
 interface DocRow { doc_id: string; doc_type?: string; in_project?: boolean }
 
-function overlayDomain(d: string): string {
-  return d === "supply_chain" ? "supply_chain" : "compliance";
-}
-
 /**
  * Assemble a project's document set: shows every parsed document in the subject
  * area, with the ones already in the selected project checked. Add/remove tags
@@ -19,7 +15,7 @@ function overlayDomain(d: string): string {
  */
 export function ProjectDocuments({ domain }: { domain?: DomainInfo }) {
   const { project, setProject, actingUser } = useDomain();
-  const domainId = overlayDomain(domain?.domain_id ?? "compliance");
+  const domainId = domain?.domain_id ?? "compliance_due_diligence";
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState("");

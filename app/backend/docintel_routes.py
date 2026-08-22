@@ -2394,7 +2394,7 @@ class CopilotQueryRequest(BaseModel):
 
 
 @router.get("/copilot-prompt")
-async def get_copilot_prompt(domain_id: str = "compliance"):
+async def get_copilot_prompt(domain_id: str = "compliance_due_diligence"):
     """Return the saved guiding prompt for a domain (or null if not yet set)."""
     try:
         rows = run_sql(f"""
@@ -5006,7 +5006,7 @@ def _ensure_copilot_prompts_table():
 
 
 @router.get("/copilot-prompts")
-async def list_copilot_prompts(domain_id: str = "compliance"):
+async def list_copilot_prompts(domain_id: str = "compliance_due_diligence"):
     """Return all named prompts for a domain, ordered newest first."""
     _ensure_copilot_prompts_table()
     try:

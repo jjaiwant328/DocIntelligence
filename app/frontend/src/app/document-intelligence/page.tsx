@@ -180,7 +180,7 @@ const SCHEMA_DEFAULT_LABELS = ["document","report","contract","correspondence","
 
 function schemaDefaultLabels(domainId: string) {
   if (domainId === "supply_chain") return SCHEMA_SC_LABELS;
-  if (domainId === "compliance")   return SCHEMA_COMPLIANCE_LABELS;
+  if (domainId === "compliance_due_diligence") return SCHEMA_COMPLIANCE_LABELS;
   return SCHEMA_DEFAULT_LABELS;
 }
 
@@ -504,7 +504,7 @@ function DomainSchemaWizard({
       setIsConfigured(allLabels.length > 0);
 
       if (d.parse_instructions) setParseInstr(d.parse_instructions as string);
-      else setParseInstr(domainId === "supply_chain" ? SCHEMA_SC_PARSE : domainId === "compliance" ? SCHEMA_COMPLIANCE_PARSE : "");
+      else setParseInstr(domainId === "supply_chain" ? SCHEMA_SC_PARSE : domainId === "compliance_due_diligence" ? SCHEMA_COMPLIANCE_PARSE : "");
       setSavedAt((d.saved_at as string) ?? null);
     }).catch(() => {
       setLabels(schemaDefaultLabels(domainId));

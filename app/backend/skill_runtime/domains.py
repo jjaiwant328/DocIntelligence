@@ -15,10 +15,11 @@ DEFAULT_DOMAINS_DIR = os.path.join(_HERE, "domains")
 
 @dataclass
 class DomainConfig:
+    """A use case's config. Since P4 the use_case_id IS the project id and the
+    Lakehouse schema — there is no more overlay→platform id indirection, so `id`
+    is the single canonical identifier (was: id + platform_domain_id + schema_vec)."""
     id: str
     name: str
-    platform_domain_id: str
-    schema_vec: str
     ontology_entities: list = field(default_factory=list)
     requirements: list = field(default_factory=list)
     requirements_by_group: dict = field(default_factory=dict)
@@ -31,14 +32,10 @@ def load_domain(domain_id: str, domains_dir: Optional[str] = None) -> DomainConf
     base = os.path.join(domains_dir or DEFAULT_DOMAINS_DIR, domain_id)
     if not os.path.isdir(base):
         # A blueprint-provisioned use case has no on-disk domain dir (it wasn't
-        # bundled at build time). Fall back to a minimal config: a new use case
-        # uses a single schema named after its id, so platform_domain_id and
-        # schema_vec are both the id. This is what makes "build a use case on the
-        # fly" runnable through the engine with no redeploy.
-        return DomainConfig(
-            id=domain_id, name=domain_id,
-            platform_domain_id=domain_id, schema_vec=domain_id,
-        )
+        # bundled at build time). Fall back to a minimal config keyed by the id —
+        # this is what makes "build a use case on the fly" runnable through the
+        # engine with no redeploy.
+        return DomainConfig(id=domain_id, name=domain_id)
     dom = _read(os.path.join(base, "domain.yaml"))
     ont = _read(os.path.join(base, "ontology.yaml"))
     req = _read(os.path.join(base, "requirements.yaml"))
@@ -50,8 +47,6 @@ def load_domain(domain_id: str, domains_dir: Optional[str] = None) -> DomainConf
     return DomainConfig(
         id=dom.get("id", domain_id),
         name=dom.get("name", domain_id),
-        platform_domain_id=dom.get("platform_domain_id", domain_id),
-        schema_vec=dom.get("schema_vec", domain_id),
         ontology_entities=(ont or {}).get("entities", []),
         requirements=flat,
         requirements_by_group=req or {},

@@ -136,5 +136,6 @@ def build_live_context(domain_id: str) -> Context:
 
 
 def domain_loader(domain_id: str):
-    """Engine domain loader. Overlay domain id ('compliance'/'supply_chain')."""
+    """Engine use-case config loader — `domain_id` is the canonical use_case_id
+    (no more overlay→platform translation). Loads ontology + requirements."""
     return load_domain(domain_id)
