@@ -2,7 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { DomainContext, DomainInfo } from "@/context/DomainContext";
+import { DomainContext, DomainInfo, ProjectInfo, DEMO_USERS } from "@/context/DomainContext";
+import { ProjectPicker } from "@/components/ProjectPicker";
+import { ProjectDocuments } from "@/components/ProjectDocuments";
 import Link from "next/link";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
 import { PipelineRunProvider } from "@/context/PipelineRunContext";
@@ -142,6 +144,9 @@ export default function Home() {
     status: "active",
     schema_ready: false,
   });
+  const [project, setProject] = useState<ProjectInfo | null>(null);
+  const [actingUser, setActingUser] = useState<string>(DEMO_USERS[0]);
+  const [enforceAccess, setEnforceAccess] = useState<boolean>(false);
 
   // ── Global document search ─────────────────────────────────────────────────
   const [searchOpen,    setSearchOpen]    = useState(false);
@@ -272,6 +277,7 @@ export default function Home() {
   const openDomain = (d: DomainInfo) => {
     setActiveDomain(d);
     setDomainCtxState(d);
+    setProject(null);   // project is scoped to a subject area
     setActiveTab("doc");
     pushUrl(d.domain_id, "doc");  // push so browser Back returns to landing
   };
@@ -370,7 +376,7 @@ export default function Home() {
   const currentTab = WORKSPACE_TABS.find(t => t.id === activeTab)!;
 
   return (
-    <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState }}>
+    <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState, project, setProject, actingUser, setActingUser, enforceAccess, setEnforceAccess }}>
       <PipelineRunProvider>
       <main className="flex-1 flex flex-col bg-gray-50">
         {/* Domain + tab bar */}
@@ -385,12 +391,21 @@ export default function Home() {
           </button>
 
           {/* Domain badge */}
-          <div className="flex items-center gap-1.5 mr-4 flex-shrink-0 border-r border-gray-100 pr-4 py-3">
+          <div className="flex items-center gap-1.5 mr-3 flex-shrink-0 border-r border-gray-100 pr-3 py-3">
             <span className="text-base">{domainIcon}</span>
             <span className="text-xs font-bold text-gray-800">{activeDomain.name}</span>
             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${STATUS_COLOR[activeDomain.status ?? "active"] ?? STATUS_COLOR.active}`}>
               {activeDomain.status ?? "active"}
             </span>
+          </div>
+
+          {/* Project / Case picker — scopes Skills / Workflows / Executions */}
+          <div className="flex items-center mr-4 flex-shrink-0 border-r border-gray-100 pr-4 py-2">
+            <ProjectPicker
+              domainId={activeDomain.domain_id}
+              project={project}
+              onChange={setProject}
+            />
           </div>
 
           {/* Workspace tabs */}
@@ -415,8 +430,21 @@ export default function Home() {
             </button>
           ))}
 
-          {/* Right: search button + active tab badge */}
+          {/* Right: demo identity + search button + active tab badge */}
           <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+            {/* Demo identity: act-as user + access enforcement toggle */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-gray-200 bg-gray-50"
+              title="Demo identity — simulate who is using the app. When 'enforce' is on, only projects you own or collaborate on are shown. App-level only (not real auth).">
+              <span className="text-[11px]">👤</span>
+              <select value={actingUser} onChange={(e) => setActingUser(e.target.value)}
+                className="text-xs bg-transparent border-none focus:outline-none max-w-[110px]">
+                {DEMO_USERS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <label className="flex items-center gap-1 text-[10px] text-gray-500 border-l border-gray-200 pl-1.5">
+                <input type="checkbox" checked={enforceAccess} onChange={(e) => setEnforceAccess(e.target.checked)} />
+                enforce
+              </label>
+            </div>
             {/* Global search button */}
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); setTimeout(() => searchInputRef.current?.focus(), 50); }}
@@ -444,7 +472,12 @@ export default function Home() {
         {/* Module content — domain passed as explicit prop to eliminate context drift */}
         <div className="flex-1">
           {activeTab === "doc"        && <DocIntelligence domain={activeDomain!} />}
-          {activeTab === "library"    && <DocIntelligence domain={activeDomain!} initialStep="library" />}
+          {activeTab === "library"    && (
+            <div>
+              <div className="px-4 pt-4"><ProjectDocuments domain={activeDomain!} /></div>
+              <DocIntelligence domain={activeDomain!} initialStep="library" />
+            </div>
+          )}
           {activeTab === "skills"     && <SkillsTab domain={activeDomain!} />}
           {activeTab === "workflows"  && <WorkflowsTab domain={activeDomain!} />}
           {activeTab === "executions" && <ExecutionsTab domain={activeDomain!} />}

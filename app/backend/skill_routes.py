@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import APIRouter
@@ -18,6 +19,11 @@ from skill_runtime.executions import ExecutionLogger, ensure_table, executions_t
 from skill_runtime.context import build_live_context, domain_loader
 from skill_runtime.intent import classify
 from workflow_engine.engine import WorkflowEngine
+
+# Lakebase operational store (fast path). On any unavailability the routes fall
+# back to the Lakehouse warehouse SQL below — this is the P1 cutover seam.
+from db import operational as opstore
+from db.lakebase import LakebaseUnavailable
 
 router = APIRouter(prefix="/api/docintel", tags=["Skills"])
 
@@ -110,10 +116,14 @@ class WorkflowRunRequest(BaseModel):
     project: str
     context: Optional[str] = None
     approve: bool = False
+    doc_ids: Optional[list] = None     # explicit document set; else the project's tagged docs
+    save: bool = False                 # persist the full execution for later review
+    label: str = ""                    # optional human label for a saved execution
 
 
 @router.get("/skills")
 async def list_skills():
+    from skill_runtime.skill_modes import classify_skill
     rows = _REGISTRY.list(enabled_only=False)
     detailed = []
     for r in rows:
@@ -123,7 +133,8 @@ async def list_skills():
             item.update({"description": c.description, "adapter": c.adapter,
                          "inputs": c.inputs, "outputs": c.outputs,
                          "evidence_requirements": c.evidence_requirements,
-                         "side_effects": c.side_effects})
+                         "side_effects": c.side_effects,
+                         "mode": classify_skill(c)})
         except Exception:
             pass
         detailed.append(item)
@@ -238,36 +249,398 @@ class SkillInvokeRequest(BaseModel):
     doc_ids: Optional[list] = None       # apply the skill to these parsed documents
 
 
+def _parse_collaborators(v) -> list:
+    """collaborators is stored as a JSON array string; tolerate comma-strings too."""
+    if not v:
+        return []
+    if isinstance(v, list):
+        return v
+    s = str(v).strip()
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+    except Exception:
+        pass
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+@router.get("/projects")
+async def list_projects(domain_id: str = "compliance",
+                        as_user: Optional[str] = None, enforce: bool = False):
+    """Real projects/cases for a subject area, from platform.projects.
+
+    Lightweight access model (demo): every project has an `owner` and a list of
+    `collaborators`. When `enforce` is true, only projects where `as_user` is the
+    owner or a collaborator are returned; otherwise all are returned (labels-only).
+    Enforcement is app-level metadata — not Databricks-enforced — so it can be
+    rewired to real access control later.
+    """
+    import docintel_routes as routes
+    dom = domain_loader(domain_id)
+    pdid = dom.platform_domain_id
+    try:
+        # Fast path: Lakebase (sub-second). Falls back to the warehouse on any error.
+        rows = opstore.list_projects(pdid)
+    except LakebaseUnavailable:
+        try:
+            rows = routes.run_sql(f"""
+                SELECT project_id, name, municipality, state, status, owner, collaborators
+                FROM {routes.CATALOG}.platform.projects
+                WHERE domain_id = '{pdid}' AND status <> '__marker__'
+                ORDER BY updated_at DESC NULLS LAST
+            """, timeout_secs=30)
+        except Exception as e:
+            return {"projects": [], "error": str(e)}
+    except Exception as e:
+        return {"projects": [], "error": str(e)}
+    out = []
+    for r in (rows or []):
+        r["collaborators"] = _parse_collaborators(r.get("collaborators"))
+        r["owner"] = r.get("owner") or ""
+        if enforce and as_user:
+            members = {r["owner"], *r["collaborators"]}
+            r["_visible"] = as_user in members
+        else:
+            r["_visible"] = True
+        if r["_visible"]:
+            out.append(r)
+    return {"projects": out, "total": len(out)}
+
+
+class ProjectCreateRequest(BaseModel):
+    domain_id: str = "compliance"
+    name: str
+    project_id: Optional[str] = None   # auto-generated from name when omitted
+    municipality: str = ""
+    state: str = ""
+    owner: str = ""                    # the creating user (demo identity)
+
+
+class ProjectMembersRequest(BaseModel):
+    domain_id: str = "compliance"
+    owner: Optional[str] = None            # set/transfer owner
+    collaborators: Optional[list] = None   # full replacement list
+
+
+def _gen_project_id(name: str) -> str:
+    """Derive a stable-ish project id from a name (slug + short random suffix)."""
+    import re
+    import uuid as _uuid
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:32] or "project"
+    return f"{slug}-{_uuid.uuid4().hex[:6]}"
+
+
+@router.post("/projects")
+async def create_project(req: ProjectCreateRequest):
+    """Create a project/case for a subject area. Only the name is required; the
+    project_id is auto-generated from it when not supplied."""
+    import docintel_routes as routes
+    dom = domain_loader(req.domain_id)
+    pdid = dom.platform_domain_id
+    if not (req.name or "").strip():
+        return {"status": "error", "error": "project name is required"}
+    name = req.name.strip()
+    project_id = (req.project_id or "").strip() or _gen_project_id(name)
+    owner = (req.owner or "app_user").strip()
+
+    # Fast path: Lakebase. Falls back to the warehouse on unavailability.
+    try:
+        if opstore.name_exists(pdid, name):
+            return {"status": "error", "error": f'A project named "{name}" already exists.'}
+        opstore.create_project(domain_id=pdid, project_id=project_id, name=name,
+                               municipality=req.municipality, state=req.state, owner=owner)
+        return {"status": "created", "project_id": project_id, "name": name, "owner": owner}
+    except LakebaseUnavailable:
+        pass
+
+    def esc(v: str) -> str:
+        return str(v or "").replace("'", "''")
+
+    # Reject duplicate names within the same subject area (case-insensitive).
+    try:
+        dup = routes.run_sql(f"""
+            SELECT count(*) AS c FROM {routes.CATALOG}.platform.projects
+            WHERE domain_id = '{pdid}' AND status <> '__marker__'
+              AND lower(trim(name)) = lower('{esc(name)}')
+        """, timeout_secs=30) or []
+        if dup and int(dup[0].get("c", 0)) > 0:
+            return {"status": "error", "error": f'A project named "{name}" already exists.'}
+    except Exception as e:
+        print(f"[create_project] dup check failed: {e}")
+
+    try:
+        routes.run_sql(f"""
+            INSERT INTO {routes.CATALOG}.platform.projects
+              (project_id, domain_id, name, municipality, state, address,
+               parcel_id, status, created_by, created_at, updated_at,
+               owner, collaborators)
+            VALUES ('{esc(project_id)}', '{pdid}', '{esc(name)}',
+                    '{esc(req.municipality)}', '{esc(req.state)}', '', '',
+                    'Active', '{esc(owner)}', current_timestamp(), current_timestamp(),
+                    '{esc(owner)}', '[]')
+        """, timeout_secs=40)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    return {"status": "created", "project_id": project_id, "name": name, "owner": owner}
+
+
+@router.patch("/projects/{project_id}/members")
+async def update_project_members(project_id: str, req: ProjectMembersRequest):
+    """Set a project's owner and/or its collaborator list (demo identity metadata)."""
+    import docintel_routes as routes
+    dom = domain_loader(req.domain_id)
+    pdid = dom.platform_domain_id
+    pid = str(project_id).replace("'", "''")
+
+    try:
+        opstore.update_members(domain_id=pdid, project_id=str(project_id),
+                               owner=req.owner, collaborators=req.collaborators)
+        return {"status": "ok", "project_id": project_id}
+    except LakebaseUnavailable:
+        pass
+
+    def esc(v: str) -> str:
+        return str(v or "").replace("'", "''")
+    sets = ["updated_at = current_timestamp()"]
+    if req.owner is not None:
+        sets.append(f"owner = '{esc(req.owner)}'")
+    if req.collaborators is not None:
+        collabs = json.dumps([str(c).strip() for c in req.collaborators if str(c).strip()])
+        sets.append(f"collaborators = '{esc(collabs)}'")
+    try:
+        routes.run_sql(f"""
+            UPDATE {routes.CATALOG}.platform.projects
+            SET {', '.join(sets)}
+            WHERE domain_id = '{pdid}' AND project_id = '{pid}'
+        """, timeout_secs=40)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    return {"status": "ok", "project_id": project_id}
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, domain_id: str = "compliance"):
+    """Delete a project and its document tags. Hard delete (demo data)."""
+    import docintel_routes as routes
+    dom = domain_loader(domain_id)
+    pdid = dom.platform_domain_id
+    pid = str(project_id).replace("'", "''")
+    try:
+        opstore.delete_project(domain_id=pdid, project_id=str(project_id))
+        return {"status": "deleted", "project_id": project_id}
+    except LakebaseUnavailable:
+        pass
+    try:
+        routes.run_sql(f"""
+            DELETE FROM {routes.CATALOG}.platform.projects
+            WHERE domain_id = '{pdid}' AND project_id = '{pid}'
+        """, timeout_secs=40)
+        # also drop this project's document tags so nothing dangles
+        routes.run_sql(f"""
+            DELETE FROM {routes.CATALOG}.platform.document_project_tags
+            WHERE domain_id = '{pdid}' AND project_id = '{pid}'
+        """, timeout_secs=40)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    return {"status": "deleted", "project_id": project_id}
+
+
+class ProjectDocsRequest(BaseModel):
+    domain_id: str = "compliance"
+    project_id: str
+    doc_ids: list                      # documents to add or remove
+
+
+@router.post("/project-documents")
+async def add_project_documents(req: ProjectDocsRequest):
+    """Tag one or more documents to a project (idempotent per doc)."""
+    import docintel_routes as routes
+    dom = domain_loader(req.domain_id)
+    pdid = dom.platform_domain_id
+    pid = str(req.project_id).replace("'", "''")
+    try:
+        added = opstore.add_tags(domain_id=pdid, project_id=str(req.project_id),
+                                 doc_ids=req.doc_ids or [])
+        return {"status": "ok", "added": added, "project_id": req.project_id}
+    except LakebaseUnavailable:
+        pass
+    added = 0
+    for did in req.doc_ids or []:
+        d = str(did).replace("'", "''")
+        try:
+            # delete-then-insert keeps it idempotent (no duplicate tag rows)
+            routes.run_sql(f"""
+                DELETE FROM {routes.CATALOG}.platform.document_project_tags
+                WHERE domain_id='{pdid}' AND project_id='{pid}' AND doc_id='{d}'
+            """, timeout_secs=30)
+            routes.run_sql(f"""
+                INSERT INTO {routes.CATALOG}.platform.document_project_tags
+                  (domain_id, doc_id, project_id, scope, source, tagged_by, tagged_at)
+                VALUES ('{pdid}','{d}','{pid}','project','manual','app_user',current_timestamp())
+            """, timeout_secs=30)
+            added += 1
+        except Exception as e:
+            print(f"[project-documents] add failed for {did}: {e}")
+    return {"status": "ok", "added": added, "project_id": req.project_id}
+
+
+@router.delete("/project-documents")
+async def remove_project_documents(req: ProjectDocsRequest):
+    """Untag documents from a project."""
+    import docintel_routes as routes
+    dom = domain_loader(req.domain_id)
+    pdid = dom.platform_domain_id
+    pid = str(req.project_id).replace("'", "''")
+    try:
+        removed = opstore.remove_tags(domain_id=pdid, project_id=str(req.project_id),
+                                      doc_ids=req.doc_ids or [])
+        return {"status": "ok", "removed": removed, "project_id": req.project_id}
+    except LakebaseUnavailable:
+        pass
+    removed = 0
+    for did in req.doc_ids or []:
+        d = str(did).replace("'", "''")
+        try:
+            routes.run_sql(f"""
+                DELETE FROM {routes.CATALOG}.platform.document_project_tags
+                WHERE domain_id='{pdid}' AND project_id='{pid}' AND doc_id='{d}'
+            """, timeout_secs=30)
+            removed += 1
+        except Exception as e:
+            print(f"[project-documents] remove failed for {did}: {e}")
+    return {"status": "ok", "removed": removed, "project_id": req.project_id}
+
+
+@router.get("/all-documents")
+async def all_documents(domain_id: str = "compliance", project_id: Optional[str] = None):
+    """Every parsed doc in the subject area, each flagged with whether it is in
+    `project_id` — powers the 'assemble documents for a project' picker."""
+    import docintel_routes as routes
+    dom = domain_loader(domain_id)
+    pdid = dom.platform_domain_id
+    schemas = routes._get_domain_schemas(pdid)
+    raw = schemas["schema_raw"]
+    tagged = set(_project_doc_ids(routes, pdid, project_id)) if project_id else set()
+    try:
+        rows = routes.run_sql(f"""
+            SELECT doc_id,
+                   array_join(array_sort(collect_set(doc_type)), ', ') AS doc_type
+            FROM {routes.CATALOG}.{raw}.parsed_documents
+            GROUP BY doc_id
+            ORDER BY doc_id
+            LIMIT 500
+        """, timeout_secs=30) or []
+    except Exception as e:
+        return {"documents": [], "error": str(e)}
+    for r in rows:
+        r["in_project"] = r.get("doc_id") in tagged
+    return {"documents": rows, "total": len(rows), "in_project_count": len(tagged)}
+
+
 @router.get("/parsed-documents")
-async def parsed_documents(domain_id: str = "compliance"):
-    """List a subject area's parsed documents (for the Skills 'apply to' picker)."""
+async def parsed_documents(domain_id: str = "compliance",
+                           project_id: Optional[str] = None):
+    """List a subject area's parsed documents (for the Skills 'apply to' picker).
+
+    When project_id is given, restrict to documents tagged to that project via
+    platform.document_project_tags.
+    """
     import docintel_routes as routes
     dom = domain_loader(domain_id)
     schemas = routes._get_domain_schemas(dom.platform_domain_id)
     raw = schemas["schema_raw"]
+    pdid = dom.platform_domain_id
+    # A document can carry more than one classification (multiple doc_type rows)
+    # and/or more than one project tag. Aggregate so each doc_id appears ONCE
+    # with all its categories collected into doc_types.
     try:
-        rows = routes.run_sql(f"""
-            SELECT doc_id, doc_type
-            FROM {routes.CATALOG}.{raw}.parsed_documents
-            ORDER BY processed_ts DESC NULLS LAST
-            LIMIT 200
-        """, timeout_secs=30)
+        if project_id:
+            # Tags live in Lakebase now, so resolve the project's doc_ids there and
+            # filter parsed_documents by them (no cross-store JOIN).
+            doc_ids = _project_doc_ids(routes, pdid, project_id)
+            if not doc_ids:
+                return {"documents": [], "total": 0}
+            in_list = ", ".join("'" + str(d).replace("'", "''") + "'" for d in doc_ids)
+            rows = routes.run_sql(f"""
+                SELECT pd.doc_id,
+                       array_join(array_sort(collect_set(pd.doc_type)), ', ') AS doc_type,
+                       collect_set(pd.doc_type) AS doc_types,
+                       max(pd.processed_ts) AS processed_ts
+                FROM {routes.CATALOG}.{raw}.parsed_documents pd
+                WHERE pd.doc_id IN ({in_list})
+                GROUP BY pd.doc_id
+                ORDER BY processed_ts DESC NULLS LAST
+                LIMIT 200
+            """, timeout_secs=30)
+        else:
+            rows = routes.run_sql(f"""
+                SELECT doc_id,
+                       array_join(array_sort(collect_set(doc_type)), ', ') AS doc_type,
+                       collect_set(doc_type) AS doc_types,
+                       max(processed_ts) AS processed_ts
+                FROM {routes.CATALOG}.{raw}.parsed_documents
+                GROUP BY doc_id
+                ORDER BY processed_ts DESC NULLS LAST
+                LIMIT 200
+            """, timeout_secs=30)
     except Exception as e:
         return {"documents": [], "error": str(e)}
+    # run_sql serializes SQL arrays (collect_set) as JSON strings; decode doc_types
+    # back into a real list so the client always receives an array.
+    for r in (rows or []):
+        dt = r.get("doc_types")
+        if isinstance(dt, str):
+            try:
+                r["doc_types"] = json.loads(dt)
+            except Exception:
+                r["doc_types"] = [x.strip() for x in dt.split(",") if x.strip()]
     return {"documents": rows or [], "total": len(rows or [])}
 
 
+def _project_doc_ids(routes, platform_domain_id: str, project_id: str) -> list:
+    """The doc_ids tagged to a project. Single choke point for tag lookups, so
+    it also isolates the tags store: Lakebase first, warehouse fallback. This is
+    what lets `document_project_tags` live in Lakebase while parsed_documents
+    (the thing we join against) stays in the Lakehouse."""
+    if not project_id:
+        return []
+    try:
+        return opstore.doc_ids_for_project(domain_id=platform_domain_id,
+                                           project_id=str(project_id))
+    except LakebaseUnavailable:
+        pass
+    except Exception as e:
+        print(f"[tags] Lakebase doc lookup failed: {e}")
+    pid = str(project_id).replace("'", "''")
+    try:
+        rows = routes.run_sql(f"""
+            SELECT DISTINCT doc_id
+            FROM {routes.CATALOG}.platform.document_project_tags
+            WHERE domain_id = '{platform_domain_id}' AND project_id = '{pid}'
+        """, timeout_secs=30) or []
+    except Exception as e:
+        print(f"[workflow-run] project doc lookup failed: {e}")
+        return []
+    return [r.get("doc_id") for r in rows if r.get("doc_id")]
+
+
 def _fetch_doc_rows(routes, raw_schema: str, doc_ids: list) -> list:
-    """Fetch doc_id/doc_type/text for the given docs from parsed_documents."""
+    """Fetch doc_id/doc_type/text for the given docs from parsed_documents.
+
+    A doc with multiple classifications has multiple rows; collapse to ONE row
+    per doc_id (text taken once) so skill inputs don't get duplicated text."""
     if not doc_ids:
         return []
     ids = ", ".join("'" + str(d).replace("'", "''") + "'" for d in doc_ids)
     try:
         return routes.run_sql(f"""
-            SELECT doc_id, doc_type,
-                   SUBSTRING(CAST(parsed_content AS STRING), 1, 4000) AS text
+            SELECT doc_id,
+                   array_join(array_sort(collect_set(doc_type)), ', ') AS doc_type,
+                   max(SUBSTRING(CAST(parsed_content AS STRING), 1, 4000)) AS text
             FROM {routes.CATALOG}.{raw_schema}.parsed_documents
             WHERE doc_id IN ({ids})
+            GROUP BY doc_id
         """, timeout_secs=40) or []
     except Exception as e:
         print(f"[skill-invoke] fetch doc rows failed: {e}")
@@ -292,20 +665,50 @@ async def skill_invoke(req: SkillInvokeRequest):
     ctx = build_live_context(dom.platform_domain_id)
     dispatcher = Dispatcher(_REGISTRY, ctx, logger=logger)
 
+    from skill_runtime.skill_modes import classify_skill
+    contract = _REGISTRY.get(req.skill)
     base = dict(req.inputs or {})
     base.setdefault("schema_vec", dom.schema_vec)
-    if req.doc_ids:
-        schemas = routes._get_domain_schemas(dom.platform_domain_id)
-        rows = _fetch_doc_rows(routes, schemas["schema_raw"], req.doc_ids)
-        try:
-            inputs = map_docs_to_inputs(_REGISTRY.get(req.skill), rows, base_inputs=base)
-        except InputError as e:
-            return {"status": "error", "outputs": {}, "evidence": [], "error": str(e)}
-    else:
-        inputs = base
 
-    result = dispatcher.invoke(req.skill, inputs)
-    return result.to_dict()
+    if not req.doc_ids:
+        return dispatcher.invoke(req.skill, base).to_dict()
+
+    schemas = routes._get_domain_schemas(dom.platform_domain_id)
+    rows = _fetch_doc_rows(routes, schemas["schema_raw"], req.doc_ids)
+
+    # Document-reading skills (classify/summarize/extract…) apply to ONE document
+    # at a time — running them once over concatenated text would collapse many
+    # documents into a single answer. Run per-document and return per_doc results.
+    mode = classify_skill(contract)
+    if mode.get("needs_docs") and len(rows) > 1:
+        per_doc = []
+        for r in rows:
+            try:
+                inputs = map_docs_to_inputs(contract, [r], base_inputs=base)
+                res = dispatcher.invoke(req.skill, inputs).to_dict()
+            except InputError as e:
+                res = {"status": "error", "outputs": {}, "evidence": [], "error": str(e)}
+            res["doc_id"] = r.get("doc_id")
+            per_doc.append(res)
+        ok = [p for p in per_doc if p.get("status") not in ("error",)]
+        return {
+            "status": "ok" if ok else "error",
+            "per_doc": per_doc,
+            "outputs": {"documents_processed": len(per_doc),
+                        "succeeded": len(ok)},
+            "evidence": [],
+            "error": None if ok else "all documents failed",
+        }
+
+    # single document, or a skill that consumes the corpus at once
+    try:
+        inputs = map_docs_to_inputs(contract, rows, base_inputs=base)
+    except InputError as e:
+        return {"status": "error", "outputs": {}, "evidence": [], "error": str(e)}
+    result = dispatcher.invoke(req.skill, inputs).to_dict()
+    if len(rows) == 1:
+        result["doc_id"] = rows[0].get("doc_id")
+    return result
 
 
 @router.post("/workflow-run")
@@ -325,6 +728,12 @@ async def workflow_run(req: WorkflowRunRequest):
     engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
                             template_loader=_db_template_loader(routes))
 
+    # Assemble the workflow's document set: explicit doc_ids if given, else the
+    # project's tagged documents. Doc-consuming steps resolve text from these.
+    schemas = routes._get_domain_schemas(dom.platform_domain_id)
+    doc_ids = req.doc_ids or _project_doc_ids(routes, dom.platform_domain_id, req.project)
+    docs = _fetch_doc_rows(routes, schemas["schema_raw"], doc_ids) if doc_ids else []
+
     inputs = {
         "domain": req.domain_id,
         "project": req.project,
@@ -332,8 +741,44 @@ async def workflow_run(req: WorkflowRunRequest):
         "context": req.context or "",
         "approve": req.approve,
     }
-    run = engine.run(req.template, req.domain_id, inputs)
-    return run.to_dict()
+    run = engine.run(req.template, req.domain_id, inputs, docs=docs)
+    result = run.to_dict()
+    try:
+        from skill_runtime.run_store import record_run
+        rid = record_run(lambda q: routes.run_sql(q, timeout_secs=40),
+                         dom.platform_domain_id, req.project, result,
+                         saved=req.save, label=req.label, catalog=routes.CATALOG)
+        result["run_id"] = rid
+        result["saved"] = bool(req.save)
+    except Exception as e:
+        print(f"[workflow-run] record_run failed: {e}")
+    return result
+
+
+@router.get("/workflow-runs")
+async def workflow_runs(domain_id: str = "compliance",
+                        project_id: Optional[str] = None,
+                        saved_only: bool = False):
+    """Run summaries for the Executions tab, grouped by project when given."""
+    import docintel_routes as routes
+    from skill_runtime.run_store import list_runs
+    dom = domain_loader(domain_id)
+    rows = list_runs(lambda q: routes.run_sql(q, timeout_secs=40),
+                     dom.platform_domain_id, project_id, saved_only=saved_only,
+                     catalog=routes.CATALOG)
+    return {"runs": rows or [], "total": len(rows or [])}
+
+
+@router.get("/workflow-run/{run_id}")
+async def get_workflow_run(run_id: str):
+    """Reopen a saved execution's full detail (steps/outputs/evidence)."""
+    import docintel_routes as routes
+    from skill_runtime.run_store import get_run
+    run = get_run(lambda q: routes.run_sql(q, timeout_secs=40),
+                  run_id, catalog=routes.CATALOG)
+    if run is None:
+        return {"error": "not found or not saved", "run": None}
+    return {"run": run}
 
 
 @router.get("/skill-executions")

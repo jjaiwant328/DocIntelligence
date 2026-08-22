@@ -339,11 +339,18 @@ def _vs_search(query: str, schema_vec: str, k: int = 6, doc_type_filter: str = N
         where = ""
         if doc_type_filter:
             where = f"WHERE doc_type = '{_sql_lit(doc_type_filter, 200)}'"
+        # ai_similarity() is non-deterministic and Databricks rejects it directly in
+        # ORDER BY (INVALID_NON_DETERMINISTIC_EXPRESSIONS). Compute the score as a
+        # derived column in a subquery, then order by that column.
         rows = run_sql(f"""
             SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve
-            FROM {catalog}.{schema}.document_chunks
-            {where}
-            ORDER BY ai_similarity(chunk_to_retrieve, '{lit}') DESC
+            FROM (
+                SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve,
+                       ai_similarity(chunk_to_retrieve, '{lit}') AS _score
+                FROM {catalog}.{schema}.document_chunks
+                {where}
+            ) t
+            ORDER BY _score DESC
             LIMIT {k}
         """, timeout_secs=30) or []
         return [
@@ -2383,6 +2390,7 @@ class CopilotQueryRequest(BaseModel):
     domain_id: str
     query: str
     prompt_override: Optional[str] = None
+    project_id: Optional[str] = None   # scope the answer to one project's documents
 
 
 @router.get("/copilot-prompt")
@@ -3659,13 +3667,34 @@ async def copilot_query(req: CopilotQueryRequest):
             "'[no source]'. Do not put filenames anywhere except in these brackets."
         )
 
+        # If a project is selected, restrict retrieval to that project's tagged docs.
+        _project_doc_set = None
+        if req.project_id:
+            try:
+                from db import operational as _opstore
+                from db.lakebase import LakebaseUnavailable as _LBU
+                try:
+                    _ids = _opstore.doc_ids_for_project(domain_id=req.domain_id,
+                                                        project_id=str(req.project_id))
+                    _project_doc_set = {d for d in _ids if d}
+                except _LBU:
+                    pid = str(req.project_id).replace("'", "''")
+                    _rows = run_sql(f"""
+                        SELECT doc_id FROM {CATALOG}.platform.document_project_tags
+                        WHERE domain_id = '{req.domain_id}' AND project_id = '{pid}'
+                    """, timeout_secs=30) or []
+                    _project_doc_set = {r.get("doc_id") for r in _rows if r.get("doc_id")}
+            except Exception as _pe:
+                print(f"[copilot] project doc filter failed: {_pe}")
+
         # Retrieve relevant doc context via ai_similarity ranking (best-effort)
         context_text = ""
         cited_docs: list = []
         try:
             _domain = _get_domain_schemas(req.domain_id)
             _vec = _domain["schema_vec"]
-            data = _vs_search(req.query, _vec, k=6)
+            # over-fetch when filtering to a project so enough survive the filter
+            data = _vs_search(req.query, _vec, k=20 if _project_doc_set else 6)
             if not data:
                 raise RuntimeError("no ai_similarity results")
             chunks = []
@@ -3673,9 +3702,13 @@ async def copilot_query(req: CopilotQueryRequest):
                 doc_id = row[1] if len(row) > 1 else "unknown"
                 doc_type = row[2] if len(row) > 2 else ""
                 chunk = row[3] if len(row) > 3 else ""
+                if _project_doc_set is not None and doc_id not in _project_doc_set:
+                    continue
                 if doc_id not in cited_docs:
                     cited_docs.append(doc_id)
                 chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
+                if len(cited_docs) >= 6:
+                    break
             context_text = "\n\n---\n\n".join(chunks)
         except Exception as vs_err:
             # Fall back: pull recent parsed doc text snippets from SQL

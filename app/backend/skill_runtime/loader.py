@@ -62,6 +62,7 @@ def _contract_from_dict(d: dict) -> SkillContract:
         id=d["id"], version=str(d.get("version", "1.0")),
         category=d.get("category", ""), adapter=d["adapter"],
         implementation=d["implementation"],
+        description=d.get("description", "") or "",
         inputs=d.get("inputs", {}) or {}, outputs=d.get("outputs", {}) or {},
         required_capabilities=d.get("required_capabilities", []) or [],
         ontology_dependencies=d.get("ontology_dependencies", []) or [],

@@ -26,7 +26,7 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
 
     class FakeEngine:
         def __init__(self, *a, **k): pass
-        def run(self, template, domain, inputs):
+        def run(self, template, domain, inputs, docs=None):
             assert template == "due_diligence"
             assert inputs["project"] == "Store 1827"
             return fake_run
@@ -46,6 +46,7 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
     fake_routes = types.ModuleType("docintel_routes")
     fake_routes.run_sql = lambda q, timeout_secs=50: []
     fake_routes.CATALOG = "jai_docintel"
+    fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw"}
     sys.modules["docintel_routes"] = fake_routes
 
     req = skill_routes.WorkflowRunRequest(

@@ -1,6 +1,9 @@
 fastapi
 uvicorn[standard]
 databricks-sdk
+# Lakebase (managed Postgres) operational store — see app/backend/db/
+psycopg[binary]
+psycopg_pool
 python-dotenv
 requests
 python-multipart

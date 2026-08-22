@@ -1,9 +1,9 @@
 """Deterministic workflow engine.
 
 Runs a template's steps in order. Each step's inputs are resolved from an
-`inputs_map` referencing $input.*, $domain.*, $steps.<id>.<key>, or a literal.
-Supports bounded retries, halt-on-failure with partial history, and ONE human
-approval gate before the step named in `approval_before`."""
+`inputs_map` referencing $input.*, $domain.*, $docs.*, $steps.<id>.<key>, or a
+literal. Supports bounded retries, halt-on-failure with partial history, and ONE
+human approval gate before the step named in `approval_before`."""
 from __future__ import annotations
 
 import os
@@ -14,6 +14,26 @@ import yaml
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TEMPLATES_DIR = os.path.join(_HERE, "templates")
+
+
+def _build_doc_context(docs: list) -> dict:
+    """Collapse the workflow's document set into resolvable values.
+
+    Mirrors doc_inputs.map_docs_to_inputs so a doc-consuming step gets the same
+    concatenated text whether run standalone or inside a workflow."""
+    rows = docs or []
+    def _text(r):
+        return str(r.get("text") or r.get("content")
+                   or r.get("chunk_to_retrieve") or "").strip()
+    joined = "\n\n---\n\n".join(t for t in (_text(r) for r in rows) if t)
+    doc_types = sorted({str(r.get("doc_type")) for r in rows if r.get("doc_type")})
+    doc_ids = [str(r.get("doc_id")) for r in rows if r.get("doc_id")]
+    return {
+        "text": joined, "context": joined,
+        "current": joined, "previous": joined, "conclusion": joined,
+        "doc_types": doc_types, "doc_ids": doc_ids,
+        "query": " ".join(doc_types),
+    }
 
 
 @dataclass
@@ -79,9 +99,14 @@ class WorkflowEngine:
         with open(os.path.join(self.templates_dir, f"{template_id}.yaml")) as f:
             return yaml.safe_load(f)
 
-    def run(self, template_id: str, domain: str, inputs: dict) -> WorkflowRun:
+    def run(self, template_id: str, domain: str, inputs: dict,
+            docs: Optional[list] = None) -> WorkflowRun:
+        """Run a template. `docs` is the workflow's document set (list of rows with
+        doc_id/doc_type/text); doc-consuming steps resolve their text from it via
+        `$docs.*` references emitted by autowire."""
         tmpl = self._load_template(template_id, domain)
         domain_cfg = self.domain_loader(domain) if self.domain_loader else None
+        doc_ctx = _build_doc_context(docs or [])
         run = WorkflowRun(template_id=tmpl["id"],
                           template_version=str(tmpl.get("version", "1.0")),
                           domain=domain, status="completed")
@@ -101,7 +126,8 @@ class WorkflowEngine:
                 return run
 
             resolved = self._resolve_inputs(step.get("inputs_map", {}),
-                                            inputs, domain_cfg, step_outputs)
+                                            inputs, domain_cfg, step_outputs,
+                                            doc_ctx)
             rec = self._run_step(sid, skill, resolved, wf_ctx)
             run.steps.append(rec)
 
@@ -129,13 +155,14 @@ class WorkflowEngine:
                           outputs=last.outputs, evidence=last.evidence,
                           error=last.error, attempts=attempts)
 
-    def _resolve_inputs(self, inputs_map, inputs, domain_cfg, step_outputs) -> dict:
+    def _resolve_inputs(self, inputs_map, inputs, domain_cfg, step_outputs,
+                        doc_ctx=None) -> dict:
         out = {}
         for key, ref in inputs_map.items():
-            out[key] = self._resolve_ref(ref, inputs, domain_cfg, step_outputs)
+            out[key] = self._resolve_ref(ref, inputs, domain_cfg, step_outputs, doc_ctx)
         return out
 
-    def _resolve_ref(self, ref, inputs, domain_cfg, step_outputs):
+    def _resolve_ref(self, ref, inputs, domain_cfg, step_outputs, doc_ctx=None):
         if not isinstance(ref, str) or not ref.startswith("$"):
             return ref  # literal
         parts = ref[1:].split(".")
@@ -146,6 +173,9 @@ class WorkflowEngine:
             if domain_cfg is None:
                 return None
             return getattr(domain_cfg, parts[1], None) if len(parts) > 1 else None
+        if root == "docs":
+            # $docs.text | $docs.doc_types | $docs.doc_ids — the workflow's corpus
+            return (doc_ctx or {}).get(parts[1]) if len(parts) > 1 else None
         if root == "steps":
             # $steps.<id> or $steps.<id>.<key>
             if len(parts) == 2:

@@ -16,8 +16,9 @@ from __future__ import annotations
 _DOMAIN_KEYS = {"requirements"}
 # input name on a skill -> domain-config field it should draw from
 _DOMAIN_ALIASES = {"candidate_requirements": "requirements"}
-_INPUT_KEYS = {"domain", "project", "schema_vec", "context", "approve",
-               "current", "previous"}
+_INPUT_KEYS = {"domain", "project", "schema_vec", "approve"}
+# Inputs sourced from the workflow's document set ($docs.*) — the corpus text.
+_DOC_KEYS = {"text", "context", "current", "previous", "conclusion", "query"}
 
 
 def infer_inputs_map(steps: list, registry) -> list:
@@ -45,6 +46,8 @@ def infer_inputs_map(steps: list, registry) -> list:
             ref = _resolve(name, prior_outputs)
             if ref is not None:
                 imap[name] = ref
+            elif name in _DOC_KEYS:
+                imap[name] = f"$docs.{name}"
             elif name in _DOMAIN_ALIASES:
                 imap[name] = f"$domain.{_DOMAIN_ALIASES[name]}"
             elif name in _DOMAIN_KEYS:

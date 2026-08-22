@@ -141,7 +141,10 @@ def test_vs_search_builds_expected_sql_and_shape(monkeypatch=None):
     # per-domain schema resolved, not hardcoded to vectors
     assert "compliance_due_diligence.document_chunks" in q
     assert "ai_similarity(chunk_to_retrieve" in q
-    assert "ORDER BY ai_similarity" in q
+    # ai_similarity() is computed as _score in a subquery (Databricks rejects the
+    # non-deterministic call directly in ORDER BY), then ordered by that alias.
+    assert "AS _score" in q
+    assert "ORDER BY _score" in q
     assert "LIMIT 6" in q
     # drop-in shape: [chunk_id, doc_id, doc_type, chunk_to_retrieve]
     assert rows[0] == ["c1", "d1", "permit", "hello"]

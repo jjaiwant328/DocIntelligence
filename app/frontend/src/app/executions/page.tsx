@@ -2,13 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
+import { useDomain } from "@/context/DomainContext";
 import type { DomainInfo } from "@/context/DomainContext";
+import { FormattedOutputs } from "@/components/FormattedOutputs";
 
-interface ExecRow {
-  execution_id: string; skill_id: string; status: string;
-  workflow_id?: string; work_object_id?: string; evidence_count?: number;
-  start_time?: string; error?: string;
+interface RunRow {
+  run_id: string; project_id?: string; template_id: string;
+  work_object_id?: string; status: string; halted_at?: string;
+  step_count?: number; error_count?: number; created_at?: string;
+  saved?: boolean; label?: string;
 }
+interface StepRec { id: string; skill: string; status: string; outputs?: Record<string, unknown>; evidence?: { document_id: string; source_text?: string }[]; error?: string | null }
+interface FullRun { template_id: string; domain: string; status: string; steps: StepRec[] }
 interface ActionRow { action_id: string; action_type: string; description: string; priority: string; status: string; }
 interface OntNode { id: string; label: string; type: string; }
 interface OntEdge { source: string; target: string; label: string; }
@@ -25,37 +30,56 @@ function statusColor(s: string): string {
 }
 
 export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
+  const { project } = useDomain();
   const overlay = (domain?.domain_id ?? "compliance") === "supply_chain" ? "supply_chain" : "compliance";
   const platformDomain = overlayToPlatform(overlay);
 
-  const [rows, setRows] = useState<ExecRow[]>([]);
+  const [runs, setRuns] = useState<RunRow[]>([]);
   const [actions, setActions] = useState<ActionRow[]>([]);
   const [graph, setGraph] = useState<{ nodes: OntNode[]; edges: OntEdge[] } | null>(null);
   const [tab, setTab] = useState<"runs" | "actions" | "entities">("runs");
   const [error, setError] = useState<string | null>(null);
+  const [openRun, setOpenRun] = useState<FullRun | null>(null);
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
+
+  async function reopen(runId: string) {
+    setOpenRunId(runId); setOpenRun(null);
+    try {
+      const r = await apiCall<{ run: FullRun | null; error?: string }>(`/api/docintel/workflow-run/${encodeURIComponent(runId)}`);
+      setOpenRun(r.run);
+    } catch { setOpenRun(null); }
+  }
 
   function refresh() {
-    apiCall<{ executions: ExecRow[] }>("/api/docintel/skill-executions?limit=100")
-      .then((r) => setRows(r.executions || [])).catch((e) => setError(String(e)));
-    apiCall<{ actions: ActionRow[] }>(`/api/docintel/action-log?domain_id=${platformDomain}`)
+    const pid = project?.project_id;
+    const projQ = pid ? `&project_id=${encodeURIComponent(pid)}` : "";
+    apiCall<{ runs: RunRow[] }>(`/api/docintel/workflow-runs?domain_id=${overlay}${projQ}`)
+      .then((r) => setRuns(r.runs || [])).catch(() => setRuns([]));
+    // Actions are tied to a project via action_log.incident_ref = project_id
+    // (set by the create_action skill). Scope to the selected project.
+    const actQ = pid ? `&incident_ref=${encodeURIComponent(pid)}` : "";
+    apiCall<{ actions: ActionRow[] }>(`/api/docintel/action-log?domain_id=${platformDomain}${actQ}`)
       .then((r) => setActions(r.actions || [])).catch(() => setActions([]));
     apiCall<{ nodes: OntNode[]; edges: OntEdge[] }>(`/api/docintel/ontology-graph?domain_id=${platformDomain}`)
       .then((r) => setGraph({ nodes: r.nodes || [], edges: r.edges || [] })).catch(() => setGraph(null));
   }
-  useEffect(refresh, [platformDomain]);
+  useEffect(refresh, [platformDomain, overlay, project?.project_id]);
 
-  // group executions by workflow_id (single-skill runs grouped under "—")
-  const groups: Record<string, ExecRow[]> = {};
-  rows.forEach((r) => {
-    const k = r.workflow_id || "(single skills)";
-    (groups[k] = groups[k] || []).push(r);
+  // group workflow runs by project so the Executions tab reads project-first
+  const runsByProject: Record<string, RunRow[]> = {};
+  runs.forEach((r) => {
+    const k = r.project_id || "(no project)";
+    (runsByProject[k] = runsByProject[k] || []).push(r);
   });
 
   return (
     <div className="px-4 py-4">
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-gray-500">
-          Runs and their outputs for <span className="font-semibold text-gray-700">{domain?.name ?? overlay}</span> —
+          Runs and their outputs for <span className="font-semibold text-gray-700">{domain?.name ?? overlay}</span>
+          {project?.project_id
+            ? <> · project <span className="font-semibold text-gray-700">📁 {project.name || project.project_id}</span></>
+            : <> · all projects</>} —
           actions, entities, and findings all trace back to a run.
         </p>
         <button onClick={refresh} className="text-xs text-blue-600">↻ Refresh</button>
@@ -73,24 +97,58 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
       {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
 
       {tab === "runs" && (
-        <div className="space-y-4">
-          {Object.keys(groups).length === 0 && <p className="text-sm text-gray-400">No runs yet.</p>}
-          {Object.entries(groups).map(([wf, steps]) => (
-            <div key={wf} className="border border-gray-200 rounded-lg bg-white">
-              <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-800">{wf}</span>
-                <span className="text-xs text-gray-400">{steps.length} step(s)</span>
+        <div className="space-y-5">
+          {runs.length === 0 && (
+            <p className="text-sm text-gray-400">
+              No runs yet{project?.project_id ? " for this project" : ""} — run a workflow from the Workflows tab.
+            </p>
+          )}
+
+          {/* Workflow runs, grouped by project/case */}
+          {Object.entries(runsByProject).map(([proj, projRuns]) => (
+            <div key={proj}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm font-semibold text-gray-800">📁 {proj}</span>
+                <span className="text-xs text-gray-400">{projRuns.length} run(s)</span>
               </div>
-              <ul className="divide-y divide-gray-50">
-                {steps.map((s) => (
-                  <li key={s.execution_id} className="px-3 py-1.5 flex items-center gap-3 text-xs">
-                    <span className="font-mono">{s.skill_id}</span>
-                    <span className={`px-1.5 py-0.5 rounded ${statusColor(s.status)}`}>{s.status}</span>
-                    <span className="text-gray-400">{(s.evidence_count ?? 0)} ev</span>
-                    <span className="ml-auto text-gray-400">{String(s.start_time || "").slice(0, 19)}</span>
-                  </li>
+              <div className="space-y-2">
+                {projRuns.map((r) => (
+                  <div key={r.run_id + (r.created_at ?? "")} className="border border-gray-200 rounded-lg bg-white px-3 py-2">
+                    <div className="flex items-center gap-3 text-xs">
+                      <span className="text-sm font-medium text-gray-800">{r.template_id}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${statusColor(r.status)}`}>{r.status}</span>
+                      {r.saved && <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">★ saved</span>}
+                      {r.work_object_id && <span className="font-mono text-gray-400">{r.work_object_id}</span>}
+                      <span className="text-gray-400">{r.step_count ?? 0} step(s){(r.error_count ?? 0) > 0 ? ` · ${r.error_count} error(s)` : ""}</span>
+                      {r.halted_at && <span className="text-amber-600">halted at {r.halted_at}</span>}
+                      <span className="ml-auto text-gray-400">{String(r.created_at || "").slice(0, 19)}</span>
+                      {r.saved && (
+                        <button onClick={() => (openRunId === r.run_id ? setOpenRunId(null) : reopen(r.run_id))}
+                          className="text-blue-600">{openRunId === r.run_id ? "Hide" : "Open"}</button>
+                      )}
+                    </div>
+                    {openRunId === r.run_id && (
+                      <div className="mt-2 border-t border-gray-100 pt-2">
+                        {!openRun ? <p className="text-xs text-gray-400">Loading…</p> : (
+                          <ol className="space-y-2">
+                            {openRun.steps.map((s) => (
+                              <li key={s.id} className="text-xs">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-gray-400">{s.id}</span>
+                                  <span className="font-medium text-gray-800">{s.skill}</span>
+                                  <span className={`px-1.5 py-0.5 rounded ${statusColor(s.status)}`}>{s.status}</span>
+                                </div>
+                                {s.error && <p className="text-red-600 mt-0.5">{s.error}</p>}
+                                <FormattedOutputs skill={s.skill} outputs={s.outputs} />
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           ))}
         </div>

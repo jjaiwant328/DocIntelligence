@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { apiCall } from "@/lib/api-config";
+import { useDomain } from "@/context/DomainContext";
 import type { DomainInfo } from "@/context/DomainContext";
 
 interface CopilotSections {
@@ -30,6 +31,7 @@ function confidenceColor(c?: string): string {
 }
 
 export default function CopilotPage({ domain }: { domain?: DomainInfo }) {
+  const { project } = useDomain();
   const domainId = domain?.domain_id ?? "compliance_due_diligence";
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<CopilotResult | null>(null);
@@ -42,7 +44,8 @@ export default function CopilotPage({ domain }: { domain?: DomainInfo }) {
     try {
       const r = await apiCall<CopilotResult>("/api/docintel/copilot-query", {
         method: "POST",
-        body: JSON.stringify({ query, domain_id: domainId }),
+        body: JSON.stringify({ query, domain_id: domainId,
+          project_id: project?.project_id || undefined }),
       });
       setResult(r);
     } catch (e) {
@@ -54,7 +57,9 @@ export default function CopilotPage({ domain }: { domain?: DomainInfo }) {
     <div className="px-4 py-4 max-w-4xl mx-auto">
       <p className="text-sm text-gray-500 mb-3">
         Ask questions across <span className="font-semibold text-gray-700">{domain?.name ?? domainId}</span>&apos;s
-        documents. Answers are grounded in your corpus with cited sources.
+        documents{project?.project_id
+          ? <> for project <span className="font-semibold text-gray-700">📁 {project.name || project.project_id}</span></>
+          : null}. Answers are grounded in your corpus with cited sources.
       </p>
 
       <div className="flex gap-2">
