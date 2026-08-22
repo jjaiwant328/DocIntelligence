@@ -164,8 +164,14 @@ export function FormattedOutputs({ skill, outputs }: {
       </Field>
     );
   }
-  // requirements / assessments / gaps / changes / proposed_actions: arrays of objects or strings
-  const listKeys = ["requirements", "assessments", "gaps", "changes", "proposed_actions", "events"];
+  // create_action: the ids of the actions this step created
+  if (Array.isArray(outputs.action_ids) && (outputs.action_ids as unknown[]).length) {
+    const ids = (outputs.action_ids as unknown[]).map(String);
+    blocks.push(<Field key="action_ids" label={`Actions created (${ids.length})`}>{chips(ids)}</Field>);
+  }
+
+  // requirements / assessments / gaps / changes / proposed_actions / actions: arrays of objects or strings
+  const listKeys = ["requirements", "assessments", "gaps", "changes", "proposed_actions", "actions", "events"];
   if (!reconcileFindings) listKeys.push("findings");   // else the ScorecardCard/FindingsList own it
   for (const key of listKeys) {
     if (Array.isArray(outputs[key])) {
@@ -182,24 +188,97 @@ export function FormattedOutputs({ skill, outputs }: {
       );
     }
   }
-  // simple scalar fields we haven't already shown
+  // everything else — render cleanly by shape so nothing falls back to raw JSON
+  const handled = new Set(["doc_type", "confidence", "summary", "entities", "dates", "evidence",
+    "scorecard", "action_ids", ...listKeys, "findings"]);
   for (const [k, v] of Object.entries(outputs)) {
-    if (["doc_type", "confidence", "summary", "entities", "dates", "evidence",
-         "requirements", "assessments", "gaps", "changes", "proposed_actions",
-         "findings", "events"].includes(k)) continue;
-    if (v == null) continue;
+    if (handled.has(k) || v == null) continue;
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       blocks.push(<Field key={k} label={cap(k)}><span className="text-gray-700">{String(v)}</span></Field>);
+    } else if (Array.isArray(v)) {
+      const arr = v as unknown[];
+      const allScalar = arr.every((it) => typeof it === "string" || typeof it === "number");
+      blocks.push(
+        <Field key={k} label={`${cap(k)} (${arr.length})`}>
+          {allScalar ? chips(arr.map(String)) : (
+            <ul className="mt-0.5 space-y-0.5">
+              {arr.slice(0, 12).map((it, i) => <li key={i} className="text-gray-700">• {summarizeItem(it)}</li>)}
+              {arr.length > 12 && <li className="text-gray-400">…and {arr.length - 12} more</li>}
+            </ul>
+          )}
+        </Field>
+      );
+    } else if (typeof v === "object") {
+      blocks.push(<Field key={k} label={cap(k)}><span className="text-gray-700">{summarizeItem(v)}</span></Field>);
     }
   }
 
   return (
     <div className="mt-1">
       {!raw && blocks.length > 0 ? <div className="space-y-1">{blocks}</div>
+        : blocks.length === 0 ? <p className="text-xs text-gray-400">No structured output.</p>
         : <pre className="text-xs bg-gray-50 rounded p-2 overflow-x-auto">{JSON.stringify(outputs, null, 2)}</pre>}
-      <button onClick={() => setRaw((v) => !v)} className="mt-1 text-[10px] text-gray-400 hover:text-gray-600">
-        {raw ? "▸ formatted view" : "▸ raw JSON"}
-      </button>
+      {blocks.length > 0 && (
+        <button onClick={() => setRaw((v) => !v)} className="mt-1 text-[10px] text-gray-400 hover:text-gray-600">
+          {raw ? "▸ formatted view" : "▸ raw JSON"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Run-level report ────────────────────────────────────────────────────────
+// Deterministic, LLM-free assembly from a run's steps: a status headline, stat
+// tiles, the executive narrative, the reconcile scorecard, and findings. Renders
+// for EVERY run (old or new) from the stored steps — this is the clean, readable
+// view that replaces the raw step/JSON dump in Executions.
+interface ReportStep { id: string; skill: string; status: string; outputs?: Record<string, unknown> | null }
+interface ReportRun { template_id?: string; status?: string; steps?: ReportStep[] }
+
+function StatTile({ label, value, tone }: { label: string; value: string; tone?: "bad" }) {
+  return (
+    <div className={`rounded-lg border px-2.5 py-1.5 ${tone === "bad" ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{label}</div>
+      <div className={`text-base font-bold leading-tight ${tone === "bad" ? "text-red-700" : "text-gray-800"}`}>{value}</div>
+    </div>
+  );
+}
+
+export function RunReport({ run }: { run: ReportRun }) {
+  const steps = run.steps || [];
+  const reconcile = steps.find((s) => s.outputs && typeof s.outputs.scorecard === "object" && !Array.isArray(s.outputs.scorecard));
+  const sc = reconcile?.outputs?.scorecard as Scorecard | undefined;
+  const findings = (steps
+    .flatMap((s) => (Array.isArray(s.outputs?.findings) ? (s.outputs!.findings as Finding[]) : []))
+    .filter((f) => f && typeof f === "object" && ("check" in f || "severity" in f)));
+  const summaryStep = steps.find((s) => typeof s.outputs?.summary === "string" && (s.outputs!.summary as string).trim());
+  const summary = summaryStep?.outputs?.summary as string | undefined;
+  let actionCount = 0;
+  steps.forEach((s) => { if (Array.isArray(s.outputs?.action_ids)) actionCount += (s.outputs!.action_ids as unknown[]).length; });
+  const totalImpact = findings.reduce((sum, f) => sum + (typeof f.amount_impact === "number" ? f.amount_impact : 0), 0);
+  const errored = steps.filter((s) => s.status === "error").length;
+  const ov = sc?.overall ? OVERALL[String(sc.overall).toLowerCase()] : undefined;
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 mb-3">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Report</span>
+        {ov && (
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${ov.cls}`}>
+            <span aria-hidden>{ov.icon}</span> {ov.label}
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+        <StatTile label="Steps" value={String(steps.length)} />
+        {findings.length > 0 && <StatTile label="Findings" value={String(findings.length)} />}
+        {actionCount > 0 && <StatTile label="Actions" value={String(actionCount)} />}
+        {totalImpact > 0 && <StatTile label="$ Impact" value={`$${totalImpact.toLocaleString()}`} tone="bad" />}
+        {errored > 0 && <StatTile label="Errors" value={String(errored)} tone="bad" />}
+      </div>
+      {summary && <p className="text-xs text-gray-700 mb-2 whitespace-pre-wrap">{summary}</p>}
+      {sc && <ScorecardCard sc={sc} />}
+      {findings.length > 0 && <FindingsList findings={findings} />}
     </div>
   );
 }

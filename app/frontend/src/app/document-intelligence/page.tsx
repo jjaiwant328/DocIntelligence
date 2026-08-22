@@ -3681,12 +3681,17 @@ export default function DocumentIntelligencePage({
   const domainId   = resolvedDomain?.domain_id || "supply_chain";
   const domainName = resolvedDomain?.name       || "Supply Chain";
 
-  // Sub-tab state: "schema" | "process"
-  const [activeSubTab, setActiveSubTab] = useState<"schema" | "process">("schema");
+  // Sub-tab state: "library" | "schema" | "process". Initialized from initialStep,
+  // but kept in STATE so the "Go to Process Documents" link can switch the view
+  // (keying the branch off the immutable initialStep prop was the dead-end bug).
+  const [activeSubTab, setActiveSubTab] = useState<"library" | "schema" | "process">(
+    initialStep === "library" ? "library" : "schema"
+  );
   const [schemaReady,  setSchemaReady]  = useState<boolean>(resolvedDomain?.schema_ready ?? false);
 
-  // If initialStep is "library", render DocumentLibrary immediately
-  if (initialStep === "library") {
+  // Library view (also reachable from the Library tab); its "Go to Process
+  // Documents" link flips activeSubTab, which now re-renders into Process.
+  if (activeSubTab === "library") {
     return (
       <div className="min-h-screen bg-gray-50">
         <DocumentLibrary onBack={() => {}} domainId={domainId} onGoToProcess={() => setActiveSubTab("process")} />

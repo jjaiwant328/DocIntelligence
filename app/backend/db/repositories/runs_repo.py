@@ -74,3 +74,15 @@ def get_run(conn: Any, run_id: str) -> Optional[dict]:
         except Exception:
             return None
     return val
+
+
+def delete_run(conn: Any, run_id: str) -> bool:
+    """Hard-delete a run (works for any status, incl. stuck/halted)."""
+    cur = conn.execute("DELETE FROM workflow_runs WHERE run_id = %s", (run_id,))
+    return (getattr(cur, "rowcount", 0) or 0) > 0
+
+
+def rename_run(conn: Any, run_id: str, label: str) -> bool:
+    """Set a human-readable label on a run."""
+    cur = conn.execute("UPDATE workflow_runs SET label = %s WHERE run_id = %s", (label, run_id))
+    return (getattr(cur, "rowcount", 0) or 0) > 0

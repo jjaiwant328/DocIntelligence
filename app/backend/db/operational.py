@@ -128,3 +128,15 @@ def get_run(*, run_id: str):
     _ensure()
     with lakebase.connection() as conn:
         return runs_repo.get_run(conn, run_id)
+
+
+def delete_run(*, run_id: str) -> bool:
+    _ensure()
+    with lakebase.connection() as conn:
+        return runs_repo.delete_run(conn, run_id)
+
+
+def rename_run(*, run_id: str, label: str) -> bool:
+    _ensure()
+    with lakebase.connection() as conn:
+        return runs_repo.rename_run(conn, run_id, label)

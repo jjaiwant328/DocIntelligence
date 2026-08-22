@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
 import type { DomainInfo } from "@/context/DomainContext";
-import { FormattedOutputs } from "@/components/FormattedOutputs";
+import { FormattedOutputs, RunReport } from "@/components/FormattedOutputs";
 
 interface RunRow {
   run_id: string; project_id?: string; template_id: string;
@@ -38,13 +38,39 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
   const [error, setError] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<FullRun | null>(null);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+  const [showSteps, setShowSteps] = useState(false);
+  const [busyRun, setBusyRun] = useState<string | null>(null);
 
   async function reopen(runId: string) {
-    setOpenRunId(runId); setOpenRun(null);
+    setOpenRunId(runId); setOpenRun(null); setShowSteps(false);
     try {
       const r = await apiCall<{ run: FullRun | null; error?: string }>(`/api/docintel/workflow-run/${encodeURIComponent(runId)}`);
       setOpenRun(r.run);
     } catch { setOpenRun(null); }
+  }
+
+  async function del(runId: string) {
+    if (!confirm("Delete this execution? This can't be undone.")) return;
+    setBusyRun(runId);
+    try {
+      await apiCall(`/api/docintel/workflow-run/${encodeURIComponent(runId)}`, { method: "DELETE" });
+      if (openRunId === runId) { setOpenRunId(null); setOpenRun(null); }
+      setRuns((rs) => rs.filter((r) => r.run_id !== runId));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusyRun(null); }
+  }
+
+  async function rename(runId: string, current?: string) {
+    const label = prompt("Name this execution:", current || "");
+    if (label == null) return;
+    setBusyRun(runId);
+    try {
+      await apiCall(`/api/docintel/workflow-run/${encodeURIComponent(runId)}`, {
+        method: "PATCH", body: JSON.stringify({ label }),
+      });
+      setRuns((rs) => rs.map((r) => (r.run_id === runId ? { ...r, label } : r)));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusyRun(null); }
   }
 
   function refresh() {
@@ -112,10 +138,9 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
                 {projRuns.map((r) => (
                   <div key={r.run_id + (r.created_at ?? "")} className="border border-gray-200 rounded-lg bg-white px-3 py-2">
                     <div className="flex items-center gap-3 text-xs">
-                      <span className="text-sm font-medium text-gray-800">{r.template_id}</span>
+                      <span className="text-sm font-medium text-gray-800">{r.label || r.template_id}</span>
+                      {r.label && <span className="text-gray-400">{r.template_id}</span>}
                       <span className={`px-1.5 py-0.5 rounded ${statusColor(r.status)}`}>{r.status}</span>
-                      {r.saved && <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">★ saved</span>}
-                      {r.work_object_id && <span className="font-mono text-gray-400">{r.work_object_id}</span>}
                       <span className="text-gray-400">{r.step_count ?? 0} step(s){(r.error_count ?? 0) > 0 ? ` · ${r.error_count} error(s)` : ""}</span>
                       {r.halted_at && <span className="text-amber-600">halted at {r.halted_at}</span>}
                       <span className="ml-auto text-gray-400">{String(r.created_at || "").slice(0, 19)}</span>
@@ -123,23 +148,36 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
                         <button onClick={() => (openRunId === r.run_id ? setOpenRunId(null) : reopen(r.run_id))}
                           className="text-blue-600">{openRunId === r.run_id ? "Hide" : "Open"}</button>
                       )}
+                      <button onClick={() => rename(r.run_id, r.label)} disabled={busyRun === r.run_id}
+                        title="Rename" className="text-gray-400 hover:text-gray-600 disabled:opacity-40">✎</button>
+                      <button onClick={() => del(r.run_id)} disabled={busyRun === r.run_id}
+                        title="Delete" className="text-gray-400 hover:text-red-600 disabled:opacity-40">🗑</button>
                     </div>
                     {openRunId === r.run_id && (
                       <div className="mt-2 border-t border-gray-100 pt-2">
                         {!openRun ? <p className="text-xs text-gray-400">Loading…</p> : (
-                          <ol className="space-y-2">
-                            {openRun.steps.map((s) => (
-                              <li key={s.id} className="text-xs">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono text-gray-400">{s.id}</span>
-                                  <span className="font-medium text-gray-800">{s.skill}</span>
-                                  <span className={`px-1.5 py-0.5 rounded ${statusColor(s.status)}`}>{s.status}</span>
-                                </div>
-                                {s.error && <p className="text-red-600 mt-0.5">{s.error}</p>}
-                                <FormattedOutputs skill={s.skill} outputs={s.outputs} />
-                              </li>
-                            ))}
-                          </ol>
+                          <>
+                            <RunReport run={openRun} />
+                            <button onClick={() => setShowSteps((v) => !v)}
+                              className="text-[11px] text-gray-500 hover:text-gray-700">
+                              {showSteps ? "▾ Hide step detail" : "▸ Step detail"}
+                            </button>
+                            {showSteps && (
+                              <ol className="space-y-2 mt-2">
+                                {openRun.steps.map((s) => (
+                                  <li key={s.id} className="text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-gray-400">{s.id}</span>
+                                      <span className="font-medium text-gray-800">{s.skill}</span>
+                                      <span className={`px-1.5 py-0.5 rounded ${statusColor(s.status)}`}>{s.status}</span>
+                                    </div>
+                                    {s.error && <p className="text-red-600 mt-0.5">{s.error}</p>}
+                                    <FormattedOutputs skill={s.skill} outputs={s.outputs} />
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </>
                         )}
                       </div>
                     )}

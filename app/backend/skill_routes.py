@@ -772,6 +772,30 @@ async def get_workflow_run(run_id: str):
     return {"run": run}
 
 
+class RunRenameRequest(BaseModel):
+    label: str
+
+
+@router.delete("/workflow-run/{run_id}")
+async def delete_workflow_run(run_id: str):
+    """Hard-delete a saved execution (any status — clears stuck/halted runs too)."""
+    import docintel_routes as routes
+    from skill_runtime.run_store import delete_run
+    ok = delete_run(lambda q: routes.run_sql(q, timeout_secs=40),
+                    run_id, catalog=routes.CATALOG)
+    return {"deleted": bool(ok), "run_id": run_id}
+
+
+@router.patch("/workflow-run/{run_id}")
+async def rename_workflow_run(run_id: str, req: RunRenameRequest):
+    """Rename a saved execution (its human-readable label)."""
+    import docintel_routes as routes
+    from skill_runtime.run_store import rename_run
+    ok = rename_run(lambda q: routes.run_sql(q, timeout_secs=40),
+                    run_id, req.label, catalog=routes.CATALOG)
+    return {"renamed": bool(ok), "run_id": run_id, "label": req.label}
+
+
 @router.get("/skill-executions")
 async def skill_executions(workflow_id: Optional[str] = None, limit: int = 50):
     import docintel_routes as routes

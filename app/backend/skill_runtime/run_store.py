@@ -178,3 +178,51 @@ def get_run(run_sql: Callable[[str], Any], run_id: str,
     except Exception as e:
         print(f"[workflow_runs] get_run failed: {e}")
     return None
+
+
+def delete_run(run_sql: Optional[Callable[[str], Any]], run_id: str,
+               catalog: str = CATALOG_DEFAULT) -> bool:
+    """Hard-delete a run (Lakebase primary, warehouse fallback). Works for any
+    status, so a stuck/halted run can be cleared."""
+    try:
+        from db import operational as opstore
+        from db.lakebase import LakebaseUnavailable
+        try:
+            return opstore.delete_run(run_id=run_id)
+        except LakebaseUnavailable:
+            pass
+    except Exception as e:
+        print(f"[workflow_runs] Lakebase delete failed, falling back: {e}")
+
+    if run_sql is None:
+        return False
+    try:
+        run_sql(f"DELETE FROM {runs_table(catalog)} WHERE run_id = {_lit(run_id)}")
+        return True
+    except Exception as e:
+        print(f"[workflow_runs] warehouse delete failed: {e}")
+        return False
+
+
+def rename_run(run_sql: Optional[Callable[[str], Any]], run_id: str, label: str,
+               catalog: str = CATALOG_DEFAULT) -> bool:
+    """Set a run's human-readable label (Lakebase primary, warehouse fallback)."""
+    try:
+        from db import operational as opstore
+        from db.lakebase import LakebaseUnavailable
+        try:
+            return opstore.rename_run(run_id=run_id, label=label)
+        except LakebaseUnavailable:
+            pass
+    except Exception as e:
+        print(f"[workflow_runs] Lakebase rename failed, falling back: {e}")
+
+    if run_sql is None:
+        return False
+    try:
+        run_sql(f"UPDATE {runs_table(catalog)} SET label = {_lit(label)} "
+                f"WHERE run_id = {_lit(run_id)}")
+        return True
+    except Exception as e:
+        print(f"[workflow_runs] warehouse rename failed: {e}")
+        return False
