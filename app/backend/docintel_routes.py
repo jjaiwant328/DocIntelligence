@@ -120,17 +120,19 @@ def _get_domain_schemas(domain_id: str) -> dict:
 
     cfg = None
 
-    # Attempt 1: full select including parse_instructions + volume_path
+    # Select the columns that actually exist in domain_configs — including
+    # analytics_config (so the pipeline-job lookup can find a registered job) and
+    # volume_docs (so we can derive the document volume, since there is no
+    # volume_path column). The nested fallback covers older tables missing those.
     try:
         cfg = _run_query(f"""
             SELECT schema_raw, schema_ont, schema_vec, schema_agt,
-                   classification_labels, extraction_schemas,
-                   parse_instructions, volume_path, agent_system_prompt
+                   classification_labels, extraction_schemas, agent_system_prompt,
+                   volume_docs, analytics_config
             FROM {CATALOG}.platform.domain_configs
             WHERE domain_id = '{domain_id}' LIMIT 1
         """)
     except Exception as e1:
-        # Attempt 2: without new columns (may not exist yet)
         try:
             cfg = _run_query(f"""
                 SELECT schema_raw, schema_ont, schema_vec, schema_agt,
@@ -142,15 +144,21 @@ def _get_domain_schemas(domain_id: str) -> dict:
             print(f"[domain_config] lookup failed for '{domain_id}': {e1}; retry: {e2}")
 
     if cfg:
+        schema_raw  = cfg.get("schema_raw") or "raw"
+        volume_docs = cfg.get("volume_docs") or "documents"
         result = {
-            "schema_raw":            cfg.get("schema_raw")  or "raw",
+            "schema_raw":            schema_raw,
             "schema_ont":            cfg.get("schema_ont")  or "ontology",
             "schema_vec":            cfg.get("schema_vec")  or "vectors",
             "schema_agt":            cfg.get("schema_agt")  or "agents",
             "classification_labels": cfg.get("classification_labels"),
             "extraction_schemas":    cfg.get("extraction_schemas"),
-            "parse_instructions":    cfg.get("parse_instructions"),
-            "volume_path":           cfg.get("volume_path"),
+            "parse_instructions":    None,   # no such column; parse hints load elsewhere
+            # domain_configs has no volume_path column — derive the document volume
+            # from the schema + volume name. This is what enables the Process UI.
+            "volume_path":           f"/Volumes/{CATALOG}/{schema_raw}/{volume_docs}/",
+            "volume_docs":           volume_docs,
+            "analytics_config":      cfg.get("analytics_config"),
             "agent_system_prompt":   cfg.get("agent_system_prompt"),
         }
         with _domain_cache_lock:
