@@ -14,7 +14,9 @@ interface SkillMeta {
   mode?: { runnable: boolean; runnable_on_docs: boolean; needs_docs: boolean; blocked_reason: string };
 }
 interface Step { id: string; skill: string; inputs_map?: Record<string, string>; }
-interface Template { id: string; version?: string; approval_before?: string | null; steps: Step[]; source?: string; }
+// A declared run-time input ($param.<name>) — collected in a form before the run.
+interface DeclaredInput { name: string; type: string; label?: string; default?: string | number | null; required?: boolean; options?: string[]; }
+interface Template { id: string; version?: string; approval_before?: string | null; steps: Step[]; inputs?: DeclaredInput[]; source?: string; }
 interface Evidence { document_id: string; source_text?: string; method?: string; }
 interface StepRecord { id: string; skill: string; status: string; outputs: Record<string, unknown>; evidence: Evidence[]; error?: string | null; }
 interface WorkflowRun { template_id: string; domain: string; status: string; work_object_id: string; halted_at?: string | null; steps: StepRecord[]; saved?: boolean; run_id?: string; }
@@ -109,6 +111,10 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   const [name, setName] = useState<string>("");
   const [steps, setSteps] = useState<Step[]>([]);
   const [approvalBefore, setApprovalBefore] = useState<string | null>(null);
+  // P5: declared run-time inputs (the template's `inputs` block) + the values
+  // typed into the run-time form before a run.
+  const [declaredInputs, setDeclaredInputs] = useState<DeclaredInput[]>([]);
+  const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -162,12 +168,27 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
       setName(t.source === "starter" ? `${t.id}_copy` : t.id);
       setSteps(t.steps.map((s) => ({ ...s })));
       setApprovalBefore(t.approval_before ?? null);
+      const inps = t.inputs ?? [];
+      setDeclaredInputs(inps.map((p) => ({ ...p })));
+      // seed the run-time form with declared defaults
+      setParamValues(Object.fromEntries(inps.map((p) => [p.name, p.default != null ? String(p.default) : ""])));
       setRun(null);
     }
   }
 
   function newTemplate() {
-    setTid(""); setName("new_template"); setSteps([]); setApprovalBefore(null); setRun(null);
+    setTid(""); setName("new_template"); setSteps([]); setApprovalBefore(null);
+    setDeclaredInputs([]); setParamValues({}); setRun(null);
+  }
+  // ── declared run-time inputs editor ($param.*) ────────────────────────────
+  function addInput() {
+    setDeclaredInputs((x) => [...x, { name: `param_${x.length + 1}`, type: "string", label: "", required: false }]);
+  }
+  function updateInput(i: number, patch: Partial<DeclaredInput>) {
+    setDeclaredInputs((x) => x.map((p, k) => (k === i ? { ...p, ...patch } : p)));
+  }
+  function removeInput(i: number) {
+    setDeclaredInputs((x) => x.filter((_, k) => k !== i));
   }
   function addStep(skill: string) {
     setSteps((s) => [...s, { id: `${skill}_${s.length + 1}`, skill }]);
@@ -209,6 +230,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
           template_id: name, domain_id: domainId, name,
           steps: steps.map((s) => ({ id: s.id, skill: s.skill })),
           approval_before: approvalBefore, autowire: true,
+          inputs: declaredInputs.filter((p) => p.name.trim()),
         }),
       });
       if (r.error) { setMsg(`Save failed: ${r.error}`); return false; }
@@ -230,8 +252,14 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         method: "POST",
         body: JSON.stringify({ template: name, domain_id: domainId, project, approve,
           doc_ids: hasDocs ? selectedDocIds : undefined,
+          params: declaredInputs.length ? paramValues : undefined,
           label: `${name} · ${projectLabel}` }),
       });
+      // a declared-input validation error comes back before any run happened
+      if ((r as { kind?: string }).kind === "param_error") {
+        setMsg(`Input error: ${(r as { error?: string }).error}`);
+        return;
+      }
       setRun(r);
       // the run auto-saved this workflow — make it visible in the template list
       await loadTemplates(); setTid(name);
@@ -305,6 +333,77 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
           {busy === "run" ? "Running…" : issues.length ? "Run anyway ▶" : "Run ▶"}
         </button>
         <span className="text-xs text-gray-500 self-center">Every run is auto-saved to Executions.</span>
+      </div>
+
+      {/* P5: declared run-time inputs — declaration editor + values-for-this-run form */}
+      <div className="mb-4 border border-gray-200 rounded-lg bg-white p-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-gray-700">
+            Run-time inputs{" "}
+            <span className="font-normal text-gray-400">
+              — typed parameters this workflow asks for before each run; reference one in a step as{" "}
+              <code className="bg-gray-100 px-1 rounded">$param.name</code>.
+            </span>
+          </p>
+          <button onClick={addInput} className="text-xs text-blue-600 hover:text-blue-800">+ Add input</button>
+        </div>
+        {declaredInputs.length === 0 ? (
+          <p className="text-xs text-gray-400">
+            No run-time inputs. Add one to prompt for a value (threshold, supplier, date…) before each run.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {declaredInputs.map((p, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <input className="border rounded px-2 py-1 text-xs w-32 font-mono" placeholder="name" value={p.name}
+                  onChange={(e) => updateInput(i, { name: e.target.value })} />
+                <select className="border rounded px-2 py-1 text-xs" value={p.type}
+                  onChange={(e) => updateInput(i, { type: e.target.value })}>
+                  {["string", "number", "choice", "date", "boolean", "list"].map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input className="border rounded px-2 py-1 text-xs w-40" placeholder="label" value={p.label ?? ""}
+                  onChange={(e) => updateInput(i, { label: e.target.value })} />
+                <input className="border rounded px-2 py-1 text-xs w-28" placeholder="default"
+                  value={p.default != null ? String(p.default) : ""}
+                  onChange={(e) => updateInput(i, { default: e.target.value })} />
+                {p.type === "choice" && (
+                  <input className="border rounded px-2 py-1 text-xs w-44" placeholder="options (comma-separated)"
+                    value={(p.options ?? []).join(", ")}
+                    onChange={(e) => updateInput(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+                )}
+                <label className="text-xs text-gray-500 flex items-center gap-1">
+                  <input type="checkbox" checked={!!p.required} onChange={(e) => updateInput(i, { required: e.target.checked })} /> required
+                </label>
+                <button onClick={() => removeInput(i)} title="Remove input" className="text-xs text-red-400 hover:text-red-600">✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {declaredInputs.filter((p) => p.name.trim()).length > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-100">
+            <p className="text-[11px] font-semibold text-gray-500 mb-1.5">VALUES FOR THIS RUN</p>
+            <div className="flex flex-wrap gap-3">
+              {declaredInputs.filter((p) => p.name.trim()).map((p) => (
+                <label key={p.name} className="flex flex-col text-xs text-gray-600">
+                  <span>{p.label || p.name}{p.required && <span className="text-red-500"> *</span>}</span>
+                  {p.type === "choice" ? (
+                    <select className="mt-1 border rounded px-2 py-1 text-sm min-w-[120px]"
+                      value={paramValues[p.name] ?? (p.default != null ? String(p.default) : "")}
+                      onChange={(e) => setParamValues((v) => ({ ...v, [p.name]: e.target.value }))}>
+                      <option value="">—</option>
+                      {(p.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input className="mt-1 border rounded px-2 py-1 text-sm"
+                      type={p.type === "number" ? "number" : p.type === "date" ? "date" : "text"}
+                      value={paramValues[p.name] ?? (p.default != null ? String(p.default) : "")}
+                      onChange={(e) => setParamValues((v) => ({ ...v, [p.name]: e.target.value }))} />
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {showDocPicker && (

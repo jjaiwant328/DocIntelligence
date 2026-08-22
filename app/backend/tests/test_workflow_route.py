@@ -22,7 +22,7 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
 
     class FakeEngine:
         def __init__(self, *a, **k): pass
-        def run(self, template, domain, inputs, docs=None):
+        def run(self, template, domain, inputs, docs=None, params=None):
             assert template == "due_diligence"
             assert inputs["project"] == "Store 1827"
             return fake_run

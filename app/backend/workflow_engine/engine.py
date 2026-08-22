@@ -26,6 +26,57 @@ def _walk(node, keys):
     return node
 
 
+class ParamError(ValueError):
+    """A declared run-time parameter is missing (required) or the wrong type."""
+
+
+def _coerce_one(typ: str, val, spec: dict, name: str):
+    if typ == "number":
+        try:
+            f = float(val)
+            return int(f) if f.is_integer() else f
+        except (TypeError, ValueError):
+            raise ParamError(f"parameter '{name}' must be a number")
+    if typ == "boolean":
+        if isinstance(val, bool):
+            return val
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    if typ == "choice":
+        opts = [str(o) for o in (spec.get("options") or [])]
+        if opts and str(val) not in opts:
+            raise ParamError(f"parameter '{name}' must be one of {opts}")
+        return val
+    if typ == "list":
+        if isinstance(val, list):
+            return val
+        return [x.strip() for x in str(val).split(",") if x.strip()]
+    return str(val)   # string, date → kept as string (ISO for date)
+
+
+def coerce_params(declared: Optional[list], supplied: Optional[dict]) -> dict:
+    """Validate + coerce run-time params ($param.*) against a template's `inputs`
+    declaration: apply defaults, coerce types, enforce required + choice. Raises
+    ParamError on a missing-required or ill-typed value."""
+    supplied = supplied or {}
+    out: dict = {}
+    for spec in (declared or []):
+        name = spec.get("name")
+        if not name:
+            continue
+        typ = (spec.get("type") or "string").lower()
+        provided = name in supplied and supplied[name] not in (None, "")
+        if not provided:
+            if spec.get("default") is not None:
+                out[name] = spec["default"]
+            elif spec.get("required"):
+                raise ParamError(f"missing required parameter: '{name}'")
+            else:
+                out[name] = None
+            continue
+        out[name] = _coerce_one(typ, supplied[name], spec, name)
+    return out
+
+
 def _build_doc_context(docs: list) -> dict:
     """Collapse the workflow's document set into resolvable values.
 
@@ -115,11 +166,14 @@ class WorkflowEngine:
             return yaml.safe_load(f)
 
     def run(self, template_id: str, domain: str, inputs: dict,
-            docs: Optional[list] = None) -> WorkflowRun:
+            docs: Optional[list] = None, params: Optional[dict] = None) -> WorkflowRun:
         """Run a template. `docs` is the workflow's document set (list of rows with
         doc_id/doc_type/text); doc-consuming steps resolve their text from it via
-        `$docs.*` references emitted by autowire."""
+        `$docs.*` references emitted by autowire. `params` are the declared run-time
+        inputs (the template's `inputs:` block), referenced by steps as `$param.*`."""
         tmpl = self._load_template(template_id, domain)
+        # Coerce/validate declared run-time params (raises ParamError on bad input).
+        params = coerce_params(tmpl.get("inputs"), params)
         domain_cfg = self.domain_loader(domain) if self.domain_loader else None
         doc_ctx = _build_doc_context(docs or [])
         run = WorkflowRun(template_id=tmpl["id"],
@@ -142,7 +196,7 @@ class WorkflowEngine:
 
             resolved = self._resolve_inputs(step.get("inputs_map", {}),
                                             inputs, domain_cfg, step_outputs,
-                                            doc_ctx)
+                                            doc_ctx, params)
             rec = self._run_step(sid, skill, resolved, wf_ctx)
             run.steps.append(rec)
 
@@ -171,19 +225,24 @@ class WorkflowEngine:
                           error=last.error, attempts=attempts)
 
     def _resolve_inputs(self, inputs_map, inputs, domain_cfg, step_outputs,
-                        doc_ctx=None) -> dict:
+                        doc_ctx=None, params=None) -> dict:
         out = {}
         for key, ref in inputs_map.items():
-            out[key] = self._resolve_ref(ref, inputs, domain_cfg, step_outputs, doc_ctx)
+            out[key] = self._resolve_ref(ref, inputs, domain_cfg, step_outputs,
+                                         doc_ctx, params)
         return out
 
-    def _resolve_ref(self, ref, inputs, domain_cfg, step_outputs, doc_ctx=None):
+    def _resolve_ref(self, ref, inputs, domain_cfg, step_outputs, doc_ctx=None,
+                     params=None):
         if not isinstance(ref, str) or not ref.startswith("$"):
             return ref  # literal
         parts = ref[1:].split(".")
         root = parts[0]
         if root == "input":
             return inputs.get(parts[1]) if len(parts) > 1 else None
+        if root == "param":
+            # $param.<name> — a declared run-time input (the template's inputs block)
+            return (params or {}).get(parts[1]) if len(parts) > 1 else None
         if root == "domain":
             if domain_cfg is None:
                 return None

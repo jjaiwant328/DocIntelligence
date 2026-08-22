@@ -111,6 +111,7 @@ class WorkflowRunRequest(BaseModel):
     context: Optional[str] = None
     approve: bool = False
     doc_ids: Optional[list] = None     # explicit document set; else the project's tagged docs
+    params: Optional[dict] = None      # declared run-time inputs ($param.*), from the run-time form
     save: bool = False                 # persist the full execution for later review
     label: str = ""                    # optional human label for a saved execution
 
@@ -194,6 +195,7 @@ class TemplateSaveRequest(BaseModel):
     approval_before: Optional[str] = None
     description: str = ""
     autowire: bool = True             # infer inputs_map from step order + contracts
+    inputs: Optional[list] = None     # declared run-time params ($param.*): [{name,type,label,default,required,options?}]
 
 
 @router.post("/templates")
@@ -207,8 +209,8 @@ async def save_template(req: TemplateSaveRequest):
             lambda q: routes.run_sql(q, timeout_secs=40),
             req.domain_id, req.template_id, req.name, steps,
             approval_before=req.approval_before, description=req.description,
-            catalog=routes.CATALOG)
-        return {**res, "steps": steps}
+            catalog=routes.CATALOG, inputs=req.inputs)
+        return {**res, "steps": steps, "inputs": req.inputs or []}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -725,7 +727,11 @@ async def workflow_run(req: WorkflowRunRequest):
         "context": req.context or "",
         "approve": req.approve,
     }
-    run = engine.run(req.template, req.domain_id, inputs, docs=docs)
+    from workflow_engine.engine import ParamError
+    try:
+        run = engine.run(req.template, req.domain_id, inputs, docs=docs, params=req.params)
+    except ParamError as e:
+        return {"status": "error", "error": str(e), "kind": "param_error"}
     result = run.to_dict()
     # Every run is auto-saved, losslessly (Lakebase). No opt-in.
     try:

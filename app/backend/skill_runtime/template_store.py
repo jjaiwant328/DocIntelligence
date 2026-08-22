@@ -30,11 +30,17 @@ def ensure_templates_table(run_sql: Callable, catalog: str = CATALOG_DEFAULT) ->
             status           STRING,
             approval_before  STRING,
             steps_json       STRING,
+            inputs_json      STRING,
             created_by       STRING,
             created_at       TIMESTAMP,
             updated_at       TIMESTAMP
         ) USING DELTA
     """)
+    # P5: back-fill the inputs_json column on tables created before declared inputs.
+    try:
+        run_sql(f"ALTER TABLE {templates_table(catalog)} ADD COLUMNS (inputs_json STRING)")
+    except Exception:
+        pass  # already present
 
 
 def _esc(s) -> str:
@@ -51,6 +57,10 @@ def row_to_template(row: dict) -> dict:
         steps = json.loads(row.get("steps_json") or "[]")
     except json.JSONDecodeError:
         steps = []
+    try:
+        inputs = json.loads(row.get("inputs_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        inputs = []
     return {
         "id": row.get("template_id"),
         "domain_id": row.get("domain_id"),
@@ -60,6 +70,7 @@ def row_to_template(row: dict) -> dict:
         "status": row.get("status") or "active",
         "approval_before": row.get("approval_before") or None,
         "steps": steps,
+        "inputs": inputs,   # declared run-time params ($param.*)
         "source": "user",
     }
 
@@ -68,7 +79,7 @@ def list_templates(run_sql: Callable, domain_id: str,
                    catalog: str = CATALOG_DEFAULT) -> list:
     rows = run_sql(f"""
         SELECT template_id, domain_id, name, description, version, status,
-               approval_before, steps_json
+               approval_before, steps_json, inputs_json
         FROM {templates_table(catalog)}
         WHERE domain_id = '{_esc(domain_id)}' AND status != 'archived'
         ORDER BY updated_at DESC
@@ -80,7 +91,7 @@ def get_template(run_sql: Callable, domain_id: str, template_id: str,
                  catalog: str = CATALOG_DEFAULT) -> Optional[dict]:
     rows = run_sql(f"""
         SELECT template_id, domain_id, name, description, version, status,
-               approval_before, steps_json
+               approval_before, steps_json, inputs_json
         FROM {templates_table(catalog)}
         WHERE domain_id = '{_esc(domain_id)}' AND template_id = '{_esc(template_id)}'
               AND status != 'archived'
@@ -92,20 +103,27 @@ def get_template(run_sql: Callable, domain_id: str, template_id: str,
 def save_template(run_sql: Callable, domain_id: str, template_id: str, name: str,
                   steps: list, approval_before: Optional[str] = None,
                   description: str = "", version: str = "1.0",
-                  created_by: str = "user", catalog: str = CATALOG_DEFAULT) -> dict:
-    """Upsert: delete any existing row for (domain, template) then insert."""
+                  created_by: str = "user", catalog: str = CATALOG_DEFAULT,
+                  inputs: Optional[list] = None) -> dict:
+    """Upsert: delete any existing row for (domain, template) then insert.
+    `inputs` is the declared run-time param list (referenced by steps as $param.*)."""
     ensure_templates_table(run_sql, catalog)
     steps_json = _esc(json.dumps(steps))
+    inputs_json = _esc(json.dumps(inputs or []))
     run_sql(f"""
         DELETE FROM {templates_table(catalog)}
         WHERE domain_id = '{_esc(domain_id)}' AND template_id = '{_esc(template_id)}'
     """)
+    # Explicit column list so an added column (inputs_json) can't misalign VALUES.
     run_sql(f"""
-        INSERT INTO {templates_table(catalog)} VALUES (
+        INSERT INTO {templates_table(catalog)}
+          (template_id, domain_id, name, description, version, status,
+           approval_before, steps_json, inputs_json, created_by, created_at, updated_at)
+        VALUES (
             '{_esc(template_id)}', '{_esc(domain_id)}', '{_esc(name)}',
             '{_esc(description)}', '{_esc(version)}', 'active',
             {("'" + _esc(approval_before) + "'") if approval_before else "NULL"},
-            '{steps_json}', '{_esc(created_by)}',
+            '{steps_json}', '{inputs_json}', '{_esc(created_by)}',
             TIMESTAMP '{_now()}', TIMESTAMP '{_now()}')
     """)
     return {"template_id": template_id, "domain_id": domain_id, "status": "active"}

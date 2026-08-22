@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from workflow_engine.engine import WorkflowEngine  # noqa: E402
+from workflow_engine.engine import WorkflowEngine, coerce_params, ParamError  # noqa: E402
 from skill_runtime.models import SkillResult, Evidence  # noqa: E402
 
 
@@ -85,6 +85,65 @@ def test_io_mapping_passes_domain_requirements():
     # extract_requirements should receive the domain's candidate_requirements
     er_inputs = [c[1] for c in fake.calls if c[0] == "extract_requirements"][0]
     assert er_inputs["candidate_requirements"] == ["zoning", "alcohol_license"]
+
+
+# ── P5: declared run-time inputs ($param.*) ─────────────────────────────────
+
+def test_coerce_params_defaults_and_types():
+    declared = [
+        {"name": "depth", "type": "number", "default": 6},
+        {"name": "supplier", "type": "string"},
+        {"name": "sev", "type": "choice", "options": ["low", "high"], "default": "low"},
+        {"name": "tags", "type": "list"},
+    ]
+    # nothing supplied → defaults applied; optional string/list → None
+    out = coerce_params(declared, {})
+    assert out == {"depth": 6, "supplier": None, "sev": "low", "tags": None}
+    # supplied values coerced by type
+    out = coerce_params(declared, {"depth": "9", "supplier": "Acme",
+                                   "sev": "high", "tags": "a, b ,c"})
+    assert out["depth"] == 9 and out["supplier"] == "Acme"
+    assert out["sev"] == "high" and out["tags"] == ["a", "b", "c"]
+
+
+def test_coerce_params_required_and_choice_errors():
+    try:
+        coerce_params([{"name": "x", "type": "string", "required": True}], {})
+        assert False, "missing required must raise"
+    except ParamError:
+        pass
+    try:
+        coerce_params([{"name": "s", "type": "choice", "options": ["a", "b"]}], {"s": "z"})
+        assert False, "bad choice must raise"
+    except ParamError:
+        pass
+    try:
+        coerce_params([{"name": "n", "type": "number"}], {"n": "not-a-number"})
+        assert False, "bad number must raise"
+    except ParamError:
+        pass
+
+
+_PARAM_TMPL = {
+    "id": "t", "version": "1.0",
+    "inputs": [{"name": "depth", "type": "number", "default": 6}],
+    "steps": [{"id": "e", "skill": "find_supporting_evidence",
+               "inputs_map": {"query": "$input.project", "k": "$param.depth"}}],
+}
+
+
+def test_param_ref_flows_to_step():
+    fake = FakeDispatcher()
+    eng = WorkflowEngine(fake, domain_loader=lambda d: FakeDomain(),
+                         template_loader=lambda dom, tid: _PARAM_TMPL)
+    eng.run("t", "d", {"project": "P"}, params={"depth": "9"})
+    inp = [c[1] for c in fake.calls if c[0] == "find_supporting_evidence"][0]
+    assert inp["k"] == 9   # "9" coerced to int and resolved via $param.depth
+    # default applied when no params supplied
+    fake.calls.clear()
+    eng.run("t", "d", {"project": "P"})
+    inp = [c[1] for c in fake.calls if c[0] == "find_supporting_evidence"][0]
+    assert inp["k"] == 6
 
 
 if __name__ == "__main__":
