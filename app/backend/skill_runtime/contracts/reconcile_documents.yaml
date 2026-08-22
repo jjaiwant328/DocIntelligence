@@ -1,0 +1,20 @@
+id: reconcile_documents
+version: "1.0"
+category: reasoning
+description: Cross-reference operational documents against a governing reference (contract/PO), run the named checks, and emit findings + a performance scorecard.
+adapter: llm_schema
+implementation: prompts/reconcile_documents.md
+inputs:
+  documents: {type: array, required: true}     # [{doc_id, doc_type, text}] — the project's corpus
+  checks:    {type: array, required: true}      # named checks from the blueprint's reconciliation spec
+  reference_types: {type: array, required: false}   # doc_types that govern (contract, PO, delivery schedule)
+  subject_types:   {type: array, required: false}   # doc_types being judged (invoice, GRN)
+outputs:
+  findings:  {type: array}      # [{check, severity, subject_doc, reference_doc, detail, amount_impact}]
+  scorecard: {type: object}     # {overall, metrics: [{name, value, unit, target, status}]}
+  evidence:  {type: array}
+required_capabilities: [llm]
+ontology_dependencies: []
+evidence_requirements: required
+side_effects: {creates_actions: false}
+test_method: tests/skills/reconcile_documents/

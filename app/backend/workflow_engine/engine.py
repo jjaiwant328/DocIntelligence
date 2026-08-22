@@ -16,6 +16,16 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TEMPLATES_DIR = os.path.join(_HERE, "templates")
 
 
+def _walk(node, keys):
+    """Walk nested dict keys (for $steps.<id>.<k>.<k2>...). Returns None if any
+    level is missing or not a dict."""
+    for k in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(k)
+    return node
+
+
 def _build_doc_context(docs: list) -> dict:
     """Collapse the workflow's document set into resolvable values.
 
@@ -28,10 +38,15 @@ def _build_doc_context(docs: list) -> dict:
     joined = "\n\n---\n\n".join(t for t in (_text(r) for r in rows) if t)
     doc_types = sorted({str(r.get("doc_type")) for r in rows if r.get("doc_type")})
     doc_ids = [str(r.get("doc_id")) for r in rows if r.get("doc_id")]
+    # Per-document structured list so cross-referencing skills (reconcile) can see
+    # each document's type + text separately, not just the joined blob.
+    items = [{"doc_id": str(r.get("doc_id") or ""),
+              "doc_type": str(r.get("doc_type") or ""),
+              "text": _text(r)} for r in rows if _text(r)]
     return {
         "text": joined, "context": joined,
         "current": joined, "previous": joined, "conclusion": joined,
-        "doc_types": doc_types, "doc_ids": doc_ids,
+        "doc_types": doc_types, "doc_ids": doc_ids, "items": items,
         "query": " ".join(doc_types),
     }
 
@@ -177,9 +192,8 @@ class WorkflowEngine:
             # $docs.text | $docs.doc_types | $docs.doc_ids — the workflow's corpus
             return (doc_ctx or {}).get(parts[1]) if len(parts) > 1 else None
         if root == "steps":
-            # $steps.<id> or $steps.<id>.<key>
+            # $steps.<id> or $steps.<id>.<key>[.<subkey>...] — walk nested dicts
             if len(parts) == 2:
                 return step_outputs.get(parts[1])
-            node = step_outputs.get(parts[1], {})
-            return node.get(parts[2]) if isinstance(node, dict) else None
+            return _walk(step_outputs.get(parts[1]), parts[2:])
         return None

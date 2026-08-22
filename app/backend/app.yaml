@@ -34,6 +34,10 @@ env:
   value: databricks-claude-sonnet-4-5
 - name: DOCINTEL_AGENT_DETERMINISTIC
   value: "true"
+# Bundle notebook base path — the provisioner points new use cases' pipeline
+# jobs at these notebooks (folds out create_domain_job.py's hardcoded NB_BASE).
+- name: DOCINTEL_NB_BASE
+  value: /Workspace/Users/jaiwant.jonathan@databricks.com/.bundle/docintel/dev/files
 # ── Lakebase (managed Postgres) operational store ─────────────────────────────
 - name: LAKEBASE_ENABLED
   value: "true"

@@ -30,7 +30,15 @@ class DomainConfig:
 def load_domain(domain_id: str, domains_dir: Optional[str] = None) -> DomainConfig:
     base = os.path.join(domains_dir or DEFAULT_DOMAINS_DIR, domain_id)
     if not os.path.isdir(base):
-        raise FileNotFoundError(f"no domain config dir for '{domain_id}'")
+        # A blueprint-provisioned use case has no on-disk domain dir (it wasn't
+        # bundled at build time). Fall back to a minimal config: a new use case
+        # uses a single schema named after its id, so platform_domain_id and
+        # schema_vec are both the id. This is what makes "build a use case on the
+        # fly" runnable through the engine with no redeploy.
+        return DomainConfig(
+            id=domain_id, name=domain_id,
+            platform_domain_id=domain_id, schema_vec=domain_id,
+        )
     dom = _read(os.path.join(base, "domain.yaml"))
     ont = _read(os.path.join(base, "ontology.yaml"))
     req = _read(os.path.join(base, "requirements.yaml"))

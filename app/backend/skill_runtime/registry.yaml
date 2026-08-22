@@ -21,6 +21,7 @@ skills:
   - {id: determine_impact,         version: "1.0", category: reasoning,      enabled: true }
   - {id: build_timeline,           version: "1.0", category: reasoning,      enabled: true }
   - {id: generate_recommendation,  version: "1.0", category: reasoning,      enabled: true}
+  - {id: reconcile_documents,      version: "1.0", category: reasoning,      enabled: true}
   # --- workflow ---
   - {id: create_work_object,       version: "1.0", category: workflow,       enabled: true}
   - {id: create_finding,           version: "1.0", category: workflow,       enabled: true }
