@@ -743,13 +743,15 @@ async def workflow_run(req: WorkflowRunRequest):
     }
     run = engine.run(req.template, req.domain_id, inputs, docs=docs)
     result = run.to_dict()
+    # Every run is auto-saved, losslessly (Lakebase). No opt-in.
     try:
         from skill_runtime.run_store import record_run
+        label = req.label or f"{req.template} · {req.project}".strip(" ·")
         rid = record_run(lambda q: routes.run_sql(q, timeout_secs=40),
                          dom.platform_domain_id, req.project, result,
-                         saved=req.save, label=req.label, catalog=routes.CATALOG)
+                         label=label, catalog=routes.CATALOG)
         result["run_id"] = rid
-        result["saved"] = bool(req.save)
+        result["saved"] = True
     except Exception as e:
         print(f"[workflow-run] record_run failed: {e}")
     return result
@@ -777,7 +779,7 @@ async def get_workflow_run(run_id: str):
     run = get_run(lambda q: routes.run_sql(q, timeout_secs=40),
                   run_id, catalog=routes.CATALOG)
     if run is None:
-        return {"error": "not found or not saved", "run": None}
+        return {"error": "not found", "run": None}
     return {"run": run}
 
 

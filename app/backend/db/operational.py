@@ -14,7 +14,7 @@ from typing import Optional
 from . import lakebase
 from . import schema as _schema
 from .lakebase import LakebaseUnavailable
-from .repositories import projects_repo, tags_repo
+from .repositories import projects_repo, runs_repo, tags_repo
 
 _ensured = False
 _ensure_lock = threading.Lock()
@@ -108,3 +108,23 @@ def doc_ids_for_project(*, domain_id: str, project_id: str) -> list[str]:
     _ensure()
     with lakebase.connection() as conn:
         return tags_repo.doc_ids_for_project(conn, domain_id=domain_id, project_id=project_id)
+
+
+# ── Workflow runs (lossless, auto-saved) ────────────────────────────────────────
+def record_run(*, domain_id: str, project_id: str, run: dict, label: str = "") -> str:
+    _ensure()
+    with lakebase.connection() as conn:
+        return runs_repo.record_run(conn, domain_id=domain_id, project_id=project_id,
+                                    run=run, label=label)
+
+
+def list_runs(*, domain_id: str, project_id=None, limit: int = 200) -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return runs_repo.list_runs(conn, domain_id=domain_id, project_id=project_id, limit=limit)
+
+
+def get_run(*, run_id: str):
+    _ensure()
+    with lakebase.connection() as conn:
+        return runs_repo.get_run(conn, run_id)

@@ -1,8 +1,12 @@
-"""platform.workflow_runs — one summary row per workflow run, so the Executions
-tab can group runs (and their actions/findings) by project/case.
+"""Workflow-run persistence.
 
-Additive to skill_executions (which stays per-skill-invocation). Idempotent DDL,
-best-effort write: a logging failure never breaks a run."""
+Every run is auto-saved, losslessly, to Lakebase (Postgres stores the full run
+JSON and returns it whole on reopen — this is what fixes the old warehouse
+external-links "reopen returns empty" bug). If Lakebase is unavailable we fall
+back to a best-effort, BOUNDED warehouse insert (a multi-MB blob can't be
+inlined into warehouse SQL), which is a degraded net only — reopen of a large
+run via the fallback may be lossy, the Lakebase primary is not.
+"""
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
@@ -14,33 +18,17 @@ def runs_table(catalog: str = CATALOG_DEFAULT) -> str:
     return f"{catalog}.platform.workflow_runs"
 
 
-def ensure_runs_table(run_sql: Callable[[str], Any],
-                      catalog: str = CATALOG_DEFAULT) -> None:
+def ensure_runs_table(run_sql: Callable[[str], Any], catalog: str = CATALOG_DEFAULT) -> None:
+    """Warehouse-side DDL, kept for the fallback path only (Lakebase owns the
+    primary schema via db.schema)."""
     run_sql(f"""
         CREATE TABLE IF NOT EXISTS {runs_table(catalog)} (
-            run_id           STRING,
-            domain_id        STRING,
-            project_id       STRING,
-            template_id      STRING,
-            template_version STRING,
-            work_object_id   STRING,
-            status           STRING,
-            halted_at        STRING,
-            step_count       INT,
-            error_count      INT,
-            created_at       TIMESTAMP,
-            saved            BOOLEAN,
-            label            STRING,
-            run_json         STRING
+            run_id STRING, domain_id STRING, project_id STRING, template_id STRING,
+            template_version STRING, work_object_id STRING, status STRING,
+            halted_at STRING, step_count INT, error_count INT,
+            created_at TIMESTAMP, saved BOOLEAN, label STRING, run_json STRING
         ) USING DELTA
     """)
-    # add columns if the table pre-dates them. Databricks has no ADD COLUMN IF
-    # NOT EXISTS, so add each individually and ignore the "already exists" error.
-    for col, typ in [("saved", "BOOLEAN"), ("label", "STRING"), ("run_json", "STRING")]:
-        try:
-            run_sql(f"ALTER TABLE {runs_table(catalog)} ADD COLUMNS ({col} {typ})")
-        except Exception:
-            pass  # column already exists
 
 
 def _lit(v) -> str:
@@ -52,10 +40,8 @@ def _lit(v) -> str:
 
 
 def _slim_run(run: dict) -> dict:
-    """Trim a run for storage so the saved JSON stays small enough to come back
-    INLINE from the SQL warehouse. Large result cells are returned via external
-    links that the simple run_sql path does not fetch, so a bloated run_json would
-    read back as empty. We keep the run summary + a compact per-step view."""
+    """BOUNDED run view for the warehouse fallback only (keeps the inline INSERT
+    small). The Lakebase primary path stores the full run untouched."""
     import copy
     import json as _json
     r = {
@@ -69,7 +55,6 @@ def _slim_run(run: dict) -> dict:
     }
     for step in run.get("steps") or []:
         outs = step.get("outputs") or {}
-        # cap each output value so a giant field can't blow the cell size
         compact = {}
         for k, v in outs.items():
             if k == "evidence":
@@ -88,18 +73,32 @@ def _slim_run(run: dict) -> dict:
 
 
 def record_run(run_sql: Optional[Callable[[str], Any]], domain_id: str,
-               project_id: str, run: dict, saved: bool = False,
+               project_id: str, run: dict, saved: bool = True,
                label: str = "", catalog: str = CATALOG_DEFAULT) -> str:
-    """Persist a workflow run. When `saved`, also stores the full run_json so the
-    execution can be re-opened later. Returns the run_id. Best-effort."""
-    if run_sql is None:
-        return ""
+    """Persist a run. Always saves the FULL run to Lakebase; `saved` is retained
+    for signature compatibility but ignored (every run is now saved)."""
     import json as _json
     import uuid as _uuid
+
+    # Primary: Lakebase, full + lossless.
+    try:
+        from db import operational as opstore
+        from db.lakebase import LakebaseUnavailable
+        try:
+            return opstore.record_run(domain_id=domain_id, project_id=project_id,
+                                      run=run, label=label)
+        except LakebaseUnavailable:
+            pass
+    except Exception as e:  # import or unexpected error → try warehouse
+        print(f"[workflow_runs] Lakebase record failed, falling back: {e}")
+
+    # Fallback: bounded warehouse insert.
+    if run_sql is None:
+        return run.get("work_object_id") or ""
     steps = run.get("steps") or []
     err_count = sum(1 for s in steps if s.get("status") == "error")
     run_id = run.get("work_object_id") or f"run-{_uuid.uuid4().hex[:12]}"
-    run_json = _json.dumps(_slim_run(run)) if saved else None
+    run_json = _json.dumps(_slim_run(run))
     try:
         ensure_runs_table(run_sql, catalog=catalog)
         run_sql(f"""
@@ -112,24 +111,32 @@ def record_run(run_sql: Optional[Callable[[str], Any]], domain_id: str,
                 {_lit(run.get('template_id'))}, {_lit(run.get('template_version'))},
                 {_lit(run.get('work_object_id'))}, {_lit(run.get('status'))},
                 {_lit(run.get('halted_at'))}, {len(steps)}, {err_count},
-                current_timestamp(), {str(bool(saved)).lower()}, {_lit(label)},
-                {_lit(run_json)}
+                current_timestamp(), true, {_lit(label)}, {_lit(run_json)}
             )
         """)
-    except Exception as e:  # never break a run on logging failure
-        print(f"[workflow_runs] record failed: {e}")
+    except Exception as e:
+        print(f"[workflow_runs] warehouse record failed: {e}")
     return run_id
 
 
 def list_runs(run_sql: Callable[[str], Any], domain_id: str,
               project_id: Optional[str] = None, saved_only: bool = False,
               catalog: str = CATALOG_DEFAULT, limit: int = 200) -> list:
-    """Return run summaries for a domain, optionally filtered to one project."""
+    """Run summaries for a domain, optionally filtered to one project. `saved_only`
+    is retained for compatibility but is a no-op (all runs are saved)."""
+    try:
+        from db import operational as opstore
+        from db.lakebase import LakebaseUnavailable
+        try:
+            return opstore.list_runs(domain_id=domain_id, project_id=project_id, limit=limit)
+        except LakebaseUnavailable:
+            pass
+    except Exception as e:
+        print(f"[workflow_runs] Lakebase list failed, falling back: {e}")
+
     where = f"WHERE domain_id = {_lit(domain_id)}"
     if project_id:
         where += f" AND project_id = {_lit(project_id)}"
-    if saved_only:
-        where += " AND saved = true"
     try:
         ensure_runs_table(run_sql, catalog=catalog)
         return run_sql(f"""
@@ -148,8 +155,18 @@ def list_runs(run_sql: Callable[[str], Any], domain_id: str,
 
 def get_run(run_sql: Callable[[str], Any], run_id: str,
             catalog: str = CATALOG_DEFAULT) -> Optional[dict]:
-    """Return the full stored run_json for a saved execution (or None)."""
+    """Return the full stored run for a run_id (Lakebase primary, lossless)."""
     import json as _json
+    try:
+        from db import operational as opstore
+        from db.lakebase import LakebaseUnavailable
+        try:
+            return opstore.get_run(run_id=run_id)
+        except LakebaseUnavailable:
+            pass
+    except Exception as e:
+        print(f"[workflow_runs] Lakebase get_run failed, falling back: {e}")
+
     try:
         rows = run_sql(f"""
             SELECT run_json FROM {runs_table(catalog)}

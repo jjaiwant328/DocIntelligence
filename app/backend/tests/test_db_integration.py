@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import schema  # noqa: E402
-from db.repositories import projects_repo, tags_repo  # noqa: E402
+from db.repositories import projects_repo, runs_repo, tags_repo  # noqa: E402
 
 TEST_SCHEMA = "app_test"
 
@@ -83,12 +83,34 @@ def main():
             tags_repo.remove_tag(conn, domain_id=dom, project_id="acme-perf-001", doc_id="doc-1")
             assert tags_repo.doc_ids_for_project(conn, domain_id=dom, project_id="acme-perf-001") == ["doc-2"]
 
-            # 6. delete cascades tags
+            # 6. LOSSLESS run round-trip — the regression the old _slim_run hid.
+            big_output = "X" * 5000                 # >4KB (old cap: 600 chars)
+            evidence = [{"document_id": f"d{i}", "source_text": "E" * 400}
+                        for i in range(10)]          # 10 items (old cap: 6 × 160 chars)
+            run = {
+                "template_id": "supplier_scorecard", "template_version": "1",
+                "domain": dom, "status": "completed", "work_object_id": "WO-LOSSLESS-1",
+                "steps": [{"id": "s1", "skill": "summarize", "status": "ok",
+                           "outputs": {"summary": big_output}, "evidence": evidence}],
+            }
+            rid = runs_repo.record_run(conn, domain_id=dom, project_id="acme-perf-001",
+                                       run=run, label="lossless")
+            assert rid == "WO-LOSSLESS-1"
+            got = runs_repo.get_run(conn, rid)
+            assert got is not None, "run should reopen"
+            step = got["steps"][0]
+            assert len(step["outputs"]["summary"]) == 5000, "output must NOT be truncated"
+            assert len(step["evidence"]) == 10, "all evidence items must survive"
+            assert len(step["evidence"][0]["source_text"]) == 400, "evidence text must NOT be truncated"
+            runs = runs_repo.list_runs(conn, domain_id=dom, project_id="acme-perf-001")
+            assert len(runs) == 1 and runs[0]["run_id"] == "WO-LOSSLESS-1"
+
+            # 7. delete cascades tags
             projects_repo.delete_project(conn, domain_id=dom, project_id="acme-perf-001")
             assert projects_repo.list_projects(conn, dom) == []
             assert tags_repo.doc_ids_for_project(conn, domain_id=dom, project_id="acme-perf-001") == []
 
-            print("test_db_integration: all passed (live Lakebase)")
+            print("test_db_integration: all passed (live Lakebase, incl. lossless run round-trip)")
         finally:
             conn.execute(f'DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE')
 

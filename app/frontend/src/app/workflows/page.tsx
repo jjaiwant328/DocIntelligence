@@ -114,7 +114,6 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<"save" | "run" | null>(null);
-  const [saveExec, setSaveExec] = useState(true);   // persist the full execution
   const resultRef = useRef<HTMLDivElement | null>(null);
   // drag-and-drop: a palette skill ("new:<id>") or an existing step index being dragged
   const [drag, setDrag] = useState<{ kind: "palette"; skill: string } | { kind: "step"; index: number } | null>(null);
@@ -232,18 +231,17 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         method: "POST",
         body: JSON.stringify({ template: name, domain_id: domainId, project, approve,
           doc_ids: hasDocs ? selectedDocIds : undefined,
-          save: saveExec, label: saveExec ? `${name} · ${projectLabel}` : "" }),
+          label: `${name} · ${projectLabel}` }),
       });
       setRun(r);
       // the run auto-saved this workflow — make it visible in the template list
       await loadTemplates(); setTid(name);
       const failed = (r.steps || []).find((s) => s.status === "error");
-      const savedNote = r.saved ? " Execution saved to Executions." : "";
       setMsg(r.status === "pending_approval"
         ? "Run halted at the approval gate — approve below to continue."
         : failed
           ? `Run ${r.status}: step "${failed.skill}" — ${failed.error}`
-          : `Run ${r.status}.${savedNote} See results below.`);
+          : `Run ${r.status}. Saved to Executions — see results below.`);
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); setBusy(null); }
@@ -307,11 +305,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
           className={`text-sm text-white rounded px-3 py-1.5 disabled:opacity-50 ${issues.length ? "bg-amber-600" : "bg-blue-600"}`}>
           {busy === "run" ? "Running…" : issues.length ? "Run anyway ▶" : "Run ▶"}
         </button>
-        <label className="flex items-center gap-1 text-xs text-gray-600"
-          title="Store the full execution (steps, outputs, evidence) so you can reopen it later in Executions.">
-          <input type="checkbox" checked={saveExec} onChange={(e) => setSaveExec(e.target.checked)} />
-          Save execution
-        </label>
+        <span className="text-xs text-gray-500 self-center">Every run is auto-saved to Executions.</span>
       </div>
 
       {showDocPicker && (
@@ -474,6 +468,9 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
             <span className="text-sm font-medium text-gray-800">📁 {project}</span>
             <span className="text-xs text-gray-500">{run.template_id} · {run.domain}{run.work_object_id ? ` · ${run.work_object_id}` : ""}</span>
             <span className={`text-xs px-2 py-0.5 rounded ${statusColor(run.status)}`}>{run.status}</span>
+            {run.run_id && (
+              <a href="/executions" className="text-xs text-blue-600 hover:underline">View full execution in Executions →</a>
+            )}
           </div>
           {run.status === "pending_approval" && (
             <div className="mb-4 border border-amber-200 bg-amber-50 rounded p-3 text-sm">

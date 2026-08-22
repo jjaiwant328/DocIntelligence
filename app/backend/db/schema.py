@@ -45,9 +45,51 @@ DDL: list[str] = [
         PRIMARY KEY (domain_id, project_id, doc_id)
     )
     """,
+    # One summary row per workflow run. run_json holds the FULL execution
+    # (steps/outputs/evidence) — Postgres returns large cells directly, so unlike
+    # the warehouse there is no truncation and no external-links read bug.
+    """
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+        run_id           TEXT        PRIMARY KEY,
+        domain_id        TEXT        NOT NULL,
+        project_id       TEXT        NOT NULL DEFAULT '',
+        template_id      TEXT        NOT NULL DEFAULT '',
+        template_version TEXT        NOT NULL DEFAULT '',
+        work_object_id   TEXT        NOT NULL DEFAULT '',
+        status           TEXT        NOT NULL DEFAULT '',
+        halted_at        TEXT        NOT NULL DEFAULT '',
+        step_count       INT         NOT NULL DEFAULT 0,
+        error_count      INT         NOT NULL DEFAULT 0,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        label            TEXT        NOT NULL DEFAULT '',
+        run_json         JSONB
+    )
+    """,
+    # Per-skill-invocation observability (ADR-007). Adds domain/project so the
+    # Executions tab can scope skill detail without a cross-store join.
+    """
+    CREATE TABLE IF NOT EXISTS skill_executions (
+        execution_id   TEXT        PRIMARY KEY,
+        skill_id       TEXT        NOT NULL DEFAULT '',
+        skill_version  TEXT        NOT NULL DEFAULT '',
+        workflow_id    TEXT        NOT NULL DEFAULT '',
+        work_object_id TEXT        NOT NULL DEFAULT '',
+        domain_id      TEXT        NOT NULL DEFAULT '',
+        project_id     TEXT        NOT NULL DEFAULT '',
+        start_time     TIMESTAMPTZ,
+        end_time       TIMESTAMPTZ,
+        status         TEXT        NOT NULL DEFAULT '',
+        error          TEXT        NOT NULL DEFAULT '',
+        model          TEXT        NOT NULL DEFAULT '',
+        evidence_count INT         NOT NULL DEFAULT 0,
+        inputs_digest  TEXT        NOT NULL DEFAULT ''
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects (domain_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_domain_project ON document_project_tags (domain_id, project_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_domain_doc ON document_project_tags (domain_id, doc_id)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_domain_project ON workflow_runs (domain_id, project_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_skillexec_workflow ON skill_executions (workflow_id, start_time DESC)",
 ]
 
 
