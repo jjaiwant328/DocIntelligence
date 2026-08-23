@@ -56,5 +56,5 @@ env:
 # Base URL of the deployed mcp-gdrive-sources app; the backend calls its /mcp
 # Streamable HTTP endpoint. Leave empty to disable the "Import from a source" UI.
 - name: DOCINTEL_MCP_SOURCES_URL
-  value: ""
+  value: "https://docintel-sources-4101016551133680.0.azure.databricksapps.com"
 runtime: python_3.10
