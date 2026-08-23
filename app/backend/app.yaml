@@ -52,4 +52,9 @@ env:
 # Postgres login = the app service principal's client id (see db/lakebase.py)
 - name: LAKEBASE_USER
   value: 00ec2ab7-2445-4bc8-b68d-25e463b5bbe3
+# ── Document-source MCP server (separate Databricks App) ──────────────────────
+# Base URL of the deployed mcp-gdrive-sources app; the backend calls its /mcp
+# Streamable HTTP endpoint. Leave empty to disable the "Import from a source" UI.
+- name: DOCINTEL_MCP_SOURCES_URL
+  value: ""
 runtime: python_3.10

@@ -1,0 +1,7 @@
+uvicorn[standard]
+# FastMCP ships inside the mcp package; pin matches the DocIntelligence backend
+# client (mcp<1.9) so server + client speak the same Streamable HTTP dialect.
+mcp>=1.0.0,<1.9.0
+requests
+PyYAML
+databricks-sdk

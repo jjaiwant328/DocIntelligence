@@ -1,0 +1,81 @@
+"""MCP client for the document-source server (a separate Databricks App).
+
+The DocIntelligence backend is the MCP *client*: it connects to the sources MCP
+server over Streamable HTTP (mcp<1.9, same dialect both sides) and calls its
+tools to browse and fetch documents from external sources (Google Drive today).
+Landing bytes in the UC Volume and running the pipeline stays in the backend
+(see the /sources routes) — the MCP server only reads the external source.
+
+Cross-app auth: the sources server is another Databricks App behind workspace
+OAuth, so we present this app's service-principal token. The backend SP needs
+"Can Use" on the sources app.
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+
+def sources_base() -> str:
+    return os.environ.get("DOCINTEL_MCP_SOURCES_URL", "").rstrip("/")
+
+
+def configured() -> bool:
+    return bool(sources_base())
+
+
+def _endpoint() -> str:
+    return f"{sources_base()}/mcp"
+
+
+def auth_url(source: str = "gdrive") -> str:
+    """Where the frontend sends the user to authorize a real source connection."""
+    return f"{sources_base()}/oauth/google/start"
+
+
+def _bearer() -> dict:
+    try:
+        from databricks.sdk import WorkspaceClient
+        return WorkspaceClient().config.authenticate() or {}
+    except Exception as e:
+        print(f"[mcp_sources] could not mint auth header: {e}")
+        return {}
+
+
+def _payload(result) -> Any:
+    """Tolerate either structured content or JSON-in-text (mcp<1.9 uses text)."""
+    sc = getattr(result, "structuredContent", None)
+    if sc:
+        return sc
+    for c in getattr(result, "content", []) or []:
+        t = getattr(c, "text", None)
+        if t:
+            try:
+                return json.loads(t)
+            except Exception:
+                return {"text": t}
+    return {}
+
+
+async def _call(tool: str, args: dict) -> Any:
+    if not configured():
+        raise RuntimeError("DOCINTEL_MCP_SOURCES_URL is not set — the sources MCP server is not wired.")
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+    async with streamablehttp_client(_endpoint(), headers=_bearer()) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return _payload(await session.call_tool(tool, args))
+
+
+async def list_sources() -> Any:
+    return await _call("list_sources", {})
+
+
+async def list_documents(source: str, folder: str = "", query: str = "") -> Any:
+    return await _call("list_documents", {"source": source, "folder_id": folder, "query": query})
+
+
+async def fetch_document(source: str, doc_ref: str) -> Any:
+    return await _call("fetch_document", {"source": source, "doc_ref": doc_ref})

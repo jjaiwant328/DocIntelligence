@@ -1236,6 +1236,88 @@ async def trigger_pipeline(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── External document sources (via the MCP sources server) ───────────────────
+class SourceImportRequest(BaseModel):
+    source: str = "gdrive"
+    doc_refs: List[str]
+    domain_id: str = "compliance_due_diligence"
+    project_id: str = ""
+    trigger_pipeline: bool = True
+
+
+@router.get("/sources")
+async def list_document_sources():
+    """List external document sources (Google Drive…) the MCP server can read,
+    with each source's mode (live/synthetic) and connection status."""
+    import mcp_sources
+    if not mcp_sources.configured():
+        return {"configured": False, "sources": []}
+    try:
+        return {"configured": True, "sources": await mcp_sources.list_sources()}
+    except Exception as e:
+        return {"configured": True, "sources": [], "error": str(e)}
+
+
+@router.get("/sources/{source}/documents")
+async def list_source_documents(source: str, folder: str = "", query: str = ""):
+    """Browse documents available in a source (proxied to the MCP server)."""
+    import mcp_sources
+    try:
+        return await mcp_sources.list_documents(source, folder, query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"sources server error: {e}")
+
+
+@router.get("/sources/{source}/auth-url")
+async def source_auth_url(source: str):
+    """The URL the user visits to authorize a live source connection (OAuth)."""
+    import mcp_sources
+    return {"auth_url": mcp_sources.auth_url(source)}
+
+
+@router.post("/sources/import")
+async def import_from_source(req: SourceImportRequest):
+    """Fetch selected documents from a source via MCP, land them in the domain's
+    UC Volume, and (optionally) trigger the existing parse/skill pipeline."""
+    import base64
+    import io
+    import mcp_sources
+    w = WorkspaceClient()
+    schemas = _get_domain_schemas(req.domain_id)
+    volume_path = (schemas.get("volume_path") or "").rstrip("/")
+    if not volume_path:
+        raise HTTPException(status_code=400, detail=f"no volume path for domain {req.domain_id}")
+
+    landed, errors = [], []
+    for ref in req.doc_refs:
+        try:
+            doc = await mcp_sources.fetch_document(req.source, ref)
+            content = base64.b64decode(doc.get("content_b64", ""))
+            filename = doc.get("filename") or doc.get("name") or ref.split("/")[-1]
+            w.files.upload(file_path=f"{volume_path}/{filename}",
+                           contents=io.BytesIO(content), overwrite=True)
+            landed.append(filename)
+        except Exception as e:
+            errors.append({"doc_ref": ref, "error": str(e)})
+
+    result: dict = {"landed": landed, "count": len(landed),
+                    "volume_path": volume_path + "/", "errors": errors}
+
+    if req.trigger_pipeline and landed:
+        try:
+            job_id, job_name = _resolve_pipeline_job(req.domain_id, schemas)
+            run = w.jobs.run_now(job_id=job_id, job_parameters={
+                "domain_id": req.domain_id, "volume_path": volume_path + "/",
+                "mode": "batch", "batch_size": "999", "doc_types": "",
+                "skip_no_schema": "false", "schema_mode": "hybrid",
+            })
+            result["pipeline_run_id"] = run.run_id
+            result["job_name"] = job_name
+        except Exception as e:
+            result["pipeline_error"] = str(e)
+    return result
+
+
 # Human-friendly labels for each pipeline task key
 TASK_LABELS = {
     "platform_setup":   "Platform Setup",

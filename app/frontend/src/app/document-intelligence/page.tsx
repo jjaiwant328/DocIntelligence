@@ -9,6 +9,7 @@ import { apiCall } from "@/lib/api-config";
 import { FloatingTooltip } from "@/components/ui/floating-tooltip";
 import { useDomain, DomainInfo } from "@/context/DomainContext";
 import { usePipelineRun } from "@/context/PipelineRunContext";
+import { SourcePicker } from "@/components/SourcePicker";
 
 // Helper function to format state names for better UX
 const formatStateName = (state: string): string => {
@@ -3723,6 +3724,7 @@ export default function DocumentIntelligencePage({
       {/* Process Documents */}
       {activeSubTab === "process" && (
         <div className="flex-1">
+          <SourcePicker domainId={domainId} />
           <ProcessDocuments
             domainId={domainId}
             onRunComplete={() => {}}

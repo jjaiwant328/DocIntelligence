@@ -1,0 +1,20 @@
+command:
+- uvicorn
+- server:app
+- --host
+- 0.0.0.0
+- --port
+- '8000'
+env:
+- name: DATABRICKS_APP_PORT
+  value: '8000'
+# ── Google Drive OAuth (real mode). Leave unset to run in synthetic demo mode. ──
+# Set these as Databricks App secrets/resources, NOT in source:
+#   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
+# and point the redirect URI at THIS app's /oauth/google/callback.
+- name: GOOGLE_OAUTH_REDIRECT_URI
+  value: ""
+# Where the OAuth refresh token is cached (file; re-consent needed after redeploy).
+- name: GDRIVE_TOKEN_PATH
+  value: /tmp/gdrive_token.json
+runtime: python_3.10
