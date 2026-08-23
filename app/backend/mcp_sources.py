@@ -26,7 +26,9 @@ def configured() -> bool:
 
 
 def _endpoint() -> str:
-    return f"{sources_base()}/mcp"
+    # Trailing slash is REQUIRED: FastMCP mounts at /mcp/ and Starlette 307-redirects
+    # /mcp -> an internal localhost URL the client can't follow (breaks the call).
+    return f"{sources_base()}/mcp/"
 
 
 def auth_url(source: str = "gdrive") -> str:
