@@ -40,11 +40,13 @@ function validateSteps(steps: Step[], byId: Record<string, SkillMeta>, hasDocs: 
   steps.forEach((s, i) => {
     const meta = byId[s.skill];
     const inputs = meta?.inputs ?? {};
+    const wired = s.inputs_map ?? {};   // explicit wiring (loaded prebuilt / hand-set)
     let needsDocs = false;
     const missing = Object.entries(inputs)
       .filter(([, spec]) => spec?.required)
       .map(([name]) => name)
       .filter((name) => {
+        if (wired[name]) return false;   // already wired explicitly in the template
         if (priorOutputs.has(name) || name in DOMAIN_ALIASES ||
             DOMAIN_KEYS.has(name) || INPUT_KEYS.has(name)) return false;
         if (DOC_KEYS.has(name)) {
@@ -90,6 +92,13 @@ function guidanceFor(input: string, needsDocs: boolean): string {
   }
   return `“${input}” isn't produced by any earlier step. Add a step that outputs “${input}” before this one, or remove this step.`;
 }
+// Data-driven: skill ids whose declared outputs include this input name — the
+// skills that would satisfy an unmet dependency if added as an earlier step.
+function producersOf(input: string, byId: Record<string, SkillMeta>): string[] {
+  return Object.values(byId)
+    .filter((s) => s.outputs && Object.prototype.hasOwnProperty.call(s.outputs, input))
+    .map((s) => s.id);
+}
 function statusColor(s: string): string {
   if (["completed", "ok", "satisfied", "ASSIGNED", "CLOSED"].includes(s)) return "bg-green-100 text-green-800";
   if (s === "pending_approval") return "bg-amber-100 text-amber-800";
@@ -109,6 +118,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [tid, setTid] = useState<string>("");
   const [name, setName] = useState<string>("");
+  const [runName, setRunName] = useState<string>("");   // optional custom name for the next run
   const [steps, setSteps] = useState<Step[]>([]);
   const [approvalBefore, setApprovalBefore] = useState<string | null>(null);
   // P5: declared run-time inputs (the template's `inputs` block) + the values
@@ -228,7 +238,9 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         method: "POST",
         body: JSON.stringify({
           template_id: name, domain_id: domainId, name,
-          steps: steps.map((s) => ({ id: s.id, skill: s.skill })),
+          // keep any explicit wiring (loaded prebuilt / inlined literals); autowire
+          // fills only the gaps, so prebuilt reconciliation checks survive save.
+          steps: steps.map((s) => ({ id: s.id, skill: s.skill, inputs_map: s.inputs_map })),
           approval_before: approvalBefore, autowire: true,
           inputs: declaredInputs.filter((p) => p.name.trim()),
         }),
@@ -253,7 +265,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         body: JSON.stringify({ template: name, domain_id: domainId, project, approve,
           doc_ids: hasDocs ? selectedDocIds : undefined,
           params: declaredInputs.length ? paramValues : undefined,
-          label: `${name} · ${projectLabel}` }),
+          label: runName.trim() || `${name} · ${projectLabel}` }),
       });
       // a declared-input validation error comes back before any run happened
       if ((r as { kind?: string }).kind === "param_error") {
@@ -309,6 +321,12 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         <label className="flex flex-col text-xs text-gray-600">
           Name
           <input className="mt-1 border rounded px-2 py-1 text-sm" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="flex flex-col text-xs text-gray-600">
+          Run name <span className="text-gray-400">(optional)</span>
+          <input className="mt-1 border rounded px-2 py-1 text-sm" placeholder={`${name || "run"} · ${projectLabel}`}
+            value={runName} onChange={(e) => setRunName(e.target.value)}
+            title="Name this execution — shown in Executions. Defaults to template · project." />
         </label>
         <div className="flex flex-col text-xs text-gray-600">
           Project / Case
@@ -453,7 +471,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
         <div className="mb-3 text-xs bg-amber-50 border border-amber-200 rounded p-2 text-amber-800">
           <span className="font-semibold">⚠ Missing inputs — this workflow will halt at run time.</span>{" "}
           <span className="text-amber-600">Hover each input for how to fix it.</span>
-          <ul className="mt-1 space-y-1">
+          <ul className="mt-1 space-y-1.5">
             {issues.map((it) => (
               <li key={it.step}>
                 Step {it.step} <span className="font-mono">{it.skill}</span> needs{" "}
@@ -471,6 +489,23 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
                 {it.needsDocs && (
                   <button onClick={() => setShowDocPicker(true)} className="ml-2 underline text-amber-700">select documents</button>
                 )}
+                {/* One-click fixes: add a producing skill just before this step */}
+                {it.missing.filter((n) => !DOC_FED.has(n)).map((name) => {
+                  const producers = producersOf(name, byId).filter((pid) => pid !== it.skill);
+                  if (!producers.length) return null;
+                  return (
+                    <div key={name} className="ml-4 mt-0.5 flex flex-wrap items-center gap-1">
+                      <span className="text-amber-600">produce <span className="font-mono">{name}</span> with:</span>
+                      {producers.map((pid) => (
+                        <button key={pid} onClick={() => insertStep(pid, it.step - 1)}
+                          title={`Add “${pid}” as step ${it.step} (just before ${it.skill}); it auto-wires to satisfy “${name}”.`}
+                          className="text-[11px] bg-white border border-amber-300 text-amber-800 rounded px-1.5 py-0.5 hover:bg-amber-100">
+                          ＋ {pid}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
               </li>
             ))}
           </ul>
