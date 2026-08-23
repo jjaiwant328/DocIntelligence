@@ -46,18 +46,32 @@ def _bearer() -> dict:
 
 
 def _payload(result) -> Any:
-    """Tolerate either structured content or JSON-in-text (mcp<1.9 uses text)."""
+    """Tolerate either structured content or JSON-in-text (mcp<1.9 uses text).
+    A tool returning a bare list serializes as one text block per item, so we
+    gather all blocks: 1 block -> that value, many -> a list."""
     sc = getattr(result, "structuredContent", None)
     if sc:
         return sc
+    parsed = []
     for c in getattr(result, "content", []) or []:
         t = getattr(c, "text", None)
-        if t:
-            try:
-                return json.loads(t)
-            except Exception:
-                return {"text": t}
-    return {}
+        if t is None:
+            continue
+        try:
+            parsed.append(json.loads(t))
+        except Exception:
+            parsed.append({"text": t})
+    if not parsed:
+        return {}
+    return parsed[0] if len(parsed) == 1 else parsed
+
+
+def _as_list(payload) -> list:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload.get("sources", []) or []
+    return []
 
 
 async def _call(tool: str, args: dict) -> Any:
@@ -71,8 +85,8 @@ async def _call(tool: str, args: dict) -> Any:
             return _payload(await session.call_tool(tool, args))
 
 
-async def list_sources() -> Any:
-    return await _call("list_sources", {})
+async def list_sources() -> list:
+    return _as_list(await _call("list_sources", {}))
 
 
 async def list_documents(source: str, folder: str = "", query: str = "") -> Any:

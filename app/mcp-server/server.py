@@ -40,10 +40,11 @@ def _connector(source: str):
 
 
 @mcp.tool()
-def list_sources() -> list[dict]:
+def list_sources() -> dict:
     """List the document sources this server can read, and whether each is on
-    live (real API) or synthetic demo data and currently connected."""
-    return registry.all_sources()
+    live (real API) or synthetic demo data and currently connected. Returns
+    {sources:[{id,name,mode,connected}]} (a dict, so it serializes as one block)."""
+    return {"sources": registry.all_sources()}
 
 
 @mcp.tool()
