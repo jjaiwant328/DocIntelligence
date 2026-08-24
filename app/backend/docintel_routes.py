@@ -1165,7 +1165,7 @@ def _ensure_pipeline_job(domain_id: str, domain_cfg: dict) -> tuple[int, str]:
         from provisioner.pipeline_job import provision_pipeline_job
         w = WorkspaceClient()
         job_id = provision_pipeline_job(
-            w=w, run_sql=lambda q: run_sql(q, timeout_secs=60),
+            w=w, run_sql=lambda q: run_sql(q, timeout_secs=45),
             domain_id=domain_id, cfg=domain_cfg, catalog=CATALOG)
         return int(job_id), f"DocIntelligence — {domain_id.replace('_', ' ').title()} Pipeline"
 
