@@ -34,7 +34,12 @@ def build_live_context(domain_id: str) -> Context:
     agt_schema = schemas["schema_agt"]
 
     def chat_completion(prompt: str) -> str:
-        llm, _model = routes._get_llm()
+        # Skills like reconcile_documents emit findings + scorecard + verbatim
+        # evidence quotes; a real multi-document corpus needs ~2.7k output tokens.
+        # The default 2048 truncates that mid-string (finish_reason=length) and the
+        # partial JSON fails to parse ("model did not return JSON"), so give the
+        # skill LLM calls comfortable headroom.
+        llm, _model = routes._get_llm(max_tokens=8192)
         resp = llm.invoke(prompt)
         return getattr(resp, "content", str(resp))
 
