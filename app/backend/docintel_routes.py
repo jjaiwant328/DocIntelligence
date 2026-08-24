@@ -1151,6 +1151,25 @@ def _resolve_pipeline_job(domain_id: str, domain_cfg: dict) -> tuple[int, str]:
     )
 
 
+def _ensure_pipeline_job(domain_id: str, domain_cfg: dict) -> tuple[int, str]:
+    """Return (job_id, job_name) for a domain, creating the job on demand when the
+    domain has none yet. Blueprint-provisioned use cases (supplier_performance,
+    ap_three_way_match, …) get schemas + a volume but no pipeline job unless
+    provisioned with create_pipeline_job=true; this lazily stands one up (built
+    for THIS domain's schema/volume, since each job's parse/extract tasks are
+    baked to a specific schema), registers its id, and grants the app SP — so the
+    first import/process for a new use case wires its pipeline automatically."""
+    try:
+        return _resolve_pipeline_job(domain_id, domain_cfg)
+    except HTTPException:
+        from provisioner.pipeline_job import provision_pipeline_job
+        w = WorkspaceClient()
+        job_id = provision_pipeline_job(
+            w=w, run_sql=lambda q: run_sql(q, timeout_secs=60),
+            domain_id=domain_id, cfg=domain_cfg, catalog=CATALOG)
+        return int(job_id), f"DocIntelligence — {domain_id.replace('_', ' ').title()} Pipeline"
+
+
 @router.post("/trigger-pipeline")
 async def trigger_pipeline(
     domain_id:      str  = "supply_chain",
@@ -1305,7 +1324,7 @@ async def import_from_source(req: SourceImportRequest):
 
     if req.trigger_pipeline and landed:
         try:
-            job_id, job_name = _resolve_pipeline_job(req.domain_id, schemas)
+            job_id, job_name = _ensure_pipeline_job(req.domain_id, schemas)
             run = w.jobs.run_now(job_id=job_id, job_parameters={
                 "domain_id": req.domain_id, "volume_path": volume_path + "/",
                 "mode": "batch", "batch_size": "999", "doc_types": "",

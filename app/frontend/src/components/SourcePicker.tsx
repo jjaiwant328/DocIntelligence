@@ -100,7 +100,11 @@ export function SourcePicker({ domainId }: { domainId: string }) {
       </div>
       {cur?.note && !open && <p className="text-[11px] text-gray-400 mb-1">{cur.note}</p>}
       {msg && <div className="mb-2 text-xs text-gray-700 bg-gray-50 border rounded p-1.5">{msg}</div>}
-      {result?.pipeline_error && <div className="mb-2 text-xs text-red-600">Pipeline: {result.pipeline_error}</div>}
+      {result?.pipeline_error && (
+        <div className="mb-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-1.5">
+          Files are safely in the volume, but auto-processing couldn't start: {result.pipeline_error} You can process them from the Process Documents panel below.
+        </div>
+      )}
 
       {open && (
         <div className="max-h-64 overflow-y-auto border rounded">
