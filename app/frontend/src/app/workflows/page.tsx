@@ -137,6 +137,7 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   const [docs, setDocs] = useState<{ doc_id: string; doc_type?: string }[]>([]);
   const [docChecked, setDocChecked] = useState<Record<string, boolean>>({});
   const [showDocPicker, setShowDocPicker] = useState(false);
+  const [docsFallback, setDocsFallback] = useState(false);   // showing all domain docs (project has none tagged)
 
   function handleDrop(index: number) {
     if (!drag) return;
@@ -154,18 +155,30 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
   }, []);
   useEffect(() => { loadTemplates(); /* eslint-disable-next-line */ }, [domainId]);
 
-  // load the project's document set (drives $docs.* and the "narrow" picker)
+  // load the project's document set (drives $docs.* and the "narrow" picker).
+  // If a project is selected but has no tagged docs, fall back to the domain's
+  // parsed documents so freshly-imported/untagged docs are still selectable
+  // (otherwise a doc-consuming workflow would have nothing to run on).
   useEffect(() => {
-    const q = `/api/docintel/parsed-documents?domain_id=${domainId}` +
-      (ctxProject?.project_id ? `&project_id=${encodeURIComponent(ctxProject.project_id)}` : "");
-    apiCall<{ documents: { doc_id: string; doc_type?: string }[] }>(q)
-      .then((r) => {
+    const pid = ctxProject?.project_id;
+    const base = `/api/docintel/parsed-documents?domain_id=${domainId}`;
+    const load = (url: string) =>
+      apiCall<{ documents: { doc_id: string; doc_type?: string }[] }>(url);
+    (async () => {
+      try {
+        let r = await load(pid ? `${base}&project_id=${encodeURIComponent(pid)}` : base);
+        let fallback = false;
+        if (pid && (r.documents || []).length === 0) {
+          r = await load(base);   // project has no tagged docs → show all domain docs
+          fallback = true;
+        }
         setDocs(r.documents || []);
+        setDocsFallback(fallback);
         const all: Record<string, boolean> = {};
         (r.documents || []).forEach((d) => { all[d.doc_id] = true; });
         setDocChecked(all);
-      })
-      .catch(() => { setDocs([]); setDocChecked({}); });
+      } catch { setDocs([]); setDocChecked({}); setDocsFallback(false); }
+    })();
   }, [domainId, ctxProject?.project_id]);
 
   const selectedDocIds = docs.filter((d) => docChecked[d.doc_id]).map((d) => d.doc_id);
@@ -267,9 +280,13 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
           params: declaredInputs.length ? paramValues : undefined,
           label: runName.trim() || `${name} · ${projectLabel}` }),
       });
-      // a declared-input validation error comes back before any run happened
-      if ((r as { kind?: string }).kind === "param_error") {
-        setMsg(`Input error: ${(r as { error?: string }).error}`);
+      // a pre-run validation error (bad param, or no documents) comes back
+      // before any step executed — surface it clearly and, for the no-docs case,
+      // open the Documents picker so the fix is one click away.
+      const kind = (r as { kind?: string }).kind;
+      if (kind === "param_error" || kind === "no_documents") {
+        setMsg((r as { error?: string }).error || "Run could not start.");
+        if (kind === "no_documents") setShowDocPicker(true);
         return;
       }
       setRun(r);
@@ -430,6 +447,9 @@ export default function WorkflowsTab({ domain }: { domain?: DomainInfo }) {
             <p className="text-xs text-gray-600">
               Document set for this run{ctxProject?.project_id ? <> — project <span className="font-medium">📁 {projectLabel}</span></> : null}.
               Document-reading steps (classify, summarize…) use these.
+              {docsFallback && (
+                <span className="text-amber-600"> This project has no tagged documents yet — showing all documents in the domain so you can pick the ones to use (e.g. just imported).</span>
+              )}
             </p>
             <span className="flex gap-2">
               <button onClick={() => setDocChecked(Object.fromEntries(docs.map((d) => [d.doc_id, true])))}

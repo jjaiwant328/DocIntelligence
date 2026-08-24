@@ -22,7 +22,8 @@ class LLMSchemaAdapter(Adapter):
         raw = ctx.chat_completion(prompt)
         data = _extract_json(raw)
         if data is None:
-            raise SkillError(f"{contract.id}: model did not return JSON")
+            snippet = (raw or "").strip().replace("\n", " ")[:180] or "(empty response)"
+            raise SkillError(f"{contract.id}: model did not return JSON — got: {snippet}")
         evidence = [_coerce_evidence(e) for e in (data.get("evidence") or [])]
         # keep evidence in outputs as dicts too (schema declares it)
         if "evidence" in contract.outputs:

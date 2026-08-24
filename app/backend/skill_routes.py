@@ -727,11 +727,13 @@ async def workflow_run(req: WorkflowRunRequest):
         "context": req.context or "",
         "approve": req.approve,
     }
-    from workflow_engine.engine import ParamError
+    from workflow_engine.engine import NoDocumentsError, ParamError
     try:
         run = engine.run(req.template, req.domain_id, inputs, docs=docs, params=req.params)
     except ParamError as e:
         return {"status": "error", "error": str(e), "kind": "param_error"}
+    except NoDocumentsError as e:
+        return {"status": "error", "error": str(e), "kind": "no_documents"}
     result = run.to_dict()
     # Every run is auto-saved, losslessly (Lakebase). No opt-in.
     try:

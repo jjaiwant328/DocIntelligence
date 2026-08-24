@@ -30,6 +30,12 @@ class ParamError(ValueError):
     """A declared run-time parameter is missing (required) or the wrong type."""
 
 
+class NoDocumentsError(ValueError):
+    """A doc-consuming workflow was run with an empty document set. Surfaced as a
+    clear, actionable message instead of a cryptic downstream failure (e.g. an
+    LLM step returning prose because it got an empty corpus)."""
+
+
 def _coerce_one(typ: str, val, spec: dict, name: str):
     if typ == "number":
         try:
@@ -175,6 +181,19 @@ class WorkflowEngine:
         # Coerce/validate declared run-time params (raises ParamError on bad input).
         params = coerce_params(tmpl.get("inputs"), params)
         domain_cfg = self.domain_loader(domain) if self.domain_loader else None
+        # Preflight: a workflow that reads documents ($docs.*) needs a non-empty
+        # document set. Fail fast with a clear message rather than letting a
+        # downstream LLM step get an empty corpus and return un-parseable prose.
+        consumes_docs = any(
+            isinstance(v, str) and v.startswith("$docs.")
+            for step in tmpl.get("steps", [])
+            for v in (step.get("inputs_map") or {}).values()
+        )
+        if consumes_docs and not (docs or []):
+            raise NoDocumentsError(
+                "This workflow reads documents, but none were selected for the run. "
+                "Open the Documents picker and select at least one document (or tag "
+                "documents to the project in the Document Library), then run again.")
         doc_ctx = _build_doc_context(docs or [])
         run = WorkflowRun(template_id=tmpl["id"],
                           template_version=str(tmpl.get("version", "1.0")),
