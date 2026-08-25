@@ -188,6 +188,11 @@ class LogActionRequest(BaseModel):
     incident_ref: str = "RCL-2024-0012"
     logged_by: str = "app_user"
 
+class ActionStatusRequest(BaseModel):
+    status: str                            # ASSIGNED | ESCALATED | CLOSED
+    logged_by: Optional[str] = None        # set when assigning
+    domain_id: str = "supply_chain"
+
 # ── Robust JSON parser (handles common LLM output quirks) ─────────────────────
 
 def _robust_json_loads(raw: str) -> dict:
@@ -2281,6 +2286,29 @@ async def get_action_log(incident_ref: str = None, limit: int = 50, domain_id: s
         LIMIT {limit}
     """, timeout_secs=30)
     return {"incident_ref": incident_ref, "actions": rows or [], "total": len(rows or [])}
+
+
+# Workflow-created actions (action_log) lifecycle: DRAFT → ASSIGNED/ESCALATED → CLOSED.
+_ACTION_LOG_STATUSES = {"ASSIGNED", "ESCALATED", "CLOSED"}
+
+@router.patch("/action-log/{action_id}")
+async def update_action_log_status(action_id: str, req: ActionStatusRequest):
+    """Transition a workflow-created action to a new status so it can be acted
+    upon from the Executions → Actions tab (assign / escalate / resolve)."""
+    new_status = req.status.upper()
+    if new_status not in _ACTION_LOG_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"status must be one of {sorted(_ACTION_LOG_STATUSES)}")
+    _agt_schema = _get_domain_schemas(req.domain_id)["schema_agt"]
+    _tbl = f"{CATALOG}.{_agt_schema}.action_log"
+    _ensure_action_log_table(_tbl)
+    aid = action_id.replace("'", "''")
+    sets = [f"status = '{new_status}'"]
+    if new_status == "ASSIGNED" and req.logged_by:
+        sets.append(f"logged_by = '{req.logged_by.replace(chr(39), chr(39) * 2)}'")
+    run_sql(f"UPDATE {_tbl} SET {', '.join(sets)} WHERE action_id = '{aid}'",
+            timeout_secs=30)
+    return {"action_id": action_id, "status": new_status}
 
 
 @router.get("/action-report")

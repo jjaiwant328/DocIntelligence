@@ -164,8 +164,10 @@ export function FormattedOutputs({ skill, outputs }: {
       </Field>
     );
   }
-  // create_action: the ids of the actions this step created
-  if (Array.isArray(outputs.action_ids) && (outputs.action_ids as unknown[]).length) {
+  // create_action: the ids of the actions this step created. Skip when the full
+  // `actions` objects are present (the list below renders them meaningfully).
+  if (Array.isArray(outputs.action_ids) && (outputs.action_ids as unknown[]).length
+      && !Array.isArray(outputs.actions)) {
     const ids = (outputs.action_ids as unknown[]).map(String);
     blocks.push(<Field key="action_ids" label={`Actions created (${ids.length})`}>{chips(ids)}</Field>);
   }
@@ -253,8 +255,11 @@ export function RunReport({ run }: { run: ReportRun }) {
     .filter((f) => f && typeof f === "object" && ("check" in f || "severity" in f)));
   const summaryStep = steps.find((s) => typeof s.outputs?.summary === "string" && (s.outputs!.summary as string).trim());
   const summary = summaryStep?.outputs?.summary as string | undefined;
-  let actionCount = 0;
-  steps.forEach((s) => { if (Array.isArray(s.outputs?.action_ids)) actionCount += (s.outputs!.action_ids as unknown[]).length; });
+  const actions = steps
+    .flatMap((s) => (Array.isArray(s.outputs?.actions) ? (s.outputs!.actions as ActionItem[]) : []))
+    .filter((a) => a && typeof a === "object");
+  let actionCount = actions.length;
+  if (!actionCount) steps.forEach((s) => { if (Array.isArray(s.outputs?.action_ids)) actionCount += (s.outputs!.action_ids as unknown[]).length; });
   const totalImpact = findings.reduce((sum, f) => sum + (typeof f.amount_impact === "number" ? f.amount_impact : 0), 0);
   const errored = steps.filter((s) => s.status === "error").length;
   const ov = sc?.overall ? OVERALL[String(sc.overall).toLowerCase()] : undefined;
@@ -279,6 +284,38 @@ export function RunReport({ run }: { run: ReportRun }) {
       {summary && <p className="text-xs text-gray-700 mb-2 whitespace-pre-wrap">{summary}</p>}
       {sc && <ScorecardCard sc={sc} />}
       {findings.length > 0 && <FindingsList findings={findings} />}
+      {actions.length > 0 && <ActionsList actions={actions} />}
+    </div>
+  );
+}
+
+interface ActionItem { action_id?: string; action_type?: string; description?: string; priority?: string; status?: string }
+
+function prioCls(p?: string): string {
+  const s = String(p || "").toUpperCase();
+  if (s === "HIGH" || s === "CRITICAL") return "bg-red-100 text-red-700";
+  if (s === "LOW") return "bg-gray-100 text-gray-600";
+  return "bg-amber-100 text-amber-800";  // MEDIUM
+}
+
+function ActionsList({ actions }: { actions: ActionItem[] }) {
+  return (
+    <div className="mt-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+        Actions ({actions.length})
+      </div>
+      <ul className="space-y-1">
+        {actions.map((a, i) => (
+          <li key={a.action_id || i} className="text-xs flex items-start gap-2">
+            <span className="font-mono text-[10px] bg-blue-50 text-blue-700 rounded px-1.5 py-0.5 shrink-0">
+              {cap(String(a.action_type || "review"))}
+            </span>
+            <span className="text-gray-700 flex-1">{a.description || "—"}</span>
+            {a.priority && <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${prioCls(a.priority)}`}>{a.priority}</span>}
+            {a.status && <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 bg-gray-100 text-gray-600">{a.status}</span>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

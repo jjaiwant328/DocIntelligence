@@ -17,13 +17,32 @@ interface FullRun { template_id: string; domain: string; status: string; steps: 
 interface ActionRow { action_id: string; action_type: string; description: string; priority: string; status: string; }
 interface OntNode { id: string; label: string; type: string; }
 interface OntEdge { source: string; target: string; label: string; }
+interface CheckRow { check: string; count: number; high: number; medium: number; low: number; impact: number; }
+interface Coverage {
+  documents: { total: number; by_type: { doc_type: string; count: number }[] };
+  findings: { total: number; by_check: CheckRow[] };
+  evidence: { quotes: number; docs: number };
+  runs_considered: number;
+}
 
 function statusColor(s: string): string {
   if (["ok", "completed", "satisfied", "CLOSED", "ASSIGNED"].includes(s)) return "bg-green-100 text-green-800";
   if (["error", "failed"].includes(s)) return "bg-red-100 text-red-800";
   if (s === "DRAFT") return "bg-amber-100 text-amber-800";
+  if (s === "ESCALATED") return "bg-red-100 text-red-800";
   if (s === "pending_approval") return "bg-amber-100 text-amber-800";
   return "bg-blue-100 text-blue-800";
+}
+
+function prioColor(p: string): string {
+  const s = (p || "").toUpperCase();
+  if (s === "HIGH" || s === "CRITICAL") return "bg-red-100 text-red-700";
+  if (s === "LOW") return "bg-gray-100 text-gray-600";
+  return "bg-amber-100 text-amber-800";
+}
+
+function titleCase(s: string): string {
+  return (s || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
@@ -34,12 +53,26 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [actions, setActions] = useState<ActionRow[]>([]);
   const [graph, setGraph] = useState<{ nodes: OntNode[]; edges: OntEdge[] } | null>(null);
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tab, setTab] = useState<"runs" | "actions" | "entities">("runs");
   const [error, setError] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<FullRun | null>(null);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [showSteps, setShowSteps] = useState(false);
   const [busyRun, setBusyRun] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  async function patchAction(actionId: string, status: string) {
+    setBusyAction(actionId);
+    try {
+      await apiCall(`/api/docintel/action-log/${encodeURIComponent(actionId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, domain_id: domainId, logged_by: status === "ASSIGNED" ? "me" : undefined }),
+      });
+      setActions((as) => as.map((a) => (a.action_id === actionId ? { ...a, status } : a)));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusyAction(null); }
+  }
 
   async function reopen(runId: string) {
     setOpenRunId(runId); setOpenRun(null); setShowSteps(false);
@@ -85,6 +118,8 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
       .then((r) => setActions(r.actions || [])).catch(() => setActions([]));
     apiCall<{ nodes: OntNode[]; edges: OntEdge[] }>(`/api/docintel/ontology-graph?domain_id=${domainId}`)
       .then((r) => setGraph({ nodes: r.nodes || [], edges: r.edges || [] })).catch(() => setGraph(null));
+    apiCall<Coverage>(`/api/docintel/run-coverage?domain_id=${domainId}${projQ}`)
+      .then(setCoverage).catch(() => setCoverage(null));
   }
   useEffect(refresh, [domainId, project?.project_id]);
 
@@ -190,43 +225,130 @@ export default function ExecutionsTab({ domain }: { domain?: DomainInfo }) {
       )}
 
       {tab === "actions" && (
-        <div className="border border-gray-200 rounded-lg bg-white overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 text-gray-500"><tr>
-              <th className="text-left px-2 py-1">type</th><th className="text-left px-2 py-1">description</th>
-              <th className="text-left px-2 py-1">priority</th><th className="text-left px-2 py-1">status</th>
-            </tr></thead>
-            <tbody>
-              {actions.map((a) => (
-                <tr key={a.action_id} className="border-t border-gray-100">
-                  <td className="px-2 py-1 font-mono">{a.action_type}</td>
-                  <td className="px-2 py-1">{a.description}</td>
-                  <td className="px-2 py-1">{a.priority}</td>
-                  <td className="px-2 py-1"><span className={`px-1.5 py-0.5 rounded ${statusColor(a.status)}`}>{a.status}</span></td>
-                </tr>
-              ))}
-              {!actions.length && <tr><td colSpan={4} className="px-2 py-3 text-center text-gray-400">No actions yet — run a workflow that creates actions.</td></tr>}
-            </tbody>
-          </table>
+        <div>
+          {actions.length > 0 && (() => {
+            const open = actions.filter((a) => a.status === "DRAFT").length;
+            const esc = actions.filter((a) => a.status === "ESCALATED").length;
+            const done = actions.filter((a) => a.status === "CLOSED").length;
+            return (
+              <p className="text-xs text-gray-500 mb-2">
+                {actions.length} action(s){open ? ` · ${open} open` : ""}{esc ? ` · ${esc} escalated` : ""}{done ? ` · ${done} resolved` : ""}
+              </p>
+            );
+          })()}
+          <div className="border border-gray-200 rounded-lg bg-white overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-500"><tr>
+                <th className="text-left px-2 py-1.5">type</th><th className="text-left px-2 py-1.5">action</th>
+                <th className="text-left px-2 py-1.5">priority</th><th className="text-left px-2 py-1.5">status</th>
+                <th className="text-left px-2 py-1.5"></th>
+              </tr></thead>
+              <tbody>
+                {actions.map((a) => {
+                  const busy = busyAction === a.action_id;
+                  return (
+                    <tr key={a.action_id} className="border-t border-gray-100 align-top">
+                      <td className="px-2 py-1.5">
+                        <span className="font-medium text-blue-700 whitespace-nowrap">{titleCase(a.action_type)}</span>
+                      </td>
+                      <td className="px-2 py-1.5 text-gray-700">{a.description || <span className="text-gray-400">—</span>}</td>
+                      <td className="px-2 py-1.5"><span className={`px-1.5 py-0.5 rounded ${prioColor(a.priority)}`}>{a.priority}</span></td>
+                      <td className="px-2 py-1.5"><span className={`px-1.5 py-0.5 rounded ${statusColor(a.status)}`}>{a.status}</span></td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex gap-1 whitespace-nowrap">
+                          {a.status === "DRAFT" && (
+                            <button disabled={busy} onClick={() => patchAction(a.action_id, "ASSIGNED")}
+                              className="px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40">Assign to me</button>
+                          )}
+                          {(a.status === "DRAFT" || a.status === "ASSIGNED") && (
+                            <button disabled={busy} onClick={() => patchAction(a.action_id, "ESCALATED")}
+                              className="px-1.5 py-0.5 rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40">Escalate</button>
+                          )}
+                          {(a.status === "ASSIGNED" || a.status === "ESCALATED") && (
+                            <button disabled={busy} onClick={() => patchAction(a.action_id, "CLOSED")}
+                              className="px-1.5 py-0.5 rounded border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-40">Resolve</button>
+                          )}
+                          {a.status === "CLOSED" && <span className="text-green-600">✓ resolved</span>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!actions.length && <tr><td colSpan={5} className="px-2 py-3 text-center text-gray-400">No actions yet — run a workflow that creates actions.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {tab === "entities" && (
-        <div className="border border-gray-200 rounded-lg bg-white p-3">
-          {!graph || !graph.nodes.length ? (
-            <p className="text-sm text-gray-400">No entities yet.</p>
-          ) : (
-            <>
-              <p className="text-xs text-gray-500 mb-2">{graph.nodes.length} entities · {graph.edges.length} relationships</p>
-              <div className="flex flex-wrap gap-1">
-                {graph.nodes.map((n) => (
-                  <span key={n.id} className="text-xs bg-gray-100 rounded px-2 py-0.5">
-                    <span className="text-gray-400">{n.type}:</span> {n.label}
-                  </span>
-                ))}
+        <div className="space-y-3">
+          {/* Coverage: documents ingested, findings by check, evidence reach */}
+          {coverage && (coverage.documents.total > 0 || coverage.findings.total > 0) && (
+            <div className="border border-gray-200 rounded-lg bg-white p-3">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Documents covered ({coverage.documents.total})
+                  </div>
+                  {coverage.documents.by_type.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {coverage.documents.by_type.map((d) => (
+                        <span key={d.doc_type} className="text-xs bg-gray-100 rounded px-2 py-0.5">
+                          {titleCase(d.doc_type)} <span className="font-semibold text-gray-700">{d.count}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : <p className="text-xs text-gray-400">No documents ingested yet.</p>}
+                  <p className="text-[11px] text-gray-400 mt-2">
+                    Evidence: {coverage.evidence.quotes} quote(s) across {coverage.evidence.docs} doc(s)
+                  </p>
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Findings by check ({coverage.findings.total})
+                    {coverage.runs_considered > 0 && <span className="ml-1 font-normal normal-case text-gray-400">· latest of {coverage.runs_considered} workflow(s)</span>}
+                  </div>
+                  {coverage.findings.by_check.length ? (
+                    <ul className="space-y-1">
+                      {coverage.findings.by_check.map((c) => (
+                        <li key={c.check} className="text-xs flex items-center gap-2">
+                          <span className="text-gray-700 flex-1">{titleCase(c.check)}</span>
+                          <span className="flex gap-0.5" title={`${c.high} high · ${c.medium} medium · ${c.low} low`}>
+                            {Array.from({ length: c.high }).map((_, i) => <span key={`h${i}`} className="text-red-500">●</span>)}
+                            {Array.from({ length: c.medium }).map((_, i) => <span key={`m${i}`} className="text-amber-500">●</span>)}
+                            {Array.from({ length: c.low }).map((_, i) => <span key={`l${i}`} className="text-gray-400">●</span>)}
+                          </span>
+                          <span className="font-semibold text-gray-700 w-5 text-right">{c.count}</span>
+                          {c.impact > 0 && <span className="text-red-600 w-16 text-right">${c.impact.toLocaleString()}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-xs text-gray-400">No findings yet — run a reconcile workflow.</p>}
+                </div>
               </div>
-            </>
+            </div>
           )}
+
+          {/* Ontology graph, when the domain has one */}
+          <div className="border border-gray-200 rounded-lg bg-white p-3">
+            {!graph || !graph.nodes.length ? (
+              <p className="text-sm text-gray-400">
+                {coverage && coverage.documents.total > 0 ? "No entity graph for this domain — coverage shown above." : "No entities yet."}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-gray-500 mb-2">{graph.nodes.length} entities · {graph.edges.length} relationships</p>
+                <div className="flex flex-wrap gap-1">
+                  {graph.nodes.map((n) => (
+                    <span key={n.id} className="text-xs bg-gray-100 rounded px-2 py-0.5">
+                      <span className="text-gray-400">{n.type}:</span> {n.label}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

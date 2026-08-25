@@ -762,6 +762,81 @@ async def workflow_runs(domain_id: str = "compliance_due_diligence",
     return {"runs": rows or [], "total": len(rows or [])}
 
 
+@router.get("/run-coverage")
+async def run_coverage(domain_id: str = "compliance_due_diligence",
+                       project_id: Optional[str] = None):
+    """Coverage summary for the Executions → Coverage tab: documents ingested by
+    type, reconcile findings grouped by check (severity + $ impact), and evidence
+    reach. Findings come from the latest run of each template (no re-run double
+    counting). Populated for AP/Supplier domains where the ontology graph is empty."""
+    import docintel_routes as routes
+    from skill_runtime.run_store import list_runs, get_run
+    _sql = lambda q: routes.run_sql(q, timeout_secs=40)  # noqa: E731
+    schemas = routes._get_domain_schemas(domain_id)
+    raw = schemas["schema_raw"]
+
+    # 1. Documents covered — distinct docs per type, scoped to the project's
+    #    tagged docs when it has any, else the whole domain corpus.
+    doc_ids = _project_doc_ids(routes, domain_id, project_id) if project_id else []
+    where = ""
+    if doc_ids:
+        ids = ", ".join("'" + str(d).replace("'", "''") + "'" for d in doc_ids)
+        where = f"WHERE doc_id IN ({ids})"
+    by_type, total_docs = [], 0
+    try:
+        by_type = _sql(f"""
+            SELECT doc_type, COUNT(DISTINCT doc_id) AS count
+            FROM {routes.CATALOG}.{raw}.parsed_documents {where}
+            GROUP BY doc_type ORDER BY count DESC
+        """) or []
+        tot = _sql(f"SELECT COUNT(DISTINCT doc_id) AS n "
+                   f"FROM {routes.CATALOG}.{raw}.parsed_documents {where}") or []
+        total_docs = int((tot[0] or {}).get("n", 0)) if tot else 0
+    except Exception as e:
+        print(f"[run-coverage] document rollup failed: {e}")
+
+    # 2. Findings by check + evidence reach — latest run per template.
+    runs = list_runs(_sql, domain_id, project_id, catalog=routes.CATALOG) or []
+    checks: dict = {}
+    ev_quotes, ev_docs, seen_templates = 0, set(), set()
+    for r in runs:
+        tid = r.get("template_id")
+        if tid in seen_templates:
+            continue
+        seen_templates.add(tid)
+        full = get_run(_sql, r.get("run_id"), catalog=routes.CATALOG)
+        for step in (full or {}).get("steps", []) or []:
+            outs = step.get("outputs") or {}
+            for f in outs.get("findings") or []:
+                if not isinstance(f, dict):
+                    continue
+                c = str(f.get("check") or "other")
+                e = checks.setdefault(c, {"check": c, "count": 0, "high": 0,
+                                          "medium": 0, "low": 0, "impact": 0.0})
+                e["count"] += 1
+                sev = str(f.get("severity", "")).lower()
+                if sev in ("high", "medium", "low"):
+                    e[sev] += 1
+                try:
+                    e["impact"] += float(f.get("amount_impact") or 0)
+                except (TypeError, ValueError):
+                    pass
+            for ev in step.get("evidence") or []:
+                if isinstance(ev, dict):
+                    ev_quotes += 1
+                    if ev.get("document_id"):
+                        ev_docs.add(ev.get("document_id"))
+
+    by_check = sorted(checks.values(), key=lambda x: x["count"], reverse=True)
+    findings_total = sum(c["count"] for c in by_check)
+    return {
+        "documents": {"total": total_docs, "by_type": by_type},
+        "findings": {"total": findings_total, "by_check": by_check},
+        "evidence": {"quotes": ev_quotes, "docs": len(ev_docs)},
+        "runs_considered": len(seen_templates),
+    }
+
+
 @router.get("/workflow-run/{run_id}")
 async def get_workflow_run(run_id: str):
     """Reopen a saved execution's full detail (steps/outputs/evidence)."""

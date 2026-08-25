@@ -12,6 +12,7 @@ Imported lazily inside functions so the module stays importable offline (tests).
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -21,6 +22,54 @@ from .domains import load_domain
 
 def _now_sql() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Map a reconcile finding's check name to an actionable action_type. First
+# substring match wins; unmatched checks become the upper-cased check itself.
+_CHECK_ACTION_TYPES = [
+    ("price", "PRICE_DISPUTE"),
+    ("quantity", "QUANTITY_DISPUTE"),
+    ("duplicate", "BLOCK_DUPLICATE"),
+    ("receipt", "REQUEST_GRN"),
+    ("on_time", "SUPPLIER_ESCALATION"),
+    ("sla", "SUPPLIER_ESCALATION"),
+    ("delivery", "SUPPLIER_ESCALATION"),
+]
+_SEVERITY_PRIORITY = {"high": "HIGH", "critical": "HIGH",
+                      "medium": "MEDIUM", "low": "LOW"}
+
+
+def _finding_to_action(f: dict) -> dict:
+    """Translate a reconcile finding into an actionable action.
+
+    Findings are {check, severity, subject_doc, reference_doc, detail,
+    amount_impact}; actions need {action_type, description, priority}. Templates
+    wire `proposed_actions: $steps.reconcile.findings` directly, so without this
+    every action would fall back to create_action's defaults (REVIEW / '' /
+    MEDIUM). An item already carrying `action_type` is returned unchanged."""
+    if f.get("action_type"):
+        return f
+    check = str(f.get("check", "")).lower()
+    atype = None
+    for key, val in _CHECK_ACTION_TYPES:
+        if key in check:
+            atype = val
+            break
+    if not atype:
+        atype = re.sub(r"[^A-Z0-9]+", "_", check.upper()).strip("_") or "REVIEW"
+    detail = str(f.get("detail") or f.get("description") or "").strip()
+    refs = " vs ".join(x for x in [str(f.get("subject_doc") or "").strip(),
+                                   str(f.get("reference_doc") or "").strip()] if x)
+    try:
+        impact = float(f.get("amount_impact") or 0)
+    except (TypeError, ValueError):
+        impact = 0.0
+    parts = ([f"[{refs}]"] if refs else []) + [detail or check or "Review discrepancy"]
+    if impact:
+        parts.append(f"— ${impact:,.2f} impact")
+    prio = _SEVERITY_PRIORITY.get(str(f.get("severity", "")).lower(), "MEDIUM")
+    return {"action_type": atype, "description": " ".join(parts), "priority": prio,
+            "amount_impact": impact}
 
 
 def _work_objects_table(routes, agt_schema: str) -> str:
@@ -69,15 +118,20 @@ def build_live_context(domain_id: str) -> Context:
 
     def create_action(inputs, ctx):
         # Reuse the existing per-domain action_log table; AI actions are DRAFT.
+        # Reconcile findings are translated to actionable actions first — the raw
+        # defaults would otherwise drop the type/description/priority of each one.
         tbl = f"{routes.CATALOG}.{agt_schema}.action_log"
         routes._ensure_action_log_table(tbl)
-        ids = []
-        for a in inputs.get("proposed_actions", []) or []:
+        incident = str(inputs.get("project", "")).replace("'", "''")
+        created = []
+        for raw in inputs.get("proposed_actions", []) or []:
+            a = (_finding_to_action(raw) if isinstance(raw, dict)
+                 else {"action_type": "REVIEW", "description": str(raw),
+                       "priority": "MEDIUM"})
             aid = str(uuid.uuid4())[:8].upper()
             atype = str(a.get("action_type", "REVIEW")).replace("'", "''")
             desc = str(a.get("description", "")).replace("'", "''")
             prio = str(a.get("priority", "MEDIUM")).upper().replace("'", "''")
-            incident = str(inputs.get("project", "")).replace("'", "''")
             routes.run_sql(f"""
                 INSERT INTO {tbl}
                 (action_id, logged_at, action_type, description, priority,
@@ -85,8 +139,13 @@ def build_live_context(domain_id: str) -> Context:
                 VALUES ('{aid}', TIMESTAMP '{_now_sql()}', '{atype}', '{desc}',
                         '{prio}', '{incident}', 'workflow_engine', 'DRAFT')
             """, timeout_secs=30)
-            ids.append(aid)
-        return {"action_ids": ids}, []
+            created.append({"action_id": aid,
+                            "action_type": a.get("action_type", "REVIEW"),
+                            "description": a.get("description", ""),
+                            "priority": a.get("priority", "MEDIUM"),
+                            "status": "DRAFT"})
+        return {"action_ids": [c["action_id"] for c in created],
+                "actions": created}, []
 
     def create_finding(inputs, ctx):
         tbl = f"{routes.CATALOG}.{agt_schema}.findings"
