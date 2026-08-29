@@ -15,6 +15,7 @@ from typing import Any
 # Ordered so referenced tables exist first. All in the connection's search_path
 # schema (default `app`).
 DDL: list[str] = [
+    "CREATE EXTENSION IF NOT EXISTS vector",
     """
     CREATE TABLE IF NOT EXISTS projects (
         project_id    TEXT        NOT NULL,
@@ -85,11 +86,109 @@ DDL: list[str] = [
         inputs_digest  TEXT        NOT NULL DEFAULT ''
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS sources (
+        source_id      TEXT PRIMARY KEY,
+        provider       TEXT NOT NULL,
+        display_name   TEXT NOT NULL DEFAULT '',
+        auth_mode      TEXT NOT NULL DEFAULT 'service_principal',
+        credential_ref TEXT NOT NULL DEFAULT '',
+        site           TEXT NOT NULL DEFAULT '',
+        status         TEXT NOT NULL DEFAULT 'disconnected',
+        mode           TEXT NOT NULL DEFAULT 'live',
+        last_crawl_at  TIMESTAMPTZ,
+        last_error     TEXT NOT NULL DEFAULT '',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS external_documents (
+        external_document_id TEXT PRIMARY KEY,
+        source_id      TEXT NOT NULL,
+        domain_id      TEXT NOT NULL,
+        project_id     TEXT NOT NULL DEFAULT '',
+        parent_folder_id TEXT NOT NULL DEFAULT '',
+        path           TEXT NOT NULL DEFAULT '',
+        name           TEXT NOT NULL DEFAULT '',
+        mime_type      TEXT NOT NULL DEFAULT '',
+        size_bytes     BIGINT NOT NULL DEFAULT 0,
+        web_url        TEXT NOT NULL DEFAULT '',
+        etag           TEXT NOT NULL DEFAULT '',
+        content_hash   TEXT NOT NULL DEFAULT '',
+        owner          TEXT NOT NULL DEFAULT '',
+        source_created_at  TIMESTAMPTZ,
+        source_modified_at TIMESTAMPTZ,
+        status         TEXT NOT NULL DEFAULT 'discovered',
+        included       BOOLEAN NOT NULL DEFAULT true,
+        index_version  INT NOT NULL DEFAULT 0,
+        embedding_model TEXT NOT NULL DEFAULT '',
+        last_indexed_etag TEXT NOT NULL DEFAULT '',
+        chunk_count    INT NOT NULL DEFAULT 0,
+        last_error     TEXT NOT NULL DEFAULT '',
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS document_chunks (
+        chunk_id       TEXT PRIMARY KEY,
+        external_document_id TEXT NOT NULL,
+        domain_id      TEXT NOT NULL,
+        project_id     TEXT NOT NULL DEFAULT '',
+        ordinal        INT NOT NULL DEFAULT 0,
+        location       TEXT NOT NULL DEFAULT '',
+        snippet        TEXT NOT NULL DEFAULT '',
+        embedding      vector(1024),
+        tsv            tsvector,
+        source_version TEXT NOT NULL DEFAULT '',
+        index_version  INT NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS index_jobs (
+        job_id        TEXT PRIMARY KEY,
+        domain_id     TEXT NOT NULL,
+        project_id    TEXT NOT NULL DEFAULT '',
+        scope         TEXT NOT NULL DEFAULT 'project',
+        scope_ref     TEXT NOT NULL DEFAULT '',
+        requested_by  TEXT NOT NULL DEFAULT '',
+        status        TEXT NOT NULL DEFAULT 'queued',
+        discovered    INT NOT NULL DEFAULT 0,
+        embedded      INT NOT NULL DEFAULT 0,
+        skipped       INT NOT NULL DEFAULT 0,
+        deleted       INT NOT NULL DEFAULT 0,
+        failed        INT NOT NULL DEFAULT 0,
+        started_at    TIMESTAMPTZ,
+        finished_at   TIMESTAMPTZ,
+        error_summary TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS use_cases (
+        use_case_id   TEXT PRIMARY KEY,
+        name          TEXT NOT NULL DEFAULT '',
+        status        TEXT NOT NULL DEFAULT 'active',
+        classification_labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+        extraction_schemas    JSONB NOT NULL DEFAULT '{}'::jsonb,
+        entity_types          JSONB NOT NULL DEFAULT '[]'::jsonb,
+        agent_system_prompt   TEXT NOT NULL DEFAULT '',
+        suggested_questions   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        enabled_skills        JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reconciliation        JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects (domain_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_domain_project ON document_project_tags (domain_id, project_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_domain_doc ON document_project_tags (domain_id, doc_id)",
     "CREATE INDEX IF NOT EXISTS idx_runs_domain_project ON workflow_runs (domain_id, project_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_skillexec_workflow ON skill_executions (workflow_id, start_time DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_extdocs_scope ON external_documents (domain_id, project_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_chunks_scope ON document_chunks (domain_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks (external_document_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chunks_hnsw ON document_chunks USING hnsw (embedding vector_cosine_ops)",
+    "CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON document_chunks USING gin (tsv)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_scope ON index_jobs (domain_id, project_id, status)",
 ]
 
 
