@@ -69,6 +69,56 @@ def fetch_documents(source: str, doc_refs: list[str]) -> dict:
     return {"items": [conn.fetch_document(r) for r in doc_refs]}
 
 
+@mcp.tool()
+def list_children(source: str, folder_id: str = "") -> dict:
+    """List files and folders directly under folder_id (root if empty).
+    Returns {items:[{item_id,name,path,mime_type,size,web_url,etag,
+    modified_at,owner,is_folder}]}."""
+    try:
+        return _connector(source).list_children(folder_id=folder_id)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_file_metadata(source: str, item_id: str) -> dict:
+    """Get metadata for a single file or folder by item_id.
+    Returns {item_id,name,path,mime_type,size,web_url,etag,modified_at,
+    owner,is_folder}."""
+    try:
+        return _connector(source).get_file_metadata(item_id)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_changes(source: str, since_token: str = "") -> dict:
+    """Get changed items since since_token (empty string = initial full sync).
+    Returns {items:[metadata dict], next_token}. Pass next_token back on the
+    next call to advance the cursor. For Google Drive this is a full-list
+    fallback — see connector docs for the incremental-changes limitation."""
+    try:
+        return _connector(source).get_changes(since_token=since_token)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def check_access(source: str, item_id: str) -> dict:
+    """Check whether item_id is accessible with the current credentials.
+    Returns {accessible:bool, reason:str}."""
+    try:
+        return _connector(source).check_access(item_id)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_source_url(source: str, item_id: str) -> str:
+    """Get the web view URL for item_id (e.g. Drive's webViewLink)."""
+    return _connector(source).get_source_url(item_id)
+
+
 # ── plain HTTP routes (health + Google OAuth consent) ─────────────────────────
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_req: Request) -> JSONResponse:

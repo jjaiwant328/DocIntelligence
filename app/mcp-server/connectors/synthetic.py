@@ -62,6 +62,49 @@ _DOCS: list[dict] = [
          "(Duplicate of INV-2001 — same PO, SKU, and amount.)\n")},
 ]
 
+# Synthetic folder tree — two top-level folders matching the folder names in
+# _DOCS above. item_ids are stable so the crawler can traverse them consistently.
+_FOLDERS = [
+    {"item_id": "syn/folder/supplier", "name": "Supplier Performance", "parent_id": ""},
+    {"item_id": "syn/folder/ap",       "name": "AP 3-Way Match",        "parent_id": ""},
+]
+
+# Map folder name → folder item_id for quick lookup when building doc paths.
+_FOLDER_ID_BY_NAME: dict[str, str] = {f["name"]: f["item_id"] for f in _FOLDERS}
+
+
+def _folder_meta(folder: dict) -> dict:
+    """Metadata dict for a synthetic folder."""
+    return {
+        "item_id": folder["item_id"],
+        "name": folder["name"],
+        "path": f"/{folder['name']}",
+        "mime_type": "application/vnd.google-apps.folder",
+        "size": 0,
+        "web_url": f"https://example.com/drive/folders/{folder['item_id']}",
+        "etag": "syn-folder-v1",
+        "modified_at": "2026-01-01T00:00:00Z",
+        "owner": "demo@example.com",
+        "is_folder": True,
+    }
+
+
+def _doc_meta(doc: dict) -> dict:
+    """Metadata dict for a synthetic document."""
+    folder_name = doc["folder"]
+    return {
+        "item_id": doc["doc_ref"],
+        "name": doc["name"],
+        "path": f"/{folder_name}/{doc['name']}",
+        "mime_type": "text/plain",
+        "size": len(doc["text"]),
+        "web_url": f"https://example.com/drive/file/{doc['doc_ref']}",
+        "etag": f"syn-v1-{doc['doc_ref'].split('/')[-1]}",
+        "modified_at": "2026-03-01T00:00:00Z",
+        "owner": "demo@example.com",
+        "is_folder": False,
+    }
+
 
 class SyntheticDriveConnector(Connector):
     id = "gdrive"
@@ -93,3 +136,48 @@ class SyntheticDriveConnector(Connector):
                         "mime_type": "text/plain",
                         "content_b64": base64.b64encode(d["text"].encode("utf-8")).decode("ascii")}
         raise ValueError(f"unknown doc_ref: {doc_ref}")
+
+    # ── metadata / crawl ─────────────────────────────────────────────────────
+
+    def list_children(self, folder_id: str = "") -> dict:
+        if not folder_id:
+            # Root — return the two top-level folders.
+            return {"items": [_folder_meta(f) for f in _FOLDERS]}
+        folder_name = next((f["name"] for f in _FOLDERS if f["item_id"] == folder_id), None)
+        if folder_name is None:
+            return {"items": []}
+        return {"items": [_doc_meta(d) for d in _DOCS if d["folder"] == folder_name]}
+
+    def get_file_metadata(self, item_id: str) -> dict:
+        for f in _FOLDERS:
+            if f["item_id"] == item_id:
+                return _folder_meta(f)
+        for d in _DOCS:
+            if d["doc_ref"] == item_id:
+                return _doc_meta(d)
+        raise ValueError(f"unknown item_id: {item_id}")
+
+    def get_changes(self, since_token: str = "") -> dict:
+        if since_token:
+            # Synthetic data never changes after the initial full sync.
+            return {"items": [], "next_token": since_token}
+        all_items = [_folder_meta(f) for f in _FOLDERS] + [_doc_meta(d) for d in _DOCS]
+        return {"items": all_items, "next_token": "syn-all-v1"}
+
+    def check_access(self, item_id: str) -> dict:
+        for f in _FOLDERS:
+            if f["item_id"] == item_id:
+                return {"accessible": True, "reason": ""}
+        for d in _DOCS:
+            if d["doc_ref"] == item_id:
+                return {"accessible": True, "reason": ""}
+        return {"accessible": False, "reason": "item not found in synthetic dataset"}
+
+    def get_source_url(self, item_id: str) -> str:
+        for f in _FOLDERS:
+            if f["item_id"] == item_id:
+                return f"https://example.com/drive/folders/{item_id}"
+        for d in _DOCS:
+            if d["doc_ref"] == item_id:
+                return f"https://example.com/drive/file/{item_id}"
+        raise ValueError(f"unknown item_id: {item_id}")
