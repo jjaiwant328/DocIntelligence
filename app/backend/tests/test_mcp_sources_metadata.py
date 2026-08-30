@@ -111,3 +111,30 @@ def test_get_source_url_extracts_from_dict(monkeypatch):
 
     result = asyncio.run(mcp_sources.get_source_url("gdrive", "abc123"))
     assert result == "https://drive.google.com/file/d/abc123"
+
+
+def test_get_source_url_extracts_webviewlink(monkeypatch):
+    """Google Drive returns webViewLink — must be recognised."""
+    fake = _FakeCall({"webViewLink": "https://docs.google.com/file/d/abc"})
+    monkeypatch.setattr(mcp_sources, "_call", fake)
+
+    result = asyncio.run(mcp_sources.get_source_url("gdrive", "abc"))
+    assert result == "https://docs.google.com/file/d/abc"
+
+
+def test_get_source_url_returns_empty_for_missing_key(monkeypatch):
+    """Dict with no URL-like key must return '' not the string 'None'."""
+    fake = _FakeCall({"some_other_key": "not_a_url"})
+    monkeypatch.setattr(mcp_sources, "_call", fake)
+
+    result = asyncio.run(mcp_sources.get_source_url("gdrive", "x"))
+    assert result == "", f"expected empty string, got {result!r}"
+
+
+def test_get_source_url_none_payload_returns_empty(monkeypatch):
+    """None payload must return '' not 'None'."""
+    fake = _FakeCall(None)
+    monkeypatch.setattr(mcp_sources, "_call", fake)
+
+    result = asyncio.run(mcp_sources.get_source_url("gdrive", "x"))
+    assert result == "", f"expected empty string, got {result!r}"

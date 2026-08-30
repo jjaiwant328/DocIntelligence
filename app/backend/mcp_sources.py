@@ -121,10 +121,19 @@ async def check_access(source: str, item_id: str) -> dict:
 
 
 async def get_source_url(source: str, item_id: str) -> str:
-    """Return the external web URL for an item."""
+    """Return the external web URL for an item.
+
+    Checks the most common key names across sources (url, web_url,
+    webViewLink — Google Drive's actual field — and web_view_link).
+    Returns "" (not the string "None") when no URL-like key is present.
+    """
     result = await _call("get_source_url", {"source": source, "item_id": item_id})
     if isinstance(result, str):
         return result
     if isinstance(result, dict):
-        return result.get("url", result.get("web_url", ""))
-    return str(result)
+        for key in ("url", "web_url", "webViewLink", "web_view_link"):
+            val = result.get(key)
+            if val:
+                return val
+        return ""
+    return ""
