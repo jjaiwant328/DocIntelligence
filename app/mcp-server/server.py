@@ -22,7 +22,7 @@ from mcp.server.fastmcp import FastMCP
 
 from connectors import base as registry
 from connectors.gdrive import GoogleDriveConnector
-from oauth import GoogleOAuth
+from oauth import GoogleOAuth, ProviderOAuth
 
 _oauth = GoogleOAuth()
 registry.register(GoogleDriveConnector(_oauth))
@@ -125,26 +125,54 @@ async def health(_req: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "sources": registry.all_sources()})
 
 
-@mcp.custom_route("/oauth/google/start", methods=["GET"])
-async def oauth_start(request: Request):
-    if not _oauth.configured:
-        return JSONResponse({"error": "Google OAuth is not configured (synthetic mode)."}, status_code=400)
-    return RedirectResponse(_oauth.start_url(state=request.query_params.get("state", "")))
+# ── OAuth route helpers ────────────────────────────────────────────────────────
+async def _oauth_start(request: Request, provider: str):
+    poa = ProviderOAuth(provider)
+    if not poa.configured:
+        return JSONResponse(
+            {"error": f"OAuth for '{provider}' is not configured (synthetic mode)."},
+            status_code=400,
+        )
+    return RedirectResponse(poa.start_url(state=request.query_params.get("state", "")))
 
 
-@mcp.custom_route("/oauth/google/callback", methods=["GET"])
-async def oauth_callback(request: Request):
+async def _oauth_callback(request: Request, provider: str):
     err = request.query_params.get("error")
     if err:
         return JSONResponse({"error": err}, status_code=400)
     code = request.query_params.get("code")
     if not code:
         return JSONResponse({"error": "missing code"}, status_code=400)
+    poa = ProviderOAuth(provider)
     try:
-        _oauth.exchange_code(code)
+        poa.exchange_code(code)
     except Exception as e:
         return JSONResponse({"error": f"token exchange failed: {e}"}, status_code=400)
-    return JSONResponse({"connected": True, "message": "Google Drive connected — you can close this tab."})
+    return JSONResponse({"connected": True, "message": f"{provider} connected — you can close this tab."})
+
+
+# Explicit aliases for /oauth/google/* — delegate with provider="gdrive" so the
+# legacy URL keeps working and the token file matches the connector's singleton.
+@mcp.custom_route("/oauth/google/start", methods=["GET"])
+async def oauth_google_start(request: Request):
+    return await _oauth_start(request, "gdrive")
+
+
+@mcp.custom_route("/oauth/google/callback", methods=["GET"])
+async def oauth_google_callback(request: Request):
+    return await _oauth_callback(request, "gdrive")
+
+
+# Generalized routes for any provider (e.g. /oauth/gdrive/start).
+# Registered after the explicit aliases so Starlette tries the exact paths first.
+@mcp.custom_route("/oauth/{provider}/start", methods=["GET"])
+async def oauth_start(request: Request):
+    return await _oauth_start(request, request.path_params["provider"])
+
+
+@mcp.custom_route("/oauth/{provider}/callback", methods=["GET"])
+async def oauth_callback(request: Request):
+    return await _oauth_callback(request, request.path_params["provider"])
 
 
 # ASGI entrypoint for `uvicorn server:app`.
