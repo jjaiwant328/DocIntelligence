@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
 import type { DomainInfo } from "@/context/DomainContext";
+import ConnectorsPanel from "@/components/ConnectorsPanel";
 
 interface Source {
   source_id:    string;
@@ -329,6 +330,8 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
           Select a project in the toolbar to enable the Crawl action for that project.
         </p>
       )}
+
+      <ConnectorsPanel />
     </div>
   );
 }
