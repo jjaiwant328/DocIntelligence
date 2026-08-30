@@ -17,6 +17,7 @@ from .lakebase import LakebaseUnavailable
 from .repositories import (
     projects_repo, runs_repo, tags_repo,
     sources_repo, use_cases_repo, index_jobs_repo,
+    external_docs_repo, chunks_repo,
 )
 
 _ensured = False
@@ -231,3 +232,62 @@ def finish_index_job(job_id: str, status: str, error_summary: str = "") -> None:
     _ensure()
     with lakebase.connection() as conn:
         index_jobs_repo.finish(conn, job_id, status, error_summary)
+
+
+# ── External documents ────────────────────────────────────────────────────────
+def upsert_doc_metadata(doc: dict) -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        external_docs_repo.upsert_metadata(conn, doc)
+
+
+def list_docs_for_project(domain_id: str, project_id: str,
+                          statuses: Optional[list] = None) -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return external_docs_repo.list_for_project(conn, domain_id, project_id, statuses)
+
+
+def set_doc_status(external_document_id: str, status: str,
+                   last_error: str = "") -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        external_docs_repo.set_status(conn, external_document_id, status, last_error)
+
+
+def mark_doc_indexed(external_document_id: str, index_version: int,
+                     embedding_model: str, etag: str, chunk_count: int) -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        external_docs_repo.mark_indexed(conn, external_document_id, index_version,
+                                        embedding_model, etag, chunk_count)
+
+
+def doc_ids_missing_from(domain_id: str, project_id: str,
+                         seen_ids: set) -> list[str]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return external_docs_repo.ids_missing_from(conn, domain_id, project_id, seen_ids)
+
+
+# ── Chunks ────────────────────────────────────────────────────────────────────
+def replace_chunks(external_document_id: str, chunks: list[dict]) -> int:
+    _ensure()
+    with lakebase.connection() as conn:
+        return chunks_repo.replace_chunks(conn, external_document_id, chunks)
+
+
+def delete_chunks_for_doc(external_document_id: str) -> int:
+    _ensure()
+    with lakebase.connection() as conn:
+        return chunks_repo.delete_for_doc(conn, external_document_id)
+
+
+def hybrid_search(domain_id: str, project_id: str, query_embedding: list,
+                  query_text: str, k: int = 10, folder: str = "",
+                  types: Optional[list] = None) -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return chunks_repo.hybrid_search(conn, domain_id, project_id,
+                                         query_embedding, query_text,
+                                         k=k, folder=folder, types=types)
