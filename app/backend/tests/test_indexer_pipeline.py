@@ -267,3 +267,42 @@ def test_pipeline_discards_content_without_env_flag():
         )
     )
     assert "raw_content" not in result
+
+
+def test_pipeline_scope_doc_does_not_delete_other_docs():
+    """scope='doc' must reindex only the target doc, leaving all others untouched.
+
+    Previously, plan_scope's ids_missing_from({target_id}) would return every
+    other doc in the project as to_delete. The fix bypasses plan_scope entirely
+    for scope='doc' so delete_for_doc is never called for non-target docs.
+    """
+    target_doc  = _make_doc("target_doc", "e1")
+    other_doc_a = _make_doc("other_a",    "e2")
+    other_doc_b = _make_doc("other_b",    "e3")
+
+    docs_repo   = FakeDocsRepo(docs=[target_doc, other_doc_a, other_doc_b])
+    chunks_repo = FakeChunksRepo()
+    jobs_repo   = FakeJobsRepo()
+    deps        = _build_deps(docs_repo, chunks_repo, jobs_repo)
+
+    result = asyncio.run(
+        pipeline.run_index_job(
+            "job5", "src1", "gdrive", "d1", "p1",
+            scope="doc", scope_ref="target_doc",
+            deps=deps, conn=object(),
+        )
+    )
+
+    # Only target_doc was indexed
+    assert result["embedded"] == 1
+    assert result["deleted"]  == 0
+
+    # delete_for_doc must NEVER have been called for the other docs
+    assert "other_a" not in chunks_repo.deleted
+    assert "other_b" not in chunks_repo.deleted
+
+    # And no "deleted" status was written for them
+    deleted_status = {u["doc_id"] for u in docs_repo.status_updates
+                      if u["status"] == "deleted"}
+    assert "other_a" not in deleted_status
+    assert "other_b" not in deleted_status

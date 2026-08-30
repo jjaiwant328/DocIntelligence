@@ -133,7 +133,7 @@ async def run_index_job(
     # ── 1. Start job ──────────────────────────────────────────────────────────
     deps.jobs_repo.start(conn, job_id)
 
-    # ── 2. Crawl (if scope requires it) ───────────────────────────────────────
+    # ── 2. Crawl + diff (scope-dependent) ────────────────────────────────────
     seen_docs: list[dict] = []
 
     if scope in ("project", "folder"):
@@ -152,12 +152,24 @@ async def run_index_job(
         # Get the actual metadata rows from DB (they were upserted by crawl)
         all_docs = deps.docs_repo.list_for_project(conn, domain_id, project_id)
         seen_docs = [d for d in all_docs if d["external_document_id"] in seen_ids_from_crawl]
-    elif scope == "doc":
-        doc = deps.docs_repo.list_for_project(conn, domain_id, project_id)
-        seen_docs = [d for d in doc if d["external_document_id"] == scope_ref]
 
-    # ── 3. Diff: determine what to index and what to delete ──────────────────
-    plan = deps.plan_scope_fn(conn, domain_id, project_id, seen_docs, deps.docs_repo)
+        # ── 3a. Diff: plan for multi-doc scopes ───────────────────────────────
+        plan = deps.plan_scope_fn(conn, domain_id, project_id, seen_docs, deps.docs_repo)
+
+    elif scope == "doc":
+        # Single-document reindex: bypass plan_scope entirely.
+        # plan_scope would call ids_missing_from({scope_ref}) and mark every
+        # OTHER document in the project as deleted — which is wrong for a
+        # targeted single-doc operation.
+        all_project_docs = deps.docs_repo.list_for_project(conn, domain_id, project_id)
+        seen_docs = [d for d in all_project_docs
+                     if d["external_document_id"] == scope_ref]
+        plan = {"to_index": [scope_ref], "to_delete": [], "skipped": 0}
+
+    else:
+        plan = {"to_index": [], "to_delete": [], "skipped": 0}
+
+    # ── 3b. Extract plan components ───────────────────────────────────────────
     to_index  = plan["to_index"]
     to_delete = plan["to_delete"]
     counters["skipped"] = plan.get("skipped", 0)
