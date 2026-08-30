@@ -95,3 +95,36 @@ async def list_documents(source: str, folder: str = "", query: str = "") -> Any:
 
 async def fetch_document(source: str, doc_ref: str) -> Any:
     return await _call("fetch_document", {"source": source, "doc_ref": doc_ref})
+
+
+# ── Metadata tools (Phase 2) ──────────────────────────────────────────────────
+
+async def list_children(source: str, folder_id: str = "") -> list:
+    """List immediate children (files + sub-folders) of a folder."""
+    result = await _call("list_children", {"source": source, "folder_id": folder_id})
+    return _as_list(result)
+
+
+async def get_file_metadata(source: str, item_id: str) -> dict:
+    """Return metadata for a single file/folder by its item_id."""
+    return await _call("get_file_metadata", {"source": source, "item_id": item_id})
+
+
+async def get_changes(source: str, since_token: str = "") -> dict:
+    """Return items changed since *since_token*. Result: {items, next_token}."""
+    return await _call("get_changes", {"source": source, "since_token": since_token})
+
+
+async def check_access(source: str, item_id: str) -> dict:
+    """Check whether the service account can read/download an item."""
+    return await _call("check_access", {"source": source, "item_id": item_id})
+
+
+async def get_source_url(source: str, item_id: str) -> str:
+    """Return the external web URL for an item."""
+    result = await _call("get_source_url", {"source": source, "item_id": item_id})
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        return result.get("url", result.get("web_url", ""))
+    return str(result)
