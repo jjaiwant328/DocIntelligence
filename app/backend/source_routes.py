@@ -83,7 +83,22 @@ def register_source(req: SourceRegisterRequest):
         req.source_id, req.provider, req.display_name,
         req.auth_mode, cred, req.site, req.mode,
     )
-    return {"source": row}
+    return {"source": _strip_credential(row)}
+
+
+# Fields safe to return to the frontend — credential_ref (may hold a
+# keeper:// reference) is deliberately excluded, matching GET /api/sources.
+_SOURCE_PUBLIC_FIELDS = (
+    "source_id", "provider", "display_name", "auth_mode", "site",
+    "status", "mode", "last_crawl_at", "last_error", "created_at",
+)
+
+
+def _strip_credential(row: Optional[dict]) -> Optional[dict]:
+    """Project a source row down to the public fields, dropping credential_ref."""
+    if not row:
+        return row
+    return {k: row[k] for k in _SOURCE_PUBLIC_FIELDS if k in row}
 
 
 @router.get("/sources/{source_id}/auth-url")

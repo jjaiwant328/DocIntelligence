@@ -9,12 +9,24 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ["LAKEBASE_ENABLED"] = "true"
 os.environ["LAKEBASE_HOST"] = "fake-host"
 
 from db import lakebase  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _lakebase_env(monkeypatch):
+    """Make these tests order-independent. LAKEBASE_HOST is baked into a module
+    global at db.lakebase import time — if another test module imported it first
+    (env unset), that global is "" and get_pool() raises. Set it directly, and
+    keep LAKEBASE_ENABLED truthy (read at call time). monkeypatch auto-restores."""
+    monkeypatch.setenv("LAKEBASE_ENABLED", "true")
+    monkeypatch.setattr(lakebase, "LAKEBASE_HOST", "fake-host")
 
 
 class FakePool:

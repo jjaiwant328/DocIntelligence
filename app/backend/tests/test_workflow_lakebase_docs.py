@@ -48,7 +48,7 @@ def _patch_common(monkeypatch, engine):
     fake_routes.run_sql = lambda q, timeout_secs=50: []
     fake_routes.CATALOG = "test_catalog"
     fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw_schema"}
-    sys.modules["docintel_routes"] = fake_routes
+    monkeypatch.setitem(sys.modules, "docintel_routes", fake_routes)
     return fake_routes
 
 

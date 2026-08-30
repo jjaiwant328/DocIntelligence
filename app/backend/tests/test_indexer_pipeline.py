@@ -121,11 +121,16 @@ def _build_deps(docs_repo, chunks_repo, jobs_repo, *, fetch_fn=None,
 
 # ── Test: 3-file scenario ─────────────────────────────────────────────────────
 
-def _make_doc(doc_id, etag, status="indexed"):
+def _make_doc(doc_id, etag, status="indexed", last_indexed_etag=None):
+    # An indexed doc's last-indexed fingerprint equals its etag unless the
+    # caller models a source etag that has since advanced.
+    if last_indexed_etag is None:
+        last_indexed_etag = etag if status == "indexed" else ""
     return {"external_document_id": doc_id, "etag": etag,
             "content_hash": "", "status": status,
+            "last_indexed_etag": last_indexed_etag,
             "source_id": "src1", "name": f"{doc_id}.txt",
-            "path": f"/{doc_id}.txt"}
+            "path": f"/{doc_id}.txt", "source_item_id": doc_id}
 
 
 def test_pipeline_unchanged_changed_deleted():
@@ -248,10 +253,9 @@ def test_pipeline_per_file_error_continues():
     assert any(u["doc_id"] == "broken_doc" for u in failed_updates)
 
 
-def test_pipeline_discards_content_without_env_flag():
+def test_pipeline_discards_content_without_env_flag(monkeypatch):
     """Content bytes must not be retained after embedding (no INDEX_RETAIN_RAW)."""
-    import os as _os
-    _os.environ.pop("INDEX_RETAIN_RAW", None)
+    monkeypatch.delenv("INDEX_RETAIN_RAW", raising=False)
 
     docs_repo = FakeDocsRepo(docs=[_make_doc("doc_x", "e1")])
     chunks_repo = FakeChunksRepo()

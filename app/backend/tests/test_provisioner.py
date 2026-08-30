@@ -4,10 +4,19 @@ Run: cd app/backend && ../../.venv-test/bin/python tests/test_provisioner.py
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.pop("LAKEBASE_ENABLED", None)  # so create_project no-ops (fallback)
 
 from provisioner import loader, provision  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_lakebase(monkeypatch):
+    """create_project no-ops (Lakebase fallback) during provisioner tests.
+    Scoped + auto-restored so it never leaks LAKEBASE_ENABLED to other modules
+    (test_lakebase sets it truthy at import and must keep it)."""
+    monkeypatch.delenv("LAKEBASE_ENABLED", raising=False)
 
 
 class FakeSQL:

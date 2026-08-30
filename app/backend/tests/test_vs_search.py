@@ -62,12 +62,20 @@ def _install_stubs():
 
 
 def _load_module():
+    before = set(sys.modules)
     _install_stubs()
+    added = set(sys.modules) - before  # only the stubs WE just injected
     here = os.path.dirname(os.path.abspath(__file__))
     mod_path = os.path.join(here, "..", "docintel_routes.py")
     spec = importlib.util.spec_from_file_location("docintel_routes", mod_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # docintel_routes has now bound the names it needs (WorkspaceClient,
+    # StatementState, APIRouter, BaseModel). Remove only the stubs we added so
+    # they don't leak into other test modules — e.g. test_provisioner imports
+    # the REAL databricks.sdk.service.jobs, which our fake (no __path__) shadows.
+    for name in added:
+        sys.modules.pop(name, None)
     return mod
 
 

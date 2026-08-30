@@ -106,10 +106,9 @@ def test_embed_texts_empty_list_returns_empty():
     assert result == []
 
 
-def test_embed_texts_default_model_is_gte():
+def test_embed_texts_default_model_is_gte(monkeypatch):
     """Default model env var default is databricks-gte-large-en."""
-    import os as _os
-    _os.environ.pop("EMBED_MODEL", None)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
     client = FakeClient()
     embed.embed_texts(["test"], client=client)
     assert client.serving_endpoints.calls[0]["name"] == "databricks-gte-large-en"
@@ -129,29 +128,17 @@ def test_embed_texts_wrong_dim_raises_value_error():
         embed.embed_texts(["hello"], client=bad_client)
 
 
-def test_embed_texts_batches_large_input():
+def test_embed_texts_batches_large_input(monkeypatch):
     """Texts exceeding EMBED_BATCH are split into multiple endpoint calls."""
-    import os as _os
-    original = _os.environ.get("EMBED_BATCH")
-    _os.environ["EMBED_BATCH"] = "3"
-    try:
-        # Reload the module constants by calling with fresh env
-        # (EMBED_BATCH is read at module import, so we test via call count)
-        client = FakeClient()
-        # 7 texts with batch size 3 → ceil(7/3) = 3 calls
-        texts = [f"text{i}" for i in range(7)]
-        # Use batch size via the constant; we need 3 separate queries
-        # Because EMBED_BATCH is a module-level constant read at import,
-        # directly call with a mock that counts how many calls were made.
-        # The fake records every .query() call:
-        result = embed.embed_texts(texts, client=client)
-        # All 7 inputs must produce 7 vectors
-        assert len(result) == 7
-    finally:
-        if original is None:
-            _os.environ.pop("EMBED_BATCH", None)
-        else:
-            _os.environ["EMBED_BATCH"] = original
+    # embed_texts reads the module-level EMBED_BATCH at call time, so patching
+    # it here actually changes the batch size (monkeypatch auto-restores).
+    monkeypatch.setattr(embed, "EMBED_BATCH", 3)
+    client = FakeClient()
+    # 7 texts with batch size 3 → ceil(7/3) = 3 endpoint calls.
+    texts = [f"text{i}" for i in range(7)]
+    result = embed.embed_texts(texts, client=client)
+    assert len(result) == 7
+    assert len(client.serving_endpoints.calls) == 3
 
 
 def test_embed_texts_response_data_shape():
