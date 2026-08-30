@@ -91,6 +91,17 @@ except Exception as _e:
     _sources_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Source routes not loaded: {_sources_load_error}")
 
+# Register Connector credential-config routes
+_connectors_load_error: str | None = None
+try:
+    from connector_routes import router as connector_router
+    app.include_router(connector_router)
+    print("✅ Connector routes registered at /api/connectors")
+except Exception as _e:
+    import traceback as _tb
+    _connectors_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Connector routes not loaded: {_connectors_load_error}")
+
 # Mount the in-app MCP server (headless tools) at /mcp/ — makes DocIntelligence's
 # capabilities callable by any MCP client. Must run before the catch-all route.
 _mcp_load_error: str | None = None
