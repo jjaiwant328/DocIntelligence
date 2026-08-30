@@ -1,14 +1,15 @@
 """Source registration, crawl trigger, inventory, index-jobs, and search routes.
 
-  GET  /api/sources                          list registered sources
-  POST /api/sources                          register a source (validates credential_ref)
-  GET  /api/sources/{id}/auth-url            OAuth start URL for a source
-  POST /api/sources/{id}/crawl               trigger a metadata crawl (no content copy)
-  GET  /api/inventory?domain_id=&project_id= list external documents for a project
-  POST /api/index-jobs                       create + launch an index job (background)
-  GET  /api/index-jobs/{job_id}              get a single index job
-  GET  /api/index-jobs?domain_id=&project_id= list index jobs for a project
-  POST /api/search                           hybrid vector+FTS search
+  GET   /api/sources                              list registered sources
+  POST  /api/sources                              register a source (validates credential_ref)
+  GET   /api/sources/{id}/auth-url                OAuth start URL for a source
+  POST  /api/sources/{id}/crawl                   trigger a metadata crawl (no content copy)
+  GET   /api/inventory?domain_id=&project_id=     list external documents for a project
+  PATCH /api/documents/{external_document_id}/included  persist inclusion flag
+  POST  /api/index-jobs                           create + launch an index job (background)
+  GET   /api/index-jobs/{job_id}                  get a single index job
+  GET   /api/index-jobs?domain_id=&project_id=    list index jobs for a project
+  POST  /api/search                               hybrid vector+FTS search
 """
 from __future__ import annotations
 
@@ -135,6 +136,23 @@ def inventory(domain_id: str = "", project_id: str = ""):
         "total": len(rows),
         "status_counts": status_counts,
     }
+
+
+# ── Document inclusion toggle ──────────────────────────────────────────────────
+
+class IncludedRequest(BaseModel):
+    included: bool
+
+
+@router.patch("/documents/{external_document_id}/included")
+def set_included(external_document_id: str, req: IncludedRequest):
+    """Persist the inclusion flag for a single document.
+
+    The indexer reads *included* at run time; setting it to False before a
+    Build/Refresh run prevents the document from being (re-)indexed.
+    """
+    opstore.set_doc_included(external_document_id, req.included)
+    return {"external_document_id": external_document_id, "included": req.included}
 
 
 # ── Index-job routes ───────────────────────────────────────────────────────────

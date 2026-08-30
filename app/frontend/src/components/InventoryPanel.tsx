@@ -39,17 +39,22 @@ const STATUS_CHIP: Record<string, string> = {
   deleted:          "bg-red-50 text-red-400",
 };
 
+// Cap live polling at 10 minutes (600 polls × 1 s interval) to prevent
+// infinite loops if the background worker dies without calling finish().
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
 function jobStatusColor(status: string) {
   if (status === "done")    return "text-green-600";
   if (status === "failed")  return "text-red-600";
   if (status === "running") return "text-blue-600";
+  if (status === "timeout") return "text-amber-600";
   return "text-gray-500";
 }
 
 function formatSize(bytes: number) {
   if (!bytes) return "—";
-  if (bytes < 1024)             return `${bytes} B`;
-  if (bytes < 1024 * 1024)      return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024)            return `${bytes} B`;
+  if (bytes < 1024 * 1024)     return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -60,14 +65,15 @@ export function InventoryPanel({
   domainId: string;
   projectId: string;
 }) {
-  const [docs,         setDocs]         = useState<ExternalDoc[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [msg,          setMsg]          = useState<string | null>(null);
-  const [activeJob,    setActiveJob]    = useState<IndexJob | null>(null);
-  const [submitting,   setSubmitting]   = useState(false);
-  const [included,     setIncluded]     = useState<Record<string, boolean>>({});
-  const [selSource,    setSelSource]    = useState("");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [docs,       setDocs]       = useState<ExternalDoc[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [msg,        setMsg]        = useState<string | null>(null);
+  const [activeJob,  setActiveJob]  = useState<IndexJob | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [included,   setIncluded]   = useState<Record<string, boolean>>({});
+  const [selSource,  setSelSource]  = useState("");
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number>(0);
 
   const fetchInventory = useCallback(async () => {
     if (!domainId || !projectId) { setLoading(false); return; }
@@ -95,20 +101,45 @@ export function InventoryPanel({
     if (pollRef.current) clearInterval(pollRef.current);
   }, []);
 
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }
+
   function startPolling(jobId: string) {
-    if (pollRef.current) clearInterval(pollRef.current);
+    stopPolling();
+    pollStartRef.current = Date.now();
     pollRef.current = setInterval(async () => {
+      // Ceiling: stop after POLL_TIMEOUT_MS regardless of job state
+      if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
+        stopPolling();
+        setActiveJob(prev => prev ? { ...prev, status: "timeout" } : prev);
+        return;
+      }
       try {
         const r = await apiCall<{ job: IndexJob }>(`/api/index-jobs/${jobId}`);
         const job = r.job;
         setActiveJob(job);
         if (job.status === "done" || job.status === "failed") {
-          clearInterval(pollRef.current!);
-          pollRef.current = null;
+          stopPolling();
           fetchInventory();
         }
       } catch { /* ignore transient poll errors */ }
     }, 2000);
+  }
+
+  // Persist inclusion toggle: optimistic update, revert on error
+  async function toggleIncluded(docId: string, newVal: boolean) {
+    setIncluded(prev => ({ ...prev, [docId]: newVal }));
+    try {
+      await apiCall(`/api/documents/${encodeURIComponent(docId)}/included`, {
+        method: "PATCH",
+        body: JSON.stringify({ included: newVal }),
+      });
+    } catch (e) {
+      // Revert on failure
+      setIncluded(prev => ({ ...prev, [docId]: !newVal }));
+      setMsg(`Failed to save inclusion change: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   const sourceIds = Array.from(new Set(docs.map(d => d.source_id).filter(Boolean)));
@@ -147,14 +178,15 @@ export function InventoryPanel({
     }
   }
 
-  const jobRunning = !!activeJob && (activeJob.status === "queued" || activeJob.status === "running");
-  const progress   = activeJob?.discovered
+  const jobRunning = !!activeJob &&
+    (activeJob.status === "queued" || activeJob.status === "running");
+  const progress = activeJob?.discovered
     ? Math.min(100, (activeJob.embedded / activeJob.discovered) * 100)
     : 0;
 
   return (
     <div>
-      {/* Index job bar */}
+      {/* Index job controls */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {sourceIds.length > 1 && (
           <select
@@ -194,7 +226,7 @@ export function InventoryPanel({
               <span className="font-mono text-xs">{activeJob.job_id.slice(0, 8)}…</span>
             </span>
             <span className={`text-xs font-bold uppercase ${jobStatusColor(activeJob.status)}`}>
-              {activeJob.status}
+              {activeJob.status === "timeout" ? "timed out" : activeJob.status}
             </span>
           </div>
           {activeJob.status === "running" && (
@@ -204,6 +236,12 @@ export function InventoryPanel({
                 style={{ width: `${progress}%` }}
               />
             </div>
+          )}
+          {activeJob.status === "timeout" && (
+            <p className="text-xs text-amber-700 mb-2">
+              Polling stopped after 10 min. The job may still be running in the background.
+              Refresh the inventory manually to see its result.
+            </p>
           )}
           <div className="flex gap-4 text-xs text-blue-700">
             <span>Discovered <strong>{activeJob.discovered}</strong></span>
@@ -246,7 +284,7 @@ export function InventoryPanel({
             {docs.map((doc, i) => {
               const chipClass = STATUS_CHIP[doc.status] ?? STATUS_CHIP.discovered;
               const isIncluded = included[doc.external_document_id] ?? doc.included;
-              const mimeShort = doc.mime_type ? doc.mime_type.split("/").pop() ?? "—" : "—";
+              const mimeShort  = doc.mime_type ? doc.mime_type.split("/").pop() ?? "—" : "—";
               return (
                 <div
                   key={doc.external_document_id}
@@ -258,12 +296,7 @@ export function InventoryPanel({
                     <input
                       type="checkbox"
                       checked={isIncluded}
-                      onChange={e =>
-                        setIncluded(prev => ({
-                          ...prev,
-                          [doc.external_document_id]: e.target.checked,
-                        }))
-                      }
+                      onChange={e => toggleIncluded(doc.external_document_id, e.target.checked)}
                       className="cursor-pointer"
                       title="Include in index"
                     />
@@ -295,9 +328,7 @@ export function InventoryPanel({
                     {formatSize(doc.size_bytes)}
                   </span>
                   <span className="col-span-2">
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${chipClass}`}
-                    >
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${chipClass}`}>
                       {doc.status}
                     </span>
                     {doc.last_error && (
@@ -317,11 +348,8 @@ export function InventoryPanel({
             })}
           </div>
 
-          <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between text-[10px] text-gray-400">
-            <span>
-              {docs.length} document{docs.length !== 1 ? "s" : ""}
-            </span>
-            <span className="italic">Inclusion changes are local-only until persisted.</span>
+          <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-[10px] text-gray-400">
+            {docs.length} document{docs.length !== 1 ? "s" : ""}
           </div>
         </div>
       )}

@@ -255,6 +255,12 @@ def set_doc_status(external_document_id: str, status: str,
         external_docs_repo.set_status(conn, external_document_id, status, last_error)
 
 
+def set_doc_included(external_document_id: str, included: bool) -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        external_docs_repo.set_included(conn, external_document_id, included)
+
+
 def mark_doc_indexed(external_document_id: str, index_version: int,
                      embedding_model: str, etag: str, chunk_count: int) -> None:
     _ensure()

@@ -396,6 +396,43 @@ def test_post_search_returns_results(monkeypatch):
     assert resp.json()["results"] == results
 
 
+# ── PATCH /api/documents/{external_document_id}/included ─────────────────────
+
+def test_patch_included_calls_set_doc_included(monkeypatch):
+    """PATCH must delegate to opstore.set_doc_included with the correct args."""
+    calls: list[tuple] = []
+
+    def _fake_set_included(doc_id: str, included: bool) -> None:
+        calls.append((doc_id, included))
+
+    monkeypatch.setattr(source_routes.opstore, "set_doc_included", _fake_set_included)
+    client = _make_client()
+
+    resp = client.patch(
+        "/api/documents/doc-abc-123/included",
+        json={"included": False},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["external_document_id"] == "doc-abc-123"
+    assert data["included"] is False
+    assert calls == [("doc-abc-123", False)], (
+        f"set_doc_included called with {calls!r}; expected [('doc-abc-123', False)]"
+    )
+
+
+def test_patch_included_true(monkeypatch):
+    """Toggling to True also round-trips correctly."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(source_routes.opstore, "set_doc_included",
+                        lambda doc_id, included: calls.append((doc_id, included)))
+    client = _make_client()
+    resp = client.patch("/api/documents/doc-xyz/included", json={"included": True})
+    assert resp.status_code == 200
+    assert resp.json()["included"] is True
+    assert calls == [("doc-xyz", True)]
+
+
 def test_post_search_passes_optional_params(monkeypatch):
     calls: list[dict] = []
 

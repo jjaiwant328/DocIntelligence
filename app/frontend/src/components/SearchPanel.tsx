@@ -152,7 +152,7 @@ export function SearchPanel({
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <span className="text-[10px] text-gray-400 font-mono">
-                    {r.score.toFixed(3)}
+                    {r.score?.toFixed(3) ?? "—"}
                   </span>
                   <button
                     onClick={() => setWhyId(whyId === r.chunk_id ? null : r.chunk_id)}

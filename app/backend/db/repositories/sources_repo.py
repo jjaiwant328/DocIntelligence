@@ -11,8 +11,14 @@ def _dicts(cur: Any) -> list[dict]:
 
 
 def list_sources(conn: Any) -> list[dict]:
+    """Return all sources WITHOUT credential_ref — that field must never travel
+    over the wire to the frontend (it may hold a keeper:// reference)."""
     cur = conn.cursor()
-    cur.execute("SELECT * FROM sources ORDER BY created_at")
+    cur.execute(
+        "SELECT source_id, provider, display_name, auth_mode, site, status, "
+        "mode, last_crawl_at, last_error, created_at "
+        "FROM sources ORDER BY created_at"
+    )
     return _dicts(cur)
 
 

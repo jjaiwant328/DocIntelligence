@@ -106,6 +106,20 @@ def set_status(
     )
 
 
+def set_included(
+    conn: Any,
+    external_document_id: str,
+    included: bool,
+) -> None:
+    """Persist the inclusion flag for a document (controls whether it is
+    picked up by the indexer on the next Build/Refresh run)."""
+    conn.execute(
+        "UPDATE external_documents SET included=%s, updated_at=now() "
+        "WHERE external_document_id=%s",
+        (included, external_document_id),
+    )
+
+
 def mark_indexed(
     conn: Any,
     external_document_id: str,
