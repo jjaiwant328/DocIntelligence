@@ -57,4 +57,9 @@ env:
 # Streamable HTTP endpoint. Leave empty to disable the "Import from a source" UI.
 - name: DOCINTEL_MCP_SOURCES_URL
   value: "https://docintel-sources-4101016551133680.0.azure.databricksapps.com"
+# ── Connector-first indexing: embedding model for pgvector hybrid search ──────
+- name: EMBED_MODEL
+  value: databricks-gte-large-en
+- name: EMBED_DIM
+  value: "1024"
 runtime: python_3.10
