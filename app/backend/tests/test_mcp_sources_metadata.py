@@ -41,6 +41,20 @@ def test_list_children_tool_and_args(monkeypatch):
     assert result == items
 
 
+def test_list_children_unwraps_items_dict(monkeypatch):
+    # The real sources server returns {"items": [...]} (NOT {"sources": [...]}).
+    # list_children must unwrap "items"; a regression here silently yields [] and
+    # the crawler discovers nothing.
+    items = [
+        {"item_id": "f1", "name": "FolderA", "is_folder": True},
+        {"item_id": "i1", "name": "report.pdf", "is_folder": False},
+    ]
+    fake = _FakeCall({"items": items})
+    monkeypatch.setattr(mcp_sources, "_call", fake)
+    result = asyncio.run(mcp_sources.list_children("gdrive", "root123"))
+    assert result == items
+
+
 def test_list_children_default_folder_id(monkeypatch):
     fake = _FakeCall([])
     monkeypatch.setattr(mcp_sources, "_call", fake)

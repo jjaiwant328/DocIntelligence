@@ -100,9 +100,18 @@ async def fetch_document(source: str, doc_ref: str) -> Any:
 # ── Metadata tools (Phase 2) ──────────────────────────────────────────────────
 
 async def list_children(source: str, folder_id: str = "") -> list:
-    """List immediate children (files + sub-folders) of a folder."""
+    """List immediate children (files + sub-folders) of a folder.
+
+    The sources server returns ``{"items": [...]}`` for this tool (unlike
+    ``list_sources`` which returns ``{"sources": [...]}``), so unwrap ``items``
+    here rather than via ``_as_list``.
+    """
     result = await _call("list_children", {"source": source, "folder_id": folder_id})
-    return _as_list(result)
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        return result.get("items", []) or []
+    return []
 
 
 async def get_file_metadata(source: str, item_id: str) -> dict:
