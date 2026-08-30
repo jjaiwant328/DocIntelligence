@@ -20,6 +20,14 @@ def classify(existing: Optional[dict], seen: Optional[dict]) -> str:
 
     Returns:
         One of: "new" | "changed" | "unchanged" | "deleted" | "inaccessible"
+
+    Change detection compares the *last indexed* fingerprint against the
+    *current* source etag — never the crawl-overwritten etag against itself.
+    A crawl upserts ``etag`` to the current source value, so the only durable
+    record of what was actually indexed is ``last_indexed_etag`` (set by
+    ``mark_indexed``). A doc is "changed" (→ re-index) when it has never been
+    indexed (``status != 'indexed'`` or empty ``last_indexed_etag``) or when
+    its ``last_indexed_etag`` no longer matches the current ``etag``.
     """
     if existing is None and seen is None:
         return "inaccessible"
@@ -32,22 +40,16 @@ def classify(existing: Optional[dict], seen: Optional[dict]) -> str:
         # In DB but cannot be retrieved from the source
         return "deleted"
 
-    # Both present — compare fingerprints.
-    # Etag is the primary signal (provider-supplied); content_hash is secondary.
-    etag_existing = existing.get("etag") or ""
-    etag_seen     = seen.get("etag") or ""
+    # Both present. The DB row carries the last-indexed fingerprint and status;
+    # the current source etag comes from the crawl (either dict — in production
+    # they are the same freshly-upserted row).
+    status       = existing.get("status") or ""
+    last_indexed = existing.get("last_indexed_etag") or ""
+    current_etag = seen.get("etag") or existing.get("etag") or ""
 
-    if etag_existing and etag_existing == etag_seen:
-        return "unchanged"
-
-    # If both have no etag, fall back to content_hash
-    if not etag_existing and not etag_seen:
-        hash_existing = existing.get("content_hash") or ""
-        hash_seen     = seen.get("content_hash") or ""
-        if hash_existing and hash_existing == hash_seen:
-            return "unchanged"
-
-    return "changed"
+    if status != "indexed" or not last_indexed or last_indexed != current_etag:
+        return "changed"
+    return "unchanged"
 
 
 def plan_scope(
@@ -93,6 +95,12 @@ def plan_scope(
         action   = classify(existing, seen)
 
         if action in ("new", "changed"):
+            # Respect the inclusion toggle — a doc the user excluded is never
+            # (re-)indexed, even when its content changed. included defaults
+            # True when absent so pre-toggle docs still index.
+            row = existing or seen
+            if row.get("included", True) is False:
+                continue
             to_index.append(doc_id)
         elif action == "unchanged":
             skipped += 1

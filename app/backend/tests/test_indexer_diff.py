@@ -18,21 +18,24 @@ def test_classify_new_when_existing_is_none():
     assert diff.classify(None, seen) == "new"
 
 
-def test_classify_unchanged_when_etag_matches():
-    existing = {"etag": "abc", "content_hash": ""}
-    seen = {"etag": "abc", "content_hash": ""}
+def test_classify_unchanged_when_last_indexed_matches_current_etag():
+    """Indexed doc whose last-indexed fingerprint equals the current etag."""
+    existing = {"status": "indexed", "last_indexed_etag": "abc", "etag": "abc"}
+    seen = {"etag": "abc"}
     assert diff.classify(existing, seen) == "unchanged"
 
 
-def test_classify_unchanged_when_content_hash_matches_etag_empty():
-    existing = {"etag": "", "content_hash": "sha256:xyz"}
-    seen = {"etag": "", "content_hash": "sha256:xyz"}
-    assert diff.classify(existing, seen) == "unchanged"
+def test_classify_changed_when_never_indexed():
+    """A row in the DB that was never successfully indexed (empty
+    last_indexed_etag / status != indexed) must re-index, not skip."""
+    existing = {"status": "discovered", "last_indexed_etag": "", "etag": "abc"}
+    seen = {"etag": "abc"}
+    assert diff.classify(existing, seen) == "changed"
 
 
 def test_classify_changed_when_etag_differs():
-    existing = {"etag": "old", "content_hash": ""}
-    seen = {"etag": "new", "content_hash": ""}
+    existing = {"status": "indexed", "last_indexed_etag": "old", "etag": "old"}
+    seen = {"etag": "new"}
     assert diff.classify(existing, seen) == "changed"
 
 
@@ -53,9 +56,10 @@ def test_classify_new_when_etag_empty_and_not_in_db():
     assert diff.classify(None, seen) == "new"
 
 
-def test_classify_unchanged_when_etag_matches_regardless_of_hash():
-    """etag match takes precedence: same etag → unchanged, even if content_hash differs."""
-    existing = {"etag": "same", "content_hash": "old-hash"}
+def test_classify_unchanged_when_last_indexed_matches_regardless_of_hash():
+    """last_indexed_etag == current etag → unchanged, regardless of content_hash."""
+    existing = {"status": "indexed", "last_indexed_etag": "same",
+                "etag": "same", "content_hash": "old-hash"}
     seen = {"etag": "same", "content_hash": "new-hash"}
     assert diff.classify(existing, seen) == "unchanged"
 
@@ -92,9 +96,14 @@ class FakeRepo:
         ]
 
 
-def _doc(doc_id: str, etag: str, status: str = "indexed") -> dict:
+def _doc(doc_id: str, etag: str, status: str = "indexed",
+         last_indexed_etag=None) -> dict:
+    # A doc indexed at its current etag has last_indexed_etag == etag; callers
+    # override to model a doc whose source etag has since advanced.
+    if last_indexed_etag is None:
+        last_indexed_etag = etag if status == "indexed" else ""
     return {"external_document_id": doc_id, "etag": etag, "content_hash": "",
-            "status": status}
+            "status": status, "last_indexed_etag": last_indexed_etag}
 
 
 def test_plan_scope_new_doc_goes_to_index():
