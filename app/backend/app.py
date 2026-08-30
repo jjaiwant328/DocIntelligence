@@ -126,6 +126,8 @@ def health_check():
         "platform_error": _platform_load_error,
         "mcp_server": "mounted" if _mcp_load_error is None else "FAILED",
         "mcp_error": _mcp_load_error,
+        "source_routes": "loaded" if _sources_load_error is None else "FAILED",
+        "source_error": _sources_load_error,
     }
 
 # Pydantic models

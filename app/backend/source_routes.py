@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import mcp_sources
+from db import lakebase
 from db import operational as opstore
 
 router = APIRouter(prefix="/api", tags=["Sources"])
@@ -88,16 +89,23 @@ def get_auth_url(source_id: str):
 async def crawl_source_route(source_id: str, req: CrawlRequest):
     """Trigger a metadata crawl for *source_id*.
 
+    Looks up the registered source to get its canonical provider (e.g.
+    "gdrive"), opens a Lakebase connection, then runs the metadata walk.
     Recursively lists folders and upserts one metadata row per file — no
     content is copied. Returns the counts from the walk.
     """
-    result = await _crawl_source(
-        source_id=source_id,
-        provider=source_id,
-        domain_id=req.domain_id,
-        project_id=req.project_id,
-        root_folder=req.root_folder,
-    )
+    row = opstore.get_source(source_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"source '{source_id}' not found")
+    with lakebase.connection() as conn:
+        result = await _crawl_source(
+            source_id=source_id,
+            provider=row["provider"],
+            domain_id=req.domain_id,
+            project_id=req.project_id,
+            root_folder=req.root_folder,
+            conn=conn,
+        )
     return {
         "source_id": source_id,
         "discovered": result["discovered"],

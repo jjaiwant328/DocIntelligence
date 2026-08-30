@@ -6,10 +6,13 @@ Lakebase or MCP server is needed.
 import asyncio
 import os
 import sys
+from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import mcp_sources as _mcp_module
 import source_routes
+from db.repositories import external_docs_repo as _ext_repo
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -124,10 +127,24 @@ def test_get_auth_url_delegates_to_mcp_sources(monkeypatch):
 # ── POST /api/sources/{id}/crawl ──────────────────────────────────────────────
 
 def test_post_crawl_returns_counts(monkeypatch):
+    """High-level contract test: checks response shape when crawl is mocked."""
     async def _fake_crawl(**kwargs):
         return {"discovered": 5, "folders": 2, "seen_ids": {"a", "b", "c", "d", "e"}}
 
+    # The route now looks up the source and opens a connection before calling
+    # _crawl_source; both must be mocked so the test stays fully offline.
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"source_id": sid, "provider": "gdrive",
+                                     "display_name": "Drive", "auth_mode": "",
+                                     "credential_ref": "", "site": "", "mode": "live"})
+
+    @contextmanager
+    def _fake_connection():
+        yield object()
+
+    monkeypatch.setattr(source_routes.lakebase, "connection", _fake_connection)
     monkeypatch.setattr(source_routes, "_crawl_source", _fake_crawl)
+
     client = _make_client()
     resp = client.post("/api/sources/gdrive/crawl", json={
         "domain_id": "d1",
@@ -183,3 +200,70 @@ def test_get_inventory_empty(monkeypatch):
     resp = client.get("/api/inventory?domain_id=d1&project_id=p1")
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
+
+
+# ── POST /api/sources/{id}/crawl — lower-seam tests ──────────────────────────
+
+def test_crawl_route_404_when_source_not_registered(monkeypatch):
+    """Route must return 404 when source_id is not in the operational store."""
+    monkeypatch.setattr(source_routes.opstore, "get_source", lambda sid: None)
+    client = _make_client()
+    resp = client.post("/api/sources/unknown/crawl",
+                       json={"domain_id": "d1", "project_id": "p1"})
+    assert resp.status_code == 404
+
+
+def test_crawl_route_uses_registered_provider_not_source_id(monkeypatch):
+    """Route must look up source.provider from opstore; source_id ≠ provider
+    must never corrupt stable_doc_id by using source_id as the provider."""
+    _SENTINEL_CONN = object()
+
+    @contextmanager
+    def _fake_connection():
+        yield _SENTINEL_CONN
+
+    monkeypatch.setattr(source_routes.lakebase, "connection", _fake_connection)
+    monkeypatch.setattr(
+        source_routes.opstore, "get_source",
+        lambda sid: {"source_id": "my-drive", "provider": "gdrive",
+                     "display_name": "Work Drive", "auth_mode": "",
+                     "credential_ref": "", "site": "", "mode": "live"},
+    )
+
+    # list_children returns one file at the root, no subfolders.
+    async def _fake_list_children(source, folder_id=""):
+        return [{"item_id": "file1", "name": "doc.pdf", "is_folder": False,
+                 "path": "/doc.pdf", "mime_type": "application/pdf",
+                 "size": 100, "web_url": "http://x", "etag": "e1",
+                 "modified_at": None, "owner": ""}]
+
+    monkeypatch.setattr(_mcp_module, "list_children", _fake_list_children)
+
+    # Capture what provider crawl_source passed to stable_doc_id.
+    providers_seen: list[str] = []
+    _orig_stable = _ext_repo.stable_doc_id
+
+    def _recording_stable(provider, site, drive, item_id):
+        providers_seen.append(provider)
+        return _orig_stable(provider, site, drive, item_id)
+
+    monkeypatch.setattr(_ext_repo, "stable_doc_id", _recording_stable)
+
+    upserted: list[dict] = []
+    monkeypatch.setattr(_ext_repo, "upsert_metadata",
+                        lambda conn, doc: upserted.append(doc))
+
+    client = _make_client()
+    resp = client.post("/api/sources/my-drive/crawl",
+                       json={"domain_id": "d1", "project_id": "p1", "root_folder": ""})
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["source_id"] == "my-drive"
+    assert data["discovered"] == 1
+    assert len(upserted) == 1
+    # The provider forwarded to stable_doc_id must be the registered one.
+    assert providers_seen == ["gdrive"], (
+        f"stable_doc_id was called with provider={providers_seen!r}; "
+        "expected ['gdrive'] (the registered provider, not source_id)"
+    )
