@@ -267,3 +267,153 @@ def test_crawl_route_uses_registered_provider_not_source_id(monkeypatch):
         f"stable_doc_id was called with provider={providers_seen!r}; "
         "expected ['gdrive'] (the registered provider, not source_id)"
     )
+
+
+# ── POST /api/index-jobs ──────────────────────────────────────────────────────
+
+def test_post_index_jobs_returns_job_id(monkeypatch):
+    """POST /api/index-jobs must create a job row and return {job_id}."""
+    monkeypatch.setattr(source_routes.opstore, "create_index_job",
+                        lambda *a, **k: None)
+
+    # Monkeypatch the background task executor so it doesn't hit Lakebase
+    bg_calls: list[dict] = []
+
+    def _fake_bg_task(*args, **kwargs):
+        bg_calls.append({"args": args, "kwargs": kwargs})
+
+    monkeypatch.setattr(source_routes, "_run_index_job_task", _fake_bg_task)
+    # Also stub the source lookup used by the route
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"source_id": sid, "provider": "gdrive",
+                                     "display_name": "Drive", "auth_mode": "",
+                                     "credential_ref": "", "site": "", "mode": "live"})
+
+    client = _make_client()
+    resp = client.post("/api/index-jobs", json={
+        "source_id": "gdrive",
+        "domain_id": "d1",
+        "project_id": "p1",
+        "scope": "project",
+        "scope_ref": "",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    # Route generates a UUID job_id; just assert it is present and non-empty
+    assert "job_id" in data
+    assert data["job_id"]  # non-empty string
+
+
+def test_post_index_jobs_enqueues_background_task(monkeypatch):
+    """The background task must be enqueued (called) after the response."""
+    job_row = {"job_id": "job-bg-1", "status": "queued"}
+    monkeypatch.setattr(source_routes.opstore, "create_index_job",
+                        lambda *a, **k: job_row)
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"source_id": sid, "provider": "gdrive",
+                                     "display_name": "Drive", "auth_mode": "",
+                                     "credential_ref": "", "site": "", "mode": "live"})
+
+    bg_calls: list[dict] = []
+
+    def _fake_bg_task(*args, **kwargs):
+        bg_calls.append({"args": args, "kwargs": kwargs})
+
+    monkeypatch.setattr(source_routes, "_run_index_job_task", _fake_bg_task)
+
+    client = _make_client()
+    client.post("/api/index-jobs", json={
+        "source_id": "gdrive",
+        "domain_id": "d1",
+        "project_id": "p1",
+        "scope": "project",
+        "scope_ref": "",
+    })
+    # Background task runs synchronously in TestClient
+    assert len(bg_calls) == 1
+
+
+def test_post_index_jobs_404_when_source_not_found(monkeypatch):
+    """Must return 404 if source_id not registered."""
+    monkeypatch.setattr(source_routes.opstore, "get_source", lambda sid: None)
+    client = _make_client()
+    resp = client.post("/api/index-jobs", json={
+        "source_id": "missing",
+        "domain_id": "d1",
+        "project_id": "p1",
+        "scope": "project",
+        "scope_ref": "",
+    })
+    assert resp.status_code == 404
+
+
+# ── GET /api/index-jobs/{job_id} ──────────────────────────────────────────────
+
+def test_get_index_job_returns_job_row(monkeypatch):
+    job = {"job_id": "j1", "status": "running", "embedded": 3}
+    monkeypatch.setattr(source_routes.opstore, "get_index_job",
+                        lambda jid: job)
+    client = _make_client()
+    resp = client.get("/api/index-jobs/j1")
+    assert resp.status_code == 200
+    assert resp.json()["job"]["job_id"] == "j1"
+
+
+def test_get_index_job_404_when_not_found(monkeypatch):
+    monkeypatch.setattr(source_routes.opstore, "get_index_job", lambda jid: None)
+    client = _make_client()
+    resp = client.get("/api/index-jobs/missing")
+    assert resp.status_code == 404
+
+
+# ── GET /api/index-jobs ───────────────────────────────────────────────────────
+
+def test_list_index_jobs_returns_list(monkeypatch):
+    jobs = [{"job_id": "j1"}, {"job_id": "j2"}]
+    monkeypatch.setattr(source_routes.opstore, "list_index_jobs",
+                        lambda d, p: jobs)
+    client = _make_client()
+    resp = client.get("/api/index-jobs?domain_id=d1&project_id=p1")
+    assert resp.status_code == 200
+    assert len(resp.json()["jobs"]) == 2
+
+
+# ── POST /api/search ──────────────────────────────────────────────────────────
+
+def test_post_search_returns_results(monkeypatch):
+    results = [{"chunk_id": "c1", "snippet": "hello", "score": 0.9}]
+    monkeypatch.setattr(source_routes, "_search_backend",
+                        lambda: type("B", (), {"search": staticmethod(
+                            lambda *a, **k: results
+                        )})())
+    client = _make_client()
+    resp = client.post("/api/search", json={
+        "domain_id": "d1",
+        "project_id": "p1",
+        "query": "hello world",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["results"] == results
+
+
+def test_post_search_passes_optional_params(monkeypatch):
+    calls: list[dict] = []
+
+    def _fake_search(domain_id, project_id, query, k=10, folder="", types=None):
+        calls.append({"k": k, "folder": folder, "types": types})
+        return []
+
+    monkeypatch.setattr(source_routes, "_search_backend",
+                        lambda: type("B", (), {"search": staticmethod(_fake_search)})())
+    client = _make_client()
+    client.post("/api/search", json={
+        "domain_id": "d1",
+        "project_id": "p1",
+        "query": "q",
+        "k": 5,
+        "folder": "/reports/",
+        "types": ["application/pdf"],
+    })
+    assert calls[0]["k"] == 5
+    assert calls[0]["folder"] == "/reports/"
+    assert calls[0]["types"] == ["application/pdf"]
