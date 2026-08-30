@@ -31,18 +31,28 @@ export default function ConnectorsPanel() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [msg,        setMsg]        = useState<string | null>(null);
+  const [msgKind,    setMsgKind]    = useState<"ok" | "err">("ok");
   const [showForm,   setShowForm]   = useState(false);
 
   // Form state
+  const [formIsEdit,       setFormIsEdit]       = useState(false);
   const [formProvider,     setFormProvider]     = useState("gdrive");
   const [formDisplayName,  setFormDisplayName]  = useState("");
   const [formClientId,     setFormClientId]     = useState("");
   const [formClientSecret, setFormClientSecret] = useState(""); // write-only, cleared on submit
   const [formScopes,       setFormScopes]       = useState("");
-  const [saving,           setSaving]           = useState(false);
+  const [formRedirectUri,  setFormRedirectUri]  = useState(
+    `${DEFAULT_REDIRECT_BASE}/gdrive/callback`
+  );
+  const [saving, setSaving] = useState(false);
 
   // Per-connector notes for when authorize-url is empty
   const [authNotes, setAuthNotes] = useState<Record<string, string>>({});
+
+  function showMsg(text: string, kind: "ok" | "err") {
+    setMsgKind(kind);
+    setMsg(text);
+  }
 
   const fetchConnectors = useCallback(async () => {
     setLoading(true);
@@ -50,27 +60,35 @@ export default function ConnectorsPanel() {
       const r = await apiCall<{ connectors: Connector[] }>("/api/connectors");
       setConnectors(r.connectors ?? []);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      showMsg(e instanceof Error ? e.message : String(e), "err");
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { fetchConnectors(); }, [fetchConnectors]);
 
   function openForm(connector?: Connector) {
     if (connector) {
+      setFormIsEdit(true);
       setFormProvider(connector.provider);
       setFormDisplayName(connector.display_name);
       setFormClientId("");       // never pre-fill from server
       setFormClientSecret("");   // never pre-fill from server
       setFormScopes(connector.scopes.join(", "));
+      // Seed the redirect URI from the stored value so the user sees what their
+      // OAuth provider's console has registered — showing the wrong value here
+      // causes a silent redirect-mismatch at OAuth time.
+      setFormRedirectUri(connector.redirect_uri);
     } else {
+      setFormIsEdit(false);
       setFormProvider("gdrive");
       setFormDisplayName("");
       setFormClientId("");
       setFormClientSecret("");
       setFormScopes("");
+      setFormRedirectUri(`${DEFAULT_REDIRECT_BASE}/gdrive/callback`);
     }
     setShowForm(true);
     setMsg(null);
@@ -92,7 +110,10 @@ export default function ConnectorsPanel() {
         ? formScopes.trim().split(/[\s,]+/).filter(Boolean)
         : undefined;
       if (scopesList && scopesList.length > 0) body.scopes = scopesList;
-      // Omit redirect_uri — backend defaults it to the correct value
+      // In edit mode send the stored redirect_uri so it is preserved rather than
+      // silently reset to the backend default. For new connectors omit it — the
+      // backend will default it to the correct value.
+      if (formIsEdit) body.redirect_uri = formRedirectUri;
 
       await apiCall<{ connector: Connector }>("/api/connectors", {
         method: "POST",
@@ -101,16 +122,17 @@ export default function ConnectorsPanel() {
 
       setFormClientSecret(""); // clear write-only field on success
       setShowForm(false);
-      setMsg(`Connector "${formDisplayName || formProvider}" saved.`);
+      showMsg(`Connector "${formDisplayName || formProvider}" saved.`, "ok");
       fetchConnectors();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      showMsg(e instanceof Error ? e.message : String(e), "err");
     } finally {
       setSaving(false);
     }
   }
 
   async function authorize(provider: string) {
+    setMsg(null); // clear any stale message before fetching
     setAuthNotes(n => ({ ...n, [provider]: "" }));
     try {
       const r = await apiCall<{ auth_url: string }>(
@@ -126,7 +148,7 @@ export default function ConnectorsPanel() {
         }));
       }
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      showMsg(e instanceof Error ? e.message : String(e), "err");
     }
   }
 
@@ -137,14 +159,12 @@ export default function ConnectorsPanel() {
         `/api/connectors/${provider}`,
         { method: "DELETE" }
       );
-      setMsg(`Connector "${provider}" removed.`);
+      showMsg(`Connector "${provider}" removed.`, "ok");
       fetchConnectors();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      showMsg(e instanceof Error ? e.message : String(e), "err");
     }
   }
-
-  const redirectPreview = `${DEFAULT_REDIRECT_BASE}/${formProvider}/callback`;
 
   return (
     <div className="mt-10">
@@ -186,7 +206,15 @@ export default function ConnectorsPanel() {
               </label>
               <select
                 value={formProvider}
-                onChange={e => setFormProvider(e.target.value)}
+                onChange={e => {
+                  const v = e.target.value;
+                  setFormProvider(v);
+                  // For new connectors keep the redirect preview in sync with the
+                  // selected provider; leave it alone in edit mode.
+                  if (!formIsEdit) {
+                    setFormRedirectUri(`${DEFAULT_REDIRECT_BASE}/${v}/callback`);
+                  }
+                }}
                 className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
                 {PROVIDERS.map(p => (
@@ -251,7 +279,7 @@ export default function ConnectorsPanel() {
               />
             </div>
 
-            {/* Redirect URI — read-only preview */}
+            {/* Redirect URI — read-only; shows stored value in edit mode, computed default for new */}
             <div>
               <label className="text-[11px] font-semibold text-gray-500 block mb-1">
                 Redirect URI{" "}
@@ -259,7 +287,7 @@ export default function ConnectorsPanel() {
               </label>
               <input
                 readOnly
-                value={redirectPreview}
+                value={formRedirectUri}
                 className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50 text-gray-400 cursor-not-allowed"
               />
             </div>
@@ -289,7 +317,13 @@ export default function ConnectorsPanel() {
       )}
 
       {msg && (
-        <div className="mb-4 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3">
+        <div
+          className={`mb-4 text-sm rounded-lg p-3 ${
+            msgKind === "ok"
+              ? "text-green-700 bg-green-50 border border-green-200"
+              : "text-red-700 bg-red-50 border border-red-200"
+          }`}
+        >
           {msg}
         </div>
       )}
