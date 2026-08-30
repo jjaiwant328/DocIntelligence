@@ -80,6 +80,29 @@ except Exception as _e:
     _skills_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Skills/Workflow routes not loaded: {_skills_load_error}")
 
+# Register Sources / Inventory routes (Phase 2 connector-first)
+_sources_load_error: str | None = None
+try:
+    from source_routes import router as source_router
+    app.include_router(source_router)
+    print("✅ Source routes registered at /api/sources, /api/inventory")
+except Exception as _e:
+    import traceback as _tb
+    _sources_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Source routes not loaded: {_sources_load_error}")
+
+# Mount the in-app MCP server (headless tools) at /mcp/ — makes DocIntelligence's
+# capabilities callable by any MCP client. Must run before the catch-all route.
+_mcp_load_error: str | None = None
+try:
+    import mcp_server
+    mcp_server.attach(app)
+    print("✅ MCP server mounted at /mcp/ (tools: list_domains, search_documents, list_documents, query_agent)")
+except Exception as _e:
+    import traceback as _tb
+    _mcp_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ MCP server not mounted: {_mcp_load_error}")
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -101,6 +124,8 @@ def health_check():
         "docintel_error": _docintel_load_error,
         "platform_routes": "loaded" if _platform_load_error is None else "FAILED",
         "platform_error": _platform_load_error,
+        "mcp_server": "mounted" if _mcp_load_error is None else "FAILED",
+        "mcp_error": _mcp_load_error,
     }
 
 # Pydantic models
