@@ -644,11 +644,18 @@ def _resolve_doc_set(domain_id: str, project_id: str, routes=None) -> list[dict]
 
     `routes` is the lazily-imported docintel_routes module; required only for
     the legacy fallback path.  The Lakebase path never needs it.
+
+    Note — doc_type semantic difference between paths:
+      Lakebase path:  mime_type from external_documents (e.g. "application/pdf").
+      Legacy path:    comma-joined classification labels from parsed_documents
+                      (e.g. "permit, zoning_map").  Treat as labels, not MIME.
     """
+    _fetched, _total = 0, "?"
     try:
         ext_docs = opstore.list_docs_for_project(domain_id, project_id,
                                                   statuses=["indexed"])
         if ext_docs:
+            _total = len(ext_docs)
             result = []
             for doc in ext_docs:
                 eid = doc["external_document_id"]
@@ -661,11 +668,13 @@ def _resolve_doc_set(domain_id: str, project_id: str, routes=None) -> list[dict]
                     "doc_type": doc.get("mime_type") or doc.get("name") or "",
                     "text": text,
                 })
+                _fetched += 1
             return result
     except LakebaseUnavailable:
         pass
     except Exception as e:
-        print(f"[resolve-doc-set] Lakebase lookup failed: {e}")
+        print(f"[resolve-doc-set] Lakebase lookup failed after {_fetched}/{_total} docs, "
+              f"falling back to legacy: {e}")
 
     # Legacy fallback — requires the docintel_routes object for SQL access.
     if routes is None:

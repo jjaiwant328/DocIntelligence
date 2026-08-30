@@ -284,7 +284,11 @@ def delete_chunks_for_doc(external_document_id: str) -> int:
 
 
 def list_chunks_for_doc(external_document_id: str) -> list[dict]:
-    """Snippets for one indexed document — used to build the engine doc-set text."""
+    """Snippets for one indexed document — used to build the engine doc-set text.
+
+    Callers are responsible for catching LakebaseUnavailable; this function does
+    not suppress it.  See _resolve_doc_set in skill_routes for the fallback pattern.
+    """
     _ensure()
     with lakebase.connection() as conn:
         return chunks_repo.list_for_doc(conn, external_document_id)

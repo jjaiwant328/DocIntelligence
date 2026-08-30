@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import skill_routes  # noqa: E402
 from db import operational as opstore  # noqa: E402
+from db.lakebase import LakebaseUnavailable  # noqa: E402
 from workflow_engine.engine import WorkflowRun  # noqa: E402
 
 
@@ -51,7 +52,7 @@ def _patch_common(monkeypatch, engine):
     return fake_routes
 
 
-# ── tests ─────────────────────────────────────────────────────────────────────
+# ── tests: Lakebase happy path ────────────────────────────────────────────────
 
 def test_workflow_run_sources_docs_from_lakebase_external_docs(monkeypatch):
     """When a project has 2 indexed external docs the engine receives docs= with
@@ -115,18 +116,33 @@ def test_resolve_doc_set_returns_correct_shape(monkeypatch):
     assert "Some content" in item["text"]
 
 
-def test_resolve_doc_set_falls_back_to_legacy_when_no_indexed_docs(monkeypatch):
-    """When no indexed external docs exist, _resolve_doc_set falls back to the
-    legacy parsed_documents path via _project_doc_ids + _fetch_doc_rows."""
-    monkeypatch.setattr(skill_routes.opstore, "list_docs_for_project",
-                        lambda domain_id, project_id, statuses=None: [])
-    # Make doc_ids_for_project return a legacy doc_id (tags store path).
-    monkeypatch.setattr(skill_routes.opstore, "doc_ids_for_project",
-                        lambda domain_id, project_id: ["legacy-doc-1"])
+# ── tests: backward-compatibility / fallback paths ────────────────────────────
 
-    legacy_row = {"doc_id": "legacy-doc-1", "doc_type": "permit", "text": "legacy text"}
+def test_resolve_doc_set_falls_back_to_legacy_when_no_indexed_docs(monkeypatch):
+    """No indexed external docs → falls back to the legacy parsed_documents path.
+
+    Exercises the warehouse-SQL leg of _project_doc_ids: doc_ids_for_project
+    raises LakebaseUnavailable, so _project_doc_ids falls through to its
+    document_project_tags SQL path to retrieve doc_ids, then _fetch_doc_rows
+    issues the parsed_documents query.  This is the 'Lakebase fully unavailable'
+    cutover scenario."""
+    monkeypatch.setattr(skill_routes.opstore, "list_docs_for_project",
+                        lambda *a, **k: [])
+
+    def _raise_lakebase(*a, **k):
+        raise LakebaseUnavailable("unavailable in test")
+    monkeypatch.setattr(skill_routes.opstore, "doc_ids_for_project", _raise_lakebase)
+
+    legacy_doc_row = {"doc_id": "legacy-doc-1", "doc_type": "permit", "text": "legacy text"}
+
+    def fake_sql(q, timeout_secs=50):
+        # First call: _project_doc_ids fetches tags; second: _fetch_doc_rows fetches rows.
+        if "document_project_tags" in q:
+            return [{"doc_id": "legacy-doc-1"}]
+        return [legacy_doc_row]
+
     fake_routes = types.ModuleType("docintel_routes_legacy")
-    fake_routes.run_sql = lambda q, timeout_secs=50: [legacy_row]
+    fake_routes.run_sql = fake_sql
     fake_routes.CATALOG = "test_catalog"
     fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw_schema"}
 
@@ -134,6 +150,77 @@ def test_resolve_doc_set_falls_back_to_legacy_when_no_indexed_docs(monkeypatch):
     assert len(result) == 1
     assert result[0]["doc_id"] == "legacy-doc-1"
 
+
+def test_resolve_doc_set_falls_back_on_lakebase_unavailable(monkeypatch):
+    """list_docs_for_project raising LakebaseUnavailable falls through to legacy,
+    no exception propagated to the caller (no 500)."""
+    def _raise(*a, **k):
+        raise LakebaseUnavailable("connection refused")
+    monkeypatch.setattr(skill_routes.opstore, "list_docs_for_project", _raise)
+    monkeypatch.setattr(skill_routes.opstore, "doc_ids_for_project",
+                        lambda *a, **k: ["legacy-doc-1"])
+
+    legacy_row = {"doc_id": "legacy-doc-1", "doc_type": "contract", "text": "contract text"}
+    fake_routes = types.ModuleType("docintel_routes_lb_unavail")
+    fake_routes.run_sql = lambda q, timeout_secs=50: [legacy_row]
+    fake_routes.CATALOG = "test_catalog"
+    fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw_schema"}
+
+    # Must not raise; must return the legacy row.
+    result = skill_routes._resolve_doc_set("d1", "p1", routes=fake_routes)
+    assert len(result) == 1
+    assert result[0]["doc_id"] == "legacy-doc-1"
+
+
+def test_resolve_doc_set_falls_back_on_generic_exception(monkeypatch):
+    """An unexpected exception inside list_docs_for_project also falls through to
+    the legacy path without propagating (no 500)."""
+    def _raise(*a, **k):
+        raise RuntimeError("unexpected db boom")
+    monkeypatch.setattr(skill_routes.opstore, "list_docs_for_project", _raise)
+    monkeypatch.setattr(skill_routes.opstore, "doc_ids_for_project",
+                        lambda *a, **k: ["legacy-doc-2"])
+
+    legacy_row = {"doc_id": "legacy-doc-2", "doc_type": "invoice", "text": "invoice text"}
+    fake_routes = types.ModuleType("docintel_routes_generic_exc")
+    fake_routes.run_sql = lambda q, timeout_secs=50: [legacy_row]
+    fake_routes.CATALOG = "test_catalog"
+    fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw_schema"}
+
+    result = skill_routes._resolve_doc_set("d1", "p1", routes=fake_routes)
+    assert len(result) == 1
+    assert result[0]["doc_id"] == "legacy-doc-2"
+
+
+def test_workflow_run_explicit_doc_ids_bypass_resolve_doc_set(monkeypatch):
+    """Explicit req.doc_ids bypasses _resolve_doc_set entirely; _fetch_doc_rows
+    is called instead with exactly those ids."""
+    engine = CapturingEngine()
+    _patch_common(monkeypatch, engine)
+
+    resolve_calls = []
+    monkeypatch.setattr(skill_routes, "_resolve_doc_set",
+                        lambda *a, **k: resolve_calls.append(True) or [])
+
+    fetch_calls = []
+
+    def fake_fetch(routes, raw_schema, doc_ids):
+        fetch_calls.extend(doc_ids)
+        return [{"doc_id": d, "doc_type": "contract", "text": f"text {d}"} for d in doc_ids]
+
+    monkeypatch.setattr(skill_routes, "_fetch_doc_rows", fake_fetch)
+
+    req = skill_routes.WorkflowRunRequest(
+        template="due_diligence", domain_id="d1", project="p1",
+        doc_ids=["explicit-doc-1", "explicit-doc-2"])
+    asyncio.run(skill_routes.workflow_run(req))
+
+    assert not resolve_calls, "_resolve_doc_set must NOT be called when req.doc_ids is set"
+    assert "explicit-doc-1" in fetch_calls and "explicit-doc-2" in fetch_calls
+    assert len(engine.last_docs) == 2
+
+
+# ── tests: chunks_repo helper ─────────────────────────────────────────────────
 
 def test_list_for_doc_in_chunks_repo():
     """list_for_doc queries document_chunks by external_document_id ordered by ordinal."""
