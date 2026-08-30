@@ -53,8 +53,13 @@ def test_upsert_source_writes_no_secret_value():
         "service_principal", "keeper://ref", "", "live",
     )
     assert row["source_id"] == "gdrive"
-    # credential_ref must be a reference, not a secret literal
-    assert "keeper://" in (c.cur.params[0] or ())[4] if c.cur.params[0] else True
+    # The INSERT must have executed and stored the reference verbatim (index 4 = credential_ref)
+    assert c.cur.sql, "expected INSERT to have executed"
+    insert_params = c.cur.params[0]
+    assert insert_params is not None, "INSERT params must not be None"
+    assert insert_params[4] == "keeper://ref", (
+        "credential_ref must be stored as the reference string, not a secret value"
+    )
 
 
 def test_list_sources_returns_dicts():
