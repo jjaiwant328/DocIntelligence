@@ -65,6 +65,7 @@ async def crawl_source(
                 repo.upsert_metadata(conn, {
                     "external_document_id": doc_id,
                     "source_id": source_id,
+                    "source_item_id": item["item_id"],
                     "domain_id": domain_id,
                     "project_id": project_id,
                     "parent_folder_id": folder_id,

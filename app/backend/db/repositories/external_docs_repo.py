@@ -23,12 +23,14 @@ def _dicts(cur: Any) -> list[dict]:
 def upsert_metadata(conn: Any, doc: dict) -> None:
     """Insert-or-update a document row. Sets status='discovered' on first
     insert; preserves existing status on conflict (caller can override by
-    passing status explicitly in *doc*)."""
+    passing status explicitly in *doc*). The *included* flag is only set on
+    first insert (defaults True) — a metadata re-crawl never clobbers a user's
+    inclusion choice."""
     cur = conn.cursor()
     cur.execute(
         """
         INSERT INTO external_documents (
-            external_document_id, source_id, domain_id, project_id,
+            external_document_id, source_id, source_item_id, domain_id, project_id,
             parent_folder_id, path, name, mime_type, size_bytes,
             web_url, etag, content_hash, owner,
             source_created_at, source_modified_at, status, included,
@@ -36,11 +38,12 @@ def upsert_metadata(conn: Any, doc: dict) -> None:
             chunk_count, last_error, updated_at
         )
         VALUES (
-            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
             COALESCE(%s,'discovered'),%s,%s,%s,%s,%s,%s, now()
         )
         ON CONFLICT (external_document_id) DO UPDATE SET
             source_id=EXCLUDED.source_id,
+            source_item_id=EXCLUDED.source_item_id,
             parent_folder_id=EXCLUDED.parent_folder_id,
             path=EXCLUDED.path, name=EXCLUDED.name,
             mime_type=EXCLUDED.mime_type, size_bytes=EXCLUDED.size_bytes,
@@ -48,12 +51,12 @@ def upsert_metadata(conn: Any, doc: dict) -> None:
             content_hash=EXCLUDED.content_hash, owner=EXCLUDED.owner,
             source_created_at=EXCLUDED.source_created_at,
             source_modified_at=EXCLUDED.source_modified_at,
-            included=EXCLUDED.included,
             last_error=EXCLUDED.last_error,
             updated_at=now()
         """,
         (
             doc.get("external_document_id"), doc.get("source_id"),
+            doc.get("source_item_id", ""),
             doc.get("domain_id"), doc.get("project_id", ""),
             doc.get("parent_folder_id", ""), doc.get("path", ""),
             doc.get("name", ""), doc.get("mime_type", ""),

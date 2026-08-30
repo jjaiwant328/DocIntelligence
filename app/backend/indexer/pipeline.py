@@ -180,11 +180,14 @@ async def run_index_job(
             # Find doc metadata (need name/path for parse)
             doc_meta = next(
                 (d for d in seen_docs if d["external_document_id"] == doc_id),
-                {"name": doc_id, "etag": "", "path": ""},
+                {"name": doc_id, "etag": "", "path": "", "source_item_id": ""},
             )
 
-            # Fetch content
-            fetch_result = await deps.fetch_fn(source_id, doc_id)
+            # Fetch content by the NATIVE source reference (the provider cannot
+            # resolve our sha-1 external_document_id). Fall back to doc_id only
+            # for legacy rows crawled before source_item_id was persisted.
+            source_item_id = doc_meta.get("source_item_id") or doc_id
+            fetch_result = await deps.fetch_fn(source_id, source_item_id)
             raw_bytes = base64.b64decode(fetch_result.get("content_b64", ""))
             filename  = fetch_result.get("filename", doc_meta.get("name", doc_id))
 
