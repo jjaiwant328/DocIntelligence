@@ -14,7 +14,10 @@ from typing import Optional
 from . import lakebase
 from . import schema as _schema
 from .lakebase import LakebaseUnavailable
-from .repositories import projects_repo, runs_repo, tags_repo
+from .repositories import (
+    projects_repo, runs_repo, tags_repo,
+    sources_repo, use_cases_repo, index_jobs_repo,
+)
 
 _ensured = False
 _ensure_lock = threading.Lock()
@@ -140,3 +143,91 @@ def rename_run(*, run_id: str, label: str) -> bool:
     _ensure()
     with lakebase.connection() as conn:
         return runs_repo.rename_run(conn, run_id, label)
+
+
+# ── Sources ────────────────────────────────────────────────────────────────────
+def list_sources() -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return sources_repo.list_sources(conn)
+
+
+def get_source(source_id: str) -> Optional[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return sources_repo.get_source(conn, source_id)
+
+
+def upsert_source(source_id: str, provider: str, display_name: str,
+                  auth_mode: str, credential_ref: str, site: str,
+                  mode: str) -> dict:
+    _ensure()
+    with lakebase.connection() as conn:
+        return sources_repo.upsert_source(
+            conn, source_id, provider, display_name,
+            auth_mode, credential_ref, site, mode,
+        )
+
+
+def set_source_status(source_id: str, status: str, last_error: str = "") -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        sources_repo.set_status(conn, source_id, status, last_error)
+
+
+# ── Use cases ──────────────────────────────────────────────────────────────────
+def list_use_cases() -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return use_cases_repo.list_use_cases(conn)
+
+
+def get_use_case(use_case_id: str) -> Optional[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return use_cases_repo.get_use_case(conn, use_case_id)
+
+
+def upsert_use_case(use_case_id: str, **fields) -> dict:
+    _ensure()
+    with lakebase.connection() as conn:
+        return use_cases_repo.upsert_use_case(conn, use_case_id, **fields)
+
+
+# ── Index jobs ─────────────────────────────────────────────────────────────────
+def create_index_job(job_id: str, domain_id: str, project_id: str,
+                     scope: str, scope_ref: str, requested_by: str) -> dict:
+    _ensure()
+    with lakebase.connection() as conn:
+        return index_jobs_repo.create_job(conn, job_id, domain_id, project_id,
+                                          scope, scope_ref, requested_by)
+
+
+def get_index_job(job_id: str) -> Optional[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return index_jobs_repo.get_job(conn, job_id)
+
+
+def list_index_jobs(domain_id: str, project_id: str) -> list[dict]:
+    _ensure()
+    with lakebase.connection() as conn:
+        return index_jobs_repo.list_jobs(conn, domain_id, project_id)
+
+
+def start_index_job(job_id: str) -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        index_jobs_repo.start(conn, job_id)
+
+
+def bump_index_job(job_id: str, **counts: int) -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        index_jobs_repo.bump(conn, job_id, **counts)
+
+
+def finish_index_job(job_id: str, status: str, error_summary: str = "") -> None:
+    _ensure()
+    with lakebase.connection() as conn:
+        index_jobs_repo.finish(conn, job_id, status, error_summary)
