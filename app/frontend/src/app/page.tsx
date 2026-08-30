@@ -15,6 +15,15 @@ const DocIntelligence = dynamic(() => import("./document-intelligence/page"), {
   ssr: false,
   loading: () => <LoadingPane label="Document Intelligence" />,
 });
+// Phase 5: connector-first workspace
+const SourcesTab = dynamic(() => import("./sources/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Sources" />,
+});
+const ProjectTab = dynamic(() => import("./project/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Project Workspace" />,
+});
 // Control Tower retired — Overview/Knowledge Graph/Action Center/Compliance Map
 // are now produced as workflow outputs (see Executions). Copilot kept as its own tab.
 const SkillsTab = dynamic(() => import("./skills/page"), {
@@ -46,6 +55,24 @@ function LoadingPane({ label }: { label: string }) {
 }
 
 const WORKSPACE_TABS = [
+  {
+    id: "sources",
+    icon: "🔌",
+    label: "Sources",
+    shortLabel: "Sources",
+    badge: "Connect · Crawl",
+    badgeColor: "bg-orange-100 text-orange-700",
+    description: "Register and connect external data sources (Google Drive, SharePoint, S3). Metadata is crawled without copying file content.",
+  },
+  {
+    id: "project",
+    icon: "📁",
+    label: "Project Workspace",
+    shortLabel: "Workspace",
+    badge: "Inventory · Search",
+    badgeColor: "bg-teal-100 text-teal-700",
+    description: "Browse the document inventory for this project and run hybrid vector + full-text search.",
+  },
   {
     id: "doc",
     icon: "📄",
@@ -469,6 +496,8 @@ export default function Home() {
 
         {/* Module content — domain passed as explicit prop to eliminate context drift */}
         <div className="flex-1">
+          {activeTab === "sources"    && <SourcesTab domain={activeDomain!} />}
+          {activeTab === "project"    && <ProjectTab domain={activeDomain!} />}
           {activeTab === "doc"        && <DocIntelligence domain={activeDomain!} />}
           {activeTab === "library"    && (
             <div>

@@ -437,45 +437,17 @@ const CAT_DOT: Record<string,string> = {
 
 // ── Top-level navigation definition ──────────────────────────────────────────
 
-function buildTabs(domainId: string) {
-  const categories = getDomainCategories(domainId);
+function buildTabs(_domainId: string) {
+  // Phase 5 (connector-first redesign): Knowledge Graph, Action Center, and
+  // Compliance Map are retired from this shell — their outputs are now surfaced
+  // in the Executions tab and the new Project Workspace. Component code remains
+  // on disk for reference. Overview and Copilot Studio are kept.
   return [
     {
       id: "overview",
       icon: "📊",
       label: "Overview",
       tooltip: "Document processing stats, entity distribution, and key extractions",
-    },
-    {
-      id: "ontology",
-      icon: "🕸",
-      label: "Knowledge Graph",
-      tooltip: "Interactive knowledge graph — entities extracted from documents and their relationships",
-      subs: [
-        { id:"graph",    label:"Graph View" },
-        { id:"entities", label:"Entity List" },
-      ],
-    },
-    {
-      id: "actions",
-      icon: "⚡",
-      label: "Action Center",
-      tooltip: "Log actions, track open items, and generate response reports for this project",
-      subs: [
-        ...categories.map(c => ({ id: c.toLowerCase(), label: c })),
-        { id: "reports", label: "Action Reports" },
-      ],
-    },
-    {
-      id: "compliance_map",
-      icon: "🗺",
-      label: "Compliance Map",
-      tooltip: "Jurisdiction × document-type coverage matrix — see which regulations apply where and identify gaps",
-      subs: [
-        { id: "map",    label: "Coverage Matrix" },
-        { id: "digest", label: "Action Digest" },
-        { id: "pulse",  label: "Regulatory Pulse" },
-      ],
     },
     {
       id: "copilot",
