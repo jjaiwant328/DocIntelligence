@@ -78,9 +78,9 @@ def _resolve(provider: str) -> tuple:
         env_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
         env_sec = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
         env_redir = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
-        if env_id:
+        if not client_id and env_id:
             client_id = env_id
-        if env_sec:
+        if not client_secret and env_sec:
             client_secret = env_sec
         if not redirect_uri and env_redir:
             redirect_uri = env_redir
