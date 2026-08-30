@@ -283,6 +283,13 @@ def delete_chunks_for_doc(external_document_id: str) -> int:
         return chunks_repo.delete_for_doc(conn, external_document_id)
 
 
+def list_chunks_for_doc(external_document_id: str) -> list[dict]:
+    """Snippets for one indexed document — used to build the engine doc-set text."""
+    _ensure()
+    with lakebase.connection() as conn:
+        return chunks_repo.list_for_doc(conn, external_document_id)
+
+
 def hybrid_search(domain_id: str, project_id: str, query_embedding: list,
                   query_text: str, k: int = 10, folder: str = "",
                   types: Optional[list] = None) -> list[dict]:

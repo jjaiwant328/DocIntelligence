@@ -635,6 +635,46 @@ def _fetch_doc_rows(routes, raw_schema: str, doc_ids: list) -> list:
         return []
 
 
+def _resolve_doc_set(domain_id: str, project_id: str, routes=None) -> list[dict]:
+    """Return [{doc_id, doc_type, text}] for the workflow engine.
+
+    Primary path: Lakebase external_documents (status=indexed) + concatenated
+    chunk snippets as text.  Fallback: legacy Volume/parsed_documents when no
+    indexed external docs exist (cutover safety — keeps legacy projects working).
+
+    `routes` is the lazily-imported docintel_routes module; required only for
+    the legacy fallback path.  The Lakebase path never needs it.
+    """
+    try:
+        ext_docs = opstore.list_docs_for_project(domain_id, project_id,
+                                                  statuses=["indexed"])
+        if ext_docs:
+            result = []
+            for doc in ext_docs:
+                eid = doc["external_document_id"]
+                chunks = opstore.list_chunks_for_doc(eid)
+                text = "\n\n".join(
+                    c.get("snippet", "") for c in chunks if c.get("snippet")
+                )
+                result.append({
+                    "doc_id": eid,
+                    "doc_type": doc.get("mime_type") or doc.get("name") or "",
+                    "text": text,
+                })
+            return result
+    except LakebaseUnavailable:
+        pass
+    except Exception as e:
+        print(f"[resolve-doc-set] Lakebase lookup failed: {e}")
+
+    # Legacy fallback — requires the docintel_routes object for SQL access.
+    if routes is None:
+        return []
+    doc_ids = _project_doc_ids(routes, domain_id, project_id)
+    schemas = routes._get_domain_schemas(domain_id)
+    return _fetch_doc_rows(routes, schemas["schema_raw"], doc_ids) if doc_ids else []
+
+
 @router.post("/skill-invoke")
 async def skill_invoke(req: SkillInvokeRequest):
     """Playground: invoke ONE skill. If doc_ids given, auto-build inputs from those
@@ -714,11 +754,16 @@ async def workflow_run(req: WorkflowRunRequest):
     engine = WorkflowEngine(dispatcher, domain_loader=domain_loader,
                             template_loader=_db_template_loader(routes))
 
-    # Assemble the workflow's document set: explicit doc_ids if given, else the
-    # project's tagged documents. Doc-consuming steps resolve text from these.
-    schemas = routes._get_domain_schemas(req.domain_id)
-    doc_ids = req.doc_ids or _project_doc_ids(routes, req.domain_id, req.project)
-    docs = _fetch_doc_rows(routes, schemas["schema_raw"], doc_ids) if doc_ids else []
+    # Assemble the workflow's document set.
+    # Explicit doc_ids in the request take precedence (legacy Volume path).
+    # Otherwise _resolve_doc_set checks Lakebase-indexed external docs first
+    # and falls back to the legacy parsed_documents path for projects that have
+    # no external docs yet (cutover safety).
+    if req.doc_ids:
+        schemas = routes._get_domain_schemas(req.domain_id)
+        docs = _fetch_doc_rows(routes, schemas["schema_raw"], req.doc_ids)
+    else:
+        docs = _resolve_doc_set(req.domain_id, req.project, routes=routes)
 
     inputs = {
         "domain": req.domain_id,

@@ -87,6 +87,20 @@ def replace_chunks(conn: Any, external_document_id: str, chunks: list[dict]) -> 
 
 # ── hybrid search ─────────────────────────────────────────────────────────────
 
+def list_for_doc(conn: Any, external_document_id: str) -> list[dict]:
+    """Return all chunks for a document ordered by ordinal.
+
+    Used to assemble the per-doc text for the workflow engine doc-set.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT chunk_id, external_document_id, ordinal, location, snippet "
+        "FROM document_chunks WHERE external_document_id=%s ORDER BY ordinal",
+        (external_document_id,),
+    )
+    return _dicts(cur)
+
+
 def hybrid_search(
     conn: Any,
     domain_id: str,
