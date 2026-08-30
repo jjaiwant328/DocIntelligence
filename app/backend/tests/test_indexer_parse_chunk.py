@@ -79,10 +79,8 @@ def test_split_produces_overlap():
 def test_split_covers_full_text():
     text = "a" * 100
     result = chunk.split(text, size=30, overlap=5)
-    # Every character should appear in at least one chunk
-    reconstructable = "".join(result)
-    for char in text:
-        assert char in reconstructable
+    # Total chars across all chunks (including overlap) must be >= original length
+    assert len("".join(result)) >= len(text)
 
 
 def test_split_no_empty_chunks():

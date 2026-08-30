@@ -44,7 +44,7 @@ def test_classify_changed_when_both_etag_and_hash_differ():
 
 def test_classify_deleted_when_seen_is_none():
     existing = {"etag": "abc", "content_hash": ""}
-    assert diff.classify(existing, None) in ("deleted", "inaccessible")
+    assert diff.classify(existing, None) == "deleted"
 
 
 def test_classify_new_when_etag_empty_and_not_in_db():
@@ -53,14 +53,11 @@ def test_classify_new_when_etag_empty_and_not_in_db():
     assert diff.classify(None, seen) == "new"
 
 
-def test_classify_changed_when_content_hash_differs():
+def test_classify_unchanged_when_etag_matches_regardless_of_hash():
+    """etag match takes precedence: same etag → unchanged, even if content_hash differs."""
     existing = {"etag": "same", "content_hash": "old-hash"}
     seen = {"etag": "same", "content_hash": "new-hash"}
-    # same etag but different content_hash → treat as changed (re-index)
-    # (etag match takes precedence — unchanged)
-    # This tests the tie-breaking: etag same → unchanged wins
-    result = diff.classify(existing, seen)
-    assert result == "unchanged"
+    assert diff.classify(existing, seen) == "unchanged"
 
 
 # ── plan_scope ────────────────────────────────────────────────────────────────
