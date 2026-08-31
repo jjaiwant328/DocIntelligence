@@ -82,6 +82,43 @@ def test_put_return_value_is_ref_string():
     assert ref == "docintel_connectors/sharepoint_client_secret"
 
 
+# ── put_connector_config ──────────────────────────────────────────────────────
+
+def test_put_config_writes_three_non_secret_keys():
+    """put_connector_config must write exactly the three non-secret keys."""
+    ws = FakeWS()
+    secret_store.put_connector_config(
+        "gdrive", "my_client_id", "https://example.com/cb", ["email", "openid"],
+        client=ws,
+    )
+    keys_written = {c[1] for c in ws.secrets.puts}
+    assert "gdrive_client_id" in keys_written
+    assert "gdrive_redirect_uri" in keys_written
+    assert "gdrive_scopes" in keys_written
+    assert len(keys_written) == 3, "must write exactly 3 keys"
+
+
+def test_put_config_does_not_write_client_secret():
+    """put_connector_config must never write the client_secret key."""
+    ws = FakeWS()
+    secret_store.put_connector_config(
+        "gdrive", "cid", "uri", ["s"],
+        client=ws,
+    )
+    keys_written = {c[1] for c in ws.secrets.puts}
+    assert "gdrive_client_secret" not in keys_written
+
+
+def test_put_config_returns_ref_string():
+    """put_connector_config must return the secret_ref string (not a secret value)."""
+    ws = FakeWS()
+    ref = secret_store.put_connector_config(
+        "sharepoint", "cid", "uri", [],
+        client=ws,
+    )
+    assert ref == "docintel_connectors/sharepoint_client_secret"
+
+
 # ── secret_configured ─────────────────────────────────────────────────────────
 
 def test_secret_configured_true_when_key_present():

@@ -77,6 +77,8 @@ def upsert_connector(req: ConnectorUpsertRequest):
         existing = opstore.get_connector(req.provider)
         ref = existing.get("secret_ref", "") if existing else ""
         status = existing.get("status", "unconfigured") if existing else "unconfigured"
+        # Propagate non-secret field edits to scope so the sources app stays in sync.
+        secret_store.put_connector_config(req.provider, req.client_id, redirect, scopes)
 
     row = opstore.upsert_connector(
         provider=req.provider,
@@ -104,4 +106,4 @@ def delete_connector(provider: str):
 @router.get("/connectors/{provider}/authorize-url")
 def get_authorize_url(provider: str):
     base = os.getenv("DOCINTEL_MCP_SOURCES_URL", "").rstrip("/")
-    return {"auth_url": f"{base}/oauth/{provider}/start"}
+    return {"auth_url": f"{base}/oauth/{provider}/start" if base else ""}

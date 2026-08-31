@@ -47,6 +47,32 @@ def put_connector_credentials(
     return f"{SCOPE}/{secret_key(provider)}"
 
 
+def put_connector_config(
+    provider: str,
+    client_id: str,
+    redirect_uri: str,
+    scopes: list,
+    *,
+    client=None,
+) -> str:
+    """Write non-secret OAuth config keys to the Databricks secret scope.
+
+    Writes three keys: client_id, redirect_uri, scopes.
+    Does NOT write or delete client_secret.
+    Returns the secret_ref string (same convention as put_connector_credentials).
+    """
+    if client is None:
+        from databricks.sdk import WorkspaceClient
+        client = WorkspaceClient()
+
+    secrets = client.secrets
+    secrets.put_secret(SCOPE, f"{provider}_client_id", string_value=client_id)
+    secrets.put_secret(SCOPE, f"{provider}_redirect_uri", string_value=redirect_uri)
+    secrets.put_secret(SCOPE, f"{provider}_scopes", string_value=json.dumps(scopes))
+
+    return f"{SCOPE}/{secret_key(provider)}"
+
+
 def secret_configured(provider: str, *, client=None) -> bool:
     """Return True if a client_secret exists for the provider (no value read)."""
     if client is None:

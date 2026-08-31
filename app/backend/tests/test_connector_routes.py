@@ -83,6 +83,8 @@ def test_post_without_client_secret_does_not_call_put(monkeypatch):
 
     monkeypatch.setattr(connector_routes.secret_store, "put_connector_credentials",
                         lambda *a, **k: put_calls.append(a) or "ref")
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_config",
+                        lambda *a, **k: "ref")
     monkeypatch.setattr(connector_routes.opstore, "get_connector",
                         lambda p: {"secret_ref": "old_ref", "status": "configured"})
     monkeypatch.setattr(connector_routes.opstore, "upsert_connector",
@@ -94,7 +96,58 @@ def test_post_without_client_secret_does_not_call_put(monkeypatch):
         "client_id": "abc123",
     })
     assert resp.status_code == 200
-    assert len(put_calls) == 0, "put must NOT be called when client_secret is absent"
+    assert len(put_calls) == 0, "put_connector_credentials must NOT be called when client_secret is absent"
+
+
+def test_post_without_client_secret_calls_put_config(monkeypatch):
+    """Edit without secret must call put_connector_config with non-secret fields."""
+    config_calls = []
+
+    def _fake_config(provider, client_id, redirect_uri, scopes, **k):
+        config_calls.append({"provider": provider, "client_id": client_id,
+                              "redirect_uri": redirect_uri, "scopes": scopes})
+        return "ref"
+
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_credentials",
+                        lambda *a, **k: "ref")
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_config", _fake_config)
+    monkeypatch.setattr(connector_routes.opstore, "get_connector",
+                        lambda p: {"secret_ref": "old_ref", "status": "configured"})
+    monkeypatch.setattr(connector_routes.opstore, "upsert_connector",
+                        lambda **k: _SAMPLE_ROW)
+
+    c = _make_client()
+    resp = c.post("/api/connectors", json={
+        "provider": "gdrive",
+        "client_id": "abc123",
+        "redirect_uri": "https://x.com/cb",
+        "scopes": ["email"],
+    })
+    assert resp.status_code == 200
+    assert len(config_calls) == 1, "put_connector_config must be called when client_secret is absent"
+    assert config_calls[0]["provider"] == "gdrive"
+    assert config_calls[0]["client_id"] == "abc123"
+
+
+def test_post_with_client_secret_does_not_call_put_config(monkeypatch):
+    """When a new secret is supplied, only put_connector_credentials should be called."""
+    config_calls = []
+
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_credentials",
+                        lambda *a, **k: "docintel_connectors/gdrive_client_secret")
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_config",
+                        lambda *a, **k: config_calls.append(a) or "ref")
+    monkeypatch.setattr(connector_routes.opstore, "upsert_connector",
+                        lambda **k: _SAMPLE_ROW)
+
+    c = _make_client()
+    resp = c.post("/api/connectors", json={
+        "provider": "gdrive",
+        "client_id": "abc123",
+        "client_secret": "SHH",
+    })
+    assert resp.status_code == 200
+    assert len(config_calls) == 0, "put_connector_config must NOT be called when client_secret is present"
 
 
 def test_post_without_client_secret_preserves_existing_ref(monkeypatch):
@@ -103,6 +156,8 @@ def test_post_without_client_secret_preserves_existing_ref(monkeypatch):
 
     monkeypatch.setattr(connector_routes.secret_store, "put_connector_credentials",
                         lambda *a, **k: "new_ref")
+    monkeypatch.setattr(connector_routes.secret_store, "put_connector_config",
+                        lambda *a, **k: "ref")
     monkeypatch.setattr(connector_routes.opstore, "get_connector",
                         lambda p: {"secret_ref": "old_ref", "status": "configured"})
 
@@ -207,3 +262,22 @@ def test_authorize_url_uses_sources_env(monkeypatch):
     resp = c.get("/api/connectors/gdrive/authorize-url")
     data = resp.json()
     assert data["auth_url"].startswith("https://my-sources.databricksapps.com")
+
+
+def test_authorize_url_empty_when_sources_url_unset(monkeypatch):
+    """I2: When DOCINTEL_MCP_SOURCES_URL is unset, auth_url must be empty (not a relative path)."""
+    monkeypatch.delenv("DOCINTEL_MCP_SOURCES_URL", raising=False)
+    c = _make_client()
+    resp = c.get("/api/connectors/gdrive/authorize-url")
+    assert resp.status_code == 200
+    assert resp.json()["auth_url"] == ""
+
+
+def test_authorize_url_absolute_when_sources_url_set(monkeypatch):
+    """I2: When DOCINTEL_MCP_SOURCES_URL is set, auth_url must be an absolute URL."""
+    monkeypatch.setenv("DOCINTEL_MCP_SOURCES_URL", "https://sources.example.com")
+    c = _make_client()
+    resp = c.get("/api/connectors/sharepoint/authorize-url")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auth_url"] == "https://sources.example.com/oauth/sharepoint/start"
