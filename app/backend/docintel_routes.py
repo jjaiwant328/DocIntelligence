@@ -35,6 +35,23 @@ SCH_VEC   = os.getenv("DOCINTEL_SCHEMA_VEC", "vectors")
 WH_ID     = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
 AGENT_MODEL = os.getenv("DOCINTEL_AGENT_MODEL", "databricks-claude-sonnet-4-5")
 
+# ── Cached WorkspaceClient ─────────────────────────────────────────────────────
+# Instantiating WorkspaceClient() re-runs auth/credential negotiation every time.
+# A single complex route (e.g. agent-query) fires several SQL statements, so cache
+# one process-wide client and reuse it everywhere.
+_ws_client: Optional[WorkspaceClient] = None
+_ws_lock = threading.Lock()
+
+
+def _ws() -> WorkspaceClient:
+    """Return the process-wide cached WorkspaceClient (auth negotiated once)."""
+    global _ws_client
+    if _ws_client is None:
+        with _ws_lock:
+            if _ws_client is None:
+                _ws_client = WorkspaceClient()
+    return _ws_client
+
 # Ordered fallback list tried when the primary model endpoint is unavailable
 _MODEL_FALLBACKS = [
     AGENT_MODEL,
@@ -53,7 +70,7 @@ def _resolve_model() -> str:
     if _available_models_cache:
         return _available_models_cache[0]
     try:
-        w = WorkspaceClient()
+        w = _ws()
         ready = {ep.name for ep in w.serving_endpoints.list() if ep.state and str(ep.state.ready) in ("READY", "EndpointStateReady.READY")}
         for m in dict.fromkeys(_MODEL_FALLBACKS):  # deduplicated, order preserved
             if m in ready:
@@ -106,7 +123,7 @@ def _get_domain_schemas(domain_id: str) -> dict:
             return _domain_cache[domain_id]
 
     def _run_query(stmt: str):
-        w = WorkspaceClient()
+        w = _ws()
         resp = w.statement_execution.execute_statement(
             warehouse_id=WH_ID,
             statement=stmt,
@@ -286,7 +303,7 @@ def _robust_json_loads(raw: str) -> dict:
 def run_sql(query: str, timeout_secs: int = 50) -> list:
     """Execute SQL on the configured warehouse and return rows as list of dicts."""
     try:
-        w = WorkspaceClient()
+        w = _ws()
         resp = w.statement_execution.execute_statement(
             warehouse_id=WH_ID,
             statement=query,
@@ -2003,48 +2020,61 @@ async def document_library(domain_id: str = "supply_chain"):
     _d = _get_domain_schemas(domain_id)
     _raw = _d["schema_raw"]; _ont = _d["schema_ont"]
     try:
+        # Single query: the top-100 docs plus their extracted-field map and entity
+        # count, joined in SQL. The field map is aggregated with map_from_entries
+        # (deduping field_name via the inner GROUP BY so duplicate keys can't clash)
+        # and returned as a JSON object string, which we parse below. This replaces
+        # three sequential warehouse round-trips with one.
         docs = run_sql(f"""
-            SELECT
-                doc_id,
-                filename,
-                COALESCE(doc_type, 'unknown') AS doc_type,
-                CAST(processed_ts AS STRING) AS processed_ts,
-                LENGTH(raw_text)              AS char_count,
-                ROUND(LENGTH(raw_text) / 5.0) AS est_word_count,
-                LEFT(raw_text, 500)           AS text_preview
-            FROM {CATALOG}.{_raw}.parsed_documents
-            ORDER BY processed_ts DESC
-            LIMIT 100
-        """)
-
-        if docs:
-            doc_ids_sql = ", ".join(f"'{d['doc_id']}'" for d in docs)
-            fields_raw = run_sql(f"""
-                SELECT doc_id, field_name, field_value
-                FROM {CATALOG}.{_raw}.extracted_fields
-                WHERE doc_id IN ({doc_ids_sql})
-                  AND field_value IS NOT NULL
-                ORDER BY doc_id, field_name
-            """)
-            fields_map: dict = {}
-            for row in fields_raw:
-                fid = row["doc_id"]
-                if fid not in fields_map:
-                    fields_map[fid] = {}
-                fields_map[fid][row["field_name"]] = row["field_value"]
-
-            entity_counts_raw = run_sql(f"""
+            WITH docs AS (
+                SELECT
+                    doc_id,
+                    filename,
+                    COALESCE(doc_type, 'unknown') AS doc_type,
+                    CAST(processed_ts AS STRING) AS processed_ts,
+                    LENGTH(raw_text)              AS char_count,
+                    ROUND(LENGTH(raw_text) / 5.0) AS est_word_count,
+                    LEFT(raw_text, 500)           AS text_preview
+                FROM {CATALOG}.{_raw}.parsed_documents
+                ORDER BY processed_ts DESC
+                LIMIT 100
+            ),
+            fields AS (
+                SELECT ef.doc_id,
+                       map_from_entries(collect_list(struct(ef.field_name AS key,
+                                                            ef.field_value AS value))) AS field_map
+                FROM (
+                    SELECT doc_id, field_name, MAX(field_value) AS field_value
+                    FROM {CATALOG}.{_raw}.extracted_fields
+                    WHERE field_value IS NOT NULL
+                      AND doc_id IN (SELECT doc_id FROM docs)
+                    GROUP BY doc_id, field_name
+                ) ef
+                GROUP BY ef.doc_id
+            ),
+            ent AS (
                 SELECT source AS doc_id, COUNT(*) AS entity_count
                 FROM {CATALOG}.{_ont}.entities
-                WHERE source IN ({doc_ids_sql})
+                WHERE source IN (SELECT doc_id FROM docs)
                 GROUP BY source
-            """)
-            entity_count_map = {r["doc_id"]: r["entity_count"] for r in (entity_counts_raw or [])}
+            )
+            SELECT d.doc_id, d.filename, d.doc_type, d.processed_ts,
+                   d.char_count, d.est_word_count, d.text_preview,
+                   TO_JSON(f.field_map)          AS extracted_fields_json,
+                   COALESCE(ent.entity_count, 0) AS entity_count
+            FROM docs d
+            LEFT JOIN fields f ON f.doc_id = d.doc_id
+            LEFT JOIN ent   ON ent.doc_id = d.doc_id
+            ORDER BY d.processed_ts DESC
+        """)
 
-            for d in docs:
-                d["extracted_fields"] = fields_map.get(d["doc_id"], {})
-                d["entity_count"]     = entity_count_map.get(d["doc_id"], 0)
-                d["doc_type_label"]   = DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"].replace("_", " ").title())
+        for d in (docs or []):
+            fj = d.pop("extracted_fields_json", None)
+            try:
+                d["extracted_fields"] = json.loads(fj) if fj else {}
+            except Exception:
+                d["extracted_fields"] = {}
+            d["doc_type_label"] = DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"].replace("_", " ").title())
 
         return {"documents": docs or [], "total": len(docs or [])}
 

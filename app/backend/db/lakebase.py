@@ -122,7 +122,7 @@ class _Manager:
             conninfo="",
             kwargs=kwargs,
             min_size=0,
-            max_size=int(os.getenv("LAKEBASE_POOL_MAX", "8")),
+            max_size=int(os.getenv("LAKEBASE_POOL_MAX", "20")),
             max_lifetime=_CONN_MAX_LIFETIME,
             timeout=float(os.getenv("LAKEBASE_POOL_TIMEOUT", "10")),
             open=True,
