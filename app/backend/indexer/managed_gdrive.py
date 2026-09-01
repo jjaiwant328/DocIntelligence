@@ -93,3 +93,59 @@ class ManagedDriveSource:
             "content_b64": base64.b64encode(raw).decode("ascii"),
             "filename": resp.get("name", item_id),
         }
+
+
+import asyncio
+import json as _json
+
+
+class AsyncManagedDriveSource:
+    """Async, mcp_sources-compatible adapter over the managed Drive MCP.
+
+    `call_tool(tool, args) -> dict` is a SYNC callable (DatabricksMCPClient runs
+    its own event loop); each async method offloads it via asyncio.to_thread so
+    it composes with the async indexer pipeline.
+    """
+    def __init__(self, call_tool, root_folder_id: str):
+        self._call = call_tool
+        self._root = root_folder_id
+
+    async def list_children(self, source: str = "", folder_id: str = "") -> list:
+        parent = folder_id or self._root
+        resp = await asyncio.to_thread(
+            self._call, "google_drive_search",
+            {"query": f"'{parent}' in parents and trashed = false", "max_results": 200},
+        )
+        items = resp.get("items", []) if isinstance(resp, dict) else []
+        return [map_search_item(it) for it in items]
+
+    async def fetch_document(self, source: str, doc_ref: str) -> dict:
+        resp = await asyncio.to_thread(self._call, "google_file_download", {"file_id": doc_ref})
+        if not isinstance(resp, dict) or resp.get("error_code"):
+            code = resp.get("error_code") if isinstance(resp, dict) else resp
+            raise ValueError(f"cannot download {doc_ref}: {code}")
+        content = resp.get("content", "")
+        raw = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        return {"content_b64": base64.b64encode(raw).decode("ascii"),
+                "filename": resp.get("name", doc_ref)}
+
+
+_MANAGED_URL = ("https://adb-4101016551133680.0.azuredatabricks.net"
+                "/ai-gateway/mcp-services/system.ai.google_drive?o=4101016551133680")
+
+
+def make_managed_call_tool(ai_gateway_token: str):
+    """Build a sync call_tool bound to the managed MCP, authed as the user."""
+    from databricks_mcp import DatabricksMCPClient
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.core import Config
+    cfg = Config(host="https://adb-4101016551133680.0.azuredatabricks.net",
+                 token=ai_gateway_token, auth_type="pat")
+    mc = DatabricksMCPClient(server_url=_MANAGED_URL, workspace_client=WorkspaceClient(config=cfg))
+
+    def call_tool(tool: str, args: dict) -> dict:
+        r = mc.call_tool(tool, args)
+        joined = "".join(getattr(c, "text", "") for c in (getattr(r, "content", []) or []))
+        return _json.loads(joined) if joined else {}
+
+    return call_tool

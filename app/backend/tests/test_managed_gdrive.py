@@ -1,7 +1,9 @@
 """Offline tests for the managed-MCP Google Drive adapter (no network)."""
+import asyncio
 import base64
 
 from indexer.managed_gdrive import (
+    AsyncManagedDriveSource,
     ManagedDriveSource,
     is_text_readable,
     map_search_item,
@@ -74,3 +76,24 @@ def test_fetch_document_raises_on_unsupported():
         assert False, "expected ValueError"
     except ValueError as e:
         assert "UNSUPPORTED_FILE_FORMAT" in str(e)
+
+
+def test_async_list_children_maps_and_queries_root():
+    calls = []
+    def fake(tool, args):
+        calls.append((tool, args))
+        return {"items": [{"id":"F1","name":"a.txt","mimeType":"text/plain"}]}
+    src = AsyncManagedDriveSource(fake, root_folder_id="ROOT")
+    out = asyncio.run(src.list_children("gdrive_managed", ""))
+    assert calls[0][0] == "google_drive_search"
+    assert "'ROOT' in parents" in calls[0][1]["query"]
+    assert out[0]["item_id"] == "F1"
+
+def test_async_fetch_document_b64():
+    def fake(tool, args):
+        assert args["file_id"] == "F1"
+        return {"name":"a.txt","content":"hi"}
+    src = AsyncManagedDriveSource(fake, root_folder_id="ROOT")
+    r = asyncio.run(src.fetch_document("gdrive_managed", "F1"))
+    assert base64.b64decode(r["content_b64"]).decode() == "hi"
+    assert r["filename"] == "a.txt"

@@ -13,5 +13,8 @@ Pillow
 databricks-langchain
 langchain-community
 langchain-core
-# Pin MCP to pre-1.9 to avoid 'streamable_http_client' import breakage
-mcp>=1.0.0,<1.9.0
+# MCP: >=1.13 speaks the AI-Gateway MCP protocol (2025-06-18) and still exposes
+# the 1.x `streamablehttp_client` import mcp_sources uses (renamed only in 2.0).
+mcp>=1.13.0,<2.0.0
+# databricks-mcp: client for managed AI-Gateway MCP services (system.ai.*)
+databricks-mcp
