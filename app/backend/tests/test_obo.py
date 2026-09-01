@@ -1,4 +1,4 @@
-import types
+import os
 import pytest
 import obo
 
@@ -37,3 +37,4 @@ def test_exchange_payload_shape():
     assert captured["data"]["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
     assert captured["data"]["scope"] == "ai-gateway"
     assert captured["url"].endswith("/oidc/v1/token")
+    assert captured["auth"] == (os.environ.get("DATABRICKS_CLIENT_ID", ""), os.environ.get("DATABRICKS_CLIENT_SECRET", ""))
