@@ -17,10 +17,11 @@ import asyncio
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
 import mcp_sources
+import obo
 from db import lakebase
 from db import operational as opstore
 
@@ -299,3 +300,50 @@ def search_documents(req: SearchRequest):
         "results":    results,
         "total":      len(results),
     }
+
+
+# ── Managed (OBO) crawl seams ──────────────────────────────────────────────────
+
+def _build_managed_source(token: str, folder_id: str):
+    """Seam: build the async managed-Drive adapter from an OBO token."""
+    from indexer.managed_gdrive import AsyncManagedDriveSource, make_managed_call_tool
+    return AsyncManagedDriveSource(make_managed_call_tool(token), root_folder_id=folder_id)
+
+
+async def _run_index_job(**kwargs):
+    """Seam so tests can monkeypatch the pipeline entry point."""
+    from indexer.pipeline import run_index_job
+    return await run_index_job(**kwargs)
+
+
+@router.post("/sources/{source_id}/managed-crawl")
+async def managed_crawl_route(source_id: str, req: CrawlRequest, request: Request):
+    """OBO crawl+index for a managed source: reads the user's Drive via the
+    managed MCP on-behalf-of the caller, indexes text files into Lakebase."""
+    row = opstore.get_source(source_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"source '{source_id}' not found")
+    if row.get("provider") != "gdrive_managed":
+        raise HTTPException(status_code=400,
+                            detail=f"source '{source_id}' is not a managed source")
+
+    token = obo.user_ai_gateway_token(request)          # 401 if no forwarded token
+    adapter = _build_managed_source(token, req.root_folder)
+
+    from indexer.crawl import crawl_source
+    from indexer.pipeline import PipelineDeps
+
+    async def _managed_crawl(**kw):
+        return await crawl_source(**{**kw, "mcp": adapter})
+
+    deps = PipelineDeps(crawl_fn=_managed_crawl, fetch_fn=adapter.fetch_document)
+
+    job_id = str(uuid.uuid4())
+    opstore.create_index_job(job_id, req.domain_id, req.project_id, "project", "", "app_user")
+    with lakebase.connection() as conn:
+        summary = await _run_index_job(
+            job_id=job_id, source_id=source_id, provider=row["provider"],
+            domain_id=req.domain_id, project_id=req.project_id,
+            scope="project", scope_ref="", deps=deps, conn=conn,
+        )
+    return {"job_id": job_id, "summary": summary}

@@ -454,3 +454,52 @@ def test_post_search_passes_optional_params(monkeypatch):
     assert calls[0]["k"] == 5
     assert calls[0]["folder"] == "/reports/"
     assert calls[0]["types"] == ["application/pdf"]
+
+
+# ── POST /api/sources/{id}/managed-crawl ─────────────────────────────────────
+
+def test_managed_crawl_injects_obo_and_runs(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import source_routes, obo
+    app = FastAPI(); app.include_router(source_routes.router)
+
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"provider": "gdrive_managed"})
+    monkeypatch.setattr(source_routes.opstore, "create_index_job",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(obo, "user_ai_gateway_token", lambda req: "AI_GW")
+    captured = {}
+    class FakeAdapter:
+        fetch_document = None
+    monkeypatch.setattr(source_routes, "_build_managed_source",
+                        lambda token, folder: captured.update({"built": (token, folder)}) or FakeAdapter())
+    class _Conn:
+        def __enter__(self): return object()
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(source_routes.lakebase, "connection", lambda: _Conn())
+    async def fake_run(**kwargs):
+        captured["deps"] = kwargs.get("deps")
+        return {"embedded": 3, "skipped": 4, "failed": 0}
+    monkeypatch.setattr(source_routes, "_run_index_job", fake_run)
+
+    r = TestClient(app).post("/api/sources/gd/managed-crawl",
+                             json={"domain_id":"d","project_id":"p","root_folder":"FOLDER"})
+    assert r.status_code == 200
+    assert r.json()["summary"]["embedded"] == 3
+    assert captured["built"] == ("AI_GW", "FOLDER")
+    assert captured["deps"] is not None   # managed deps injected
+
+
+def test_managed_crawl_401_without_forwarded_token(monkeypatch):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    import source_routes, obo
+    app = FastAPI(); app.include_router(source_routes.router)
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"provider": "gdrive_managed"})
+    def raise401(req): raise HTTPException(status_code=401, detail="need auth")
+    monkeypatch.setattr(obo, "user_ai_gateway_token", raise401)
+    r = TestClient(app).post("/api/sources/gd/managed-crawl",
+                             json={"domain_id":"d","project_id":"p","root_folder":"F"})
+    assert r.status_code == 401
