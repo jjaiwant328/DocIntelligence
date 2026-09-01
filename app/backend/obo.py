@@ -12,9 +12,17 @@ from typing import Callable, Optional
 
 from fastapi import HTTPException
 
-WORKSPACE_HOST = os.getenv(
-    "DATABRICKS_HOST", "https://adb-4101016551133680.0.azuredatabricks.net"
-).rstrip("/")
+
+def _workspace_host() -> str:
+    """Return the workspace host with normalized https:// scheme.
+
+    The DATABRICKS_HOST env var may come as a bare hostname (e.g., in Databricks Apps
+    runtime) or already include a scheme. This ensures it always has https://.
+    """
+    host = os.getenv(
+        "DATABRICKS_HOST", "https://adb-4101016551133680.0.azuredatabricks.net"
+    ).rstrip("/")
+    return host if host.startswith("http") else f"https://{host}"
 
 
 def _exchange_token(subject_token: str, *, post: Optional[Callable] = None) -> str:
@@ -23,7 +31,7 @@ def _exchange_token(subject_token: str, *, post: Optional[Callable] = None) -> s
         import requests
         post = requests.post
     resp = post(
-        f"{WORKSPACE_HOST}/oidc/v1/token",
+        f"{_workspace_host()}/oidc/v1/token",
         data={
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
             "subject_token": subject_token,

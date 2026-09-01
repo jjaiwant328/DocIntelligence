@@ -53,3 +53,17 @@ def test_exchange_failure_raises_403():
     assert ei.value.status_code == 403
     # Token must never appear in the error detail
     assert "SECRET_TOKEN" not in (ei.value.detail or "")
+
+
+def test_exchange_url_has_scheme_when_env_host_schemeless(monkeypatch):
+    """Schemeless DATABRICKS_HOST env var must yield https:// URL in exchange request."""
+    monkeypatch.setenv("DATABRICKS_HOST", "adb-123.0.azuredatabricks.net")
+    captured = {}
+    class Resp:
+        status_code = 200
+        def json(self): return {"access_token": "X"}
+    def fake_post(url, data=None, auth=None, timeout=None):
+        captured["url"] = url
+        return Resp()
+    obo._exchange_token("USER_TOK", post=fake_post)
+    assert captured["url"] == "https://adb-123.0.azuredatabricks.net/oidc/v1/token"
