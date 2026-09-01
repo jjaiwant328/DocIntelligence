@@ -42,6 +42,7 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
   const [crawling,     setCrawling]     = useState<Record<string, boolean>>({});
   const [crawlResults, setCrawlResults] = useState<Record<string, CrawlResult>>({});
   const [showForm,     setShowForm]     = useState(false);
+  const [managedFolder, setManagedFolder] = useState<Record<string, string>>({});
 
   // Register-new-source form state
   const [newId,          setNewId]          = useState("gdrive");
@@ -97,6 +98,24 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
       fetchSources();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCrawling(c => ({ ...c, [sourceId]: false }));
+    }
+  }
+
+  async function managedCrawl(sourceId: string, folderId: string) {
+    if (!project?.project_id) { setMsg("Select a project first."); return; }
+    setCrawling(c => ({ ...c, [sourceId]: true })); setMsg(null);
+    try {
+      const r = await apiCall<{ job_id: string; summary: { embedded: number; skipped: number; failed: number } }>(
+        `/api/sources/${sourceId}/managed-crawl`,
+        { method: "POST", body: JSON.stringify({ domain_id: domain.domain_id, project_id: project.project_id, root_folder: folderId }) },
+      );
+      setMsg(`Indexed ${r.summary.embedded} file(s), skipped ${r.summary.skipped} (PDFs are listed but not yet indexed).`);
+      fetchSources();
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setMsg(m.includes("401") ? "Authorize the app for AI Gateway access, then retry." : m);
     } finally {
       setCrawling(c => ({ ...c, [sourceId]: false }));
     }
@@ -183,6 +202,7 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
                 className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
                 <option value="gdrive">Google Drive</option>
+                <option value="gdrive_managed">Google Drive (managed — no setup)</option>
                 <option value="sharepoint">SharePoint / OneDrive</option>
                 <option value="s3">AWS S3</option>
                 <option value="gcs">Google Cloud Storage</option>
@@ -310,14 +330,34 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
                       Connect
                     </button>
                   )}
-                  <button
-                    onClick={() => crawl(src.source_id)}
-                    disabled={isCrawling}
-                    className="text-xs font-semibold text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
-                    title={!project ? "Select a project first" : "Sync file metadata for the selected project"}
-                  >
-                    {isCrawling ? "Crawling…" : "Crawl"}
-                  </button>
+                  {src.provider !== "gdrive_managed" && (
+                    <button
+                      onClick={() => crawl(src.source_id)}
+                      disabled={isCrawling}
+                      className="text-xs font-semibold text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+                      title={!project ? "Select a project first" : "Sync file metadata for the selected project"}
+                    >
+                      {isCrawling ? "Crawling…" : "Crawl"}
+                    </button>
+                  )}
+                  {src.provider === "gdrive_managed" && (
+                    <div className="flex flex-col gap-1 w-full">
+                      <input
+                        value={managedFolder[src.source_id] ?? ""}
+                        onChange={e => setManagedFolder(f => ({ ...f, [src.source_id]: e.target.value }))}
+                        placeholder="Folder ID (optional)"
+                        className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                      />
+                      <button
+                        onClick={() => managedCrawl(src.source_id, managedFolder[src.source_id] ?? "")}
+                        disabled={isCrawling}
+                        className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+                        title={!project ? "Select a project first" : "Index files from the managed Drive"}
+                      >
+                        {isCrawling ? "Indexing…" : "Connect & Crawl"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );
