@@ -107,15 +107,15 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
     if (!project?.project_id) { setMsg("Select a project first."); return; }
     setCrawling(c => ({ ...c, [sourceId]: true })); setMsg(null);
     try {
-      const r = await apiCall<{ job_id: string; summary: { embedded: number; skipped: number; failed: number } }>(
+      const r = await apiCall<{ job_id: string; summary: { embedded: number; skipped: number; failed: number }; skipped_binary: number }>(
         `/api/sources/${sourceId}/managed-crawl`,
         { method: "POST", body: JSON.stringify({ domain_id: domain.domain_id, project_id: project.project_id, root_folder: folderId }) },
       );
-      setMsg(`Indexed ${r.summary.embedded} file(s), skipped ${r.summary.skipped} (PDFs are listed but not yet indexed).`);
+      setMsg(`Indexed ${r.summary.embedded} file(s); ${r.skipped_binary} non-text file(s) listed but not indexed.`);
       fetchSources();
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      setMsg(m.includes("401") ? "Authorize the app for AI Gateway access, then retry." : m);
+      setMsg(m.includes("401") || m.includes("403") ? "Authorize the app for AI Gateway access, then retry." : m);
     } finally {
       setCrawling(c => ({ ...c, [sourceId]: false }));
     }

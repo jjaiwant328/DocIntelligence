@@ -35,7 +35,14 @@ def _exchange_token(subject_token: str, *, post: Optional[Callable] = None) -> s
               os.environ.get("DATABRICKS_CLIENT_SECRET", "")),
         timeout=30,
     )
-    resp.raise_for_status()
+    if not (200 <= resp.status_code < 300):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"user authorization for AI Gateway failed or expired "
+                f"(status {resp.status_code}); re-authorize and retry"
+            ),
+        )
     return resp.json()["access_token"]
 
 

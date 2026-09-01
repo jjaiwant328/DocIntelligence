@@ -486,9 +486,14 @@ def test_managed_crawl_injects_obo_and_runs(monkeypatch):
     r = TestClient(app).post("/api/sources/gd/managed-crawl",
                              json={"domain_id":"d","project_id":"p","root_folder":"FOLDER"})
     assert r.status_code == 200
-    assert r.json()["summary"]["embedded"] == 3
+    data = r.json()
+    assert data["summary"]["embedded"] == 3
     assert captured["built"] == ("AI_GW", "FOLDER")
     assert captured["deps"] is not None   # managed deps injected
+    # skipped_binary must be present and be an int (0 when _managed_crawl is
+    # bypassed by the fake _run_index_job, but the key must always be returned)
+    assert "skipped_binary" in data
+    assert isinstance(data["skipped_binary"], int)
 
 
 def test_managed_crawl_401_without_forwarded_token(monkeypatch):

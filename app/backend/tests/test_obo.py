@@ -38,3 +38,18 @@ def test_exchange_payload_shape():
     assert captured["data"]["scope"] == "ai-gateway"
     assert captured["url"].endswith("/oidc/v1/token")
     assert captured["auth"] == (os.environ.get("DATABRICKS_CLIENT_ID", ""), os.environ.get("DATABRICKS_CLIENT_SECRET", ""))
+
+
+def test_exchange_failure_raises_403():
+    """A non-2xx exchange response must raise HTTPException 403, not propagate as 500."""
+    from fastapi import HTTPException
+    class BadResp:
+        status_code = 400
+        def json(self): return {}
+    def fake_post(url, data=None, auth=None, timeout=None):
+        return BadResp()
+    with pytest.raises(HTTPException) as ei:
+        obo._exchange_token("SECRET_TOKEN", post=fake_post)
+    assert ei.value.status_code == 403
+    # Token must never appear in the error detail
+    assert "SECRET_TOKEN" not in (ei.value.detail or "")

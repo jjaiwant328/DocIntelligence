@@ -319,7 +319,14 @@ async def _run_index_job(**kwargs):
 @router.post("/sources/{source_id}/managed-crawl")
 async def managed_crawl_route(source_id: str, req: CrawlRequest, request: Request):
     """OBO crawl+index for a managed source: reads the user's Drive via the
-    managed MCP on-behalf-of the caller, indexes text files into Lakebase."""
+    managed MCP on-behalf-of the caller, indexes text files into Lakebase.
+
+    NOTE: awaits run_index_job inline (holding the request and a pooled
+    Lakebase connection across the OBO Drive fetches and embedding) rather
+    than the background _run_index_job_task pattern, because the OBO token is
+    request-scoped. Acceptable for the demo-corpus scope; revisit for large
+    drives.
+    """
     row = opstore.get_source(source_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"source '{source_id}' not found")
@@ -332,9 +339,20 @@ async def managed_crawl_route(source_id: str, req: CrawlRequest, request: Reques
 
     from indexer.crawl import crawl_source
     from indexer.pipeline import PipelineDeps
+    from indexer.managed_gdrive import is_text_readable
+    from db.repositories import external_docs_repo as _docs_repo
+
+    skipped_binary = 0
 
     async def _managed_crawl(**kw):
-        return await crawl_source(**{**kw, "mcp": adapter})
+        nonlocal skipped_binary
+        result = await crawl_source(**{**kw, "mcp": adapter})
+        for d in _docs_repo.list_for_project(kw["conn"], kw["domain_id"], kw["project_id"]):
+            if (d["external_document_id"] in result["seen_ids"]
+                    and not is_text_readable(d.get("mime_type", ""))):
+                _docs_repo.set_included(kw["conn"], d["external_document_id"], False)
+                skipped_binary += 1
+        return result
 
     deps = PipelineDeps(crawl_fn=_managed_crawl, fetch_fn=adapter.fetch_document)
 
@@ -346,4 +364,4 @@ async def managed_crawl_route(source_id: str, req: CrawlRequest, request: Reques
             domain_id=req.domain_id, project_id=req.project_id,
             scope="project", scope_ref="", deps=deps, conn=conn,
         )
-    return {"job_id": job_id, "summary": summary}
+    return {"job_id": job_id, "summary": summary, "skipped_binary": skipped_binary}
