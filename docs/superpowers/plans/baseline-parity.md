@@ -55,7 +55,20 @@ New pipeline `docintel_spine` (schema `jai_docintel.template`), reading `/Volume
 | `template.bronze_parsed_raw` | 61 | 23 jpg + 19 pdf + 19 txt |
 | `template.bronze_parsed_content` | 61 | all content non-null, 0 parse errors |
 
-Volume currently holds 61 files (baseline 273 accumulated across historical runs/domains). `ai_parse_document` + VARIANT + Auto Loader confirmed working in serverless SDP. Silver/gold next.
+Volume currently holds 61 files (baseline 273 accumulated across historical runs/domains). `ai_parse_document` + VARIANT + Auto Loader confirmed working in serverless SDP.
+
+### Full pipeline verified (2026-09-21) — Tasks 2+3 complete
+
+One SDP (`docintel_spine`) now consolidates old notebooks 01/02/03, config-driven from `domain_configs` (domain=`supply_chain`):
+
+| Table | Rows | Notes |
+|---|---|---|
+| `template.silver_classified` | 61 | ai_classify → 13 doc_types |
+| `template.silver_chunks` | 44 | ai_prep_search chunks (42 docs) for Vector Search |
+| `template.gold_documents` | 61 | doc_id, doc_type, source_file |
+| `template.gold_extracted_fields` | 99 | ai_extract long format, 26 docs / 5 types, nulls filtered, scalar values |
+
+SDP runtime notes: read config inside MV function bodies (not module top-level); `variant_explode` unavailable → use `explode(try_cast(... AS ARRAY<VARIANT>))`; `ai_extract` nests each field under `.value`.
 
 ## Notes
 - Existing demo full-run (job `docintel_process_docs`) NOT re-run for baseline — table snapshot

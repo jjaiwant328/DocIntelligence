@@ -12,5 +12,7 @@ resources:
         - glob:
             include: ../transformations/**
       configuration:
+        catalog: jai_docintel
+        domain_id: supply_chain
         source_volume_path: /Volumes/jai_docintel/raw/documents/
         image_output_path: /Volumes/jai_docintel/template/_pipeline_meta/parsed_images/
