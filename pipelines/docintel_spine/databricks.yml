@@ -1,0 +1,12 @@
+bundle:
+  name: docintel_spine
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-4101016551133680.0.azuredatabricks.net
