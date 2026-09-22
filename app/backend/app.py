@@ -102,6 +102,18 @@ except Exception as _e:
     _connectors_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Connector routes not loaded: {_connectors_load_error}")
 
+# Register thin-spine routes (endpoint-free search + evidence over docintel_spine tables).
+# Additive — does not affect existing routes.
+_spine_load_error: str | None = None
+try:
+    from spine_routes import router as spine_router
+    app.include_router(spine_router)
+    print("✅ Spine routes registered at /api/spine (search, evidence, domains)")
+except Exception as _e:
+    import traceback as _tb
+    _spine_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Spine routes not loaded: {_spine_load_error}")
+
 # Mount the in-app MCP server (headless tools) at /mcp/ — makes DocIntelligence's
 # capabilities callable by any MCP client. Must run before the catch-all route.
 _mcp_load_error: str | None = None
