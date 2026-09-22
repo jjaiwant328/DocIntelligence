@@ -1,0 +1,53 @@
+# Baseline Parity Snapshot
+
+Reference outputs of the **existing** DocIntelligence pipeline, captured before the thin-spine
+refactor. Used as an **informational sanity check** for the new Lakeflow Declarative Pipeline
+(owner direction: the old app "isn't very useful," so this does not hard-block schema deletion —
+it confirms the new pipeline parses/extracts the synthetic corpus correctly).
+
+- **Captured:** 2026-09-21
+- **Catalog:** `jai_docintel`  ·  **Warehouse:** `85a4ed5bcff25c0d` (Serverless Starter)
+- **Active domain (populated):** `supply_chain` → schema `raw`
+
+## Reference numbers (supply_chain / `raw`)
+
+| Metric | Value |
+|---|---|
+| `raw.parsed_documents_content` rows | **273** |
+| `raw.parsed_documents` docs | **78** (13 doc_types × 6) |
+| `raw.extracted_fields` rows | **52** |
+| `raw.extracted_fields` distinct doc_type | **5** |
+
+### doc_type distribution (`raw.parsed_documents`)
+```
+bill_of_lading 6, carrier_sla 6, certificate_of_analysis 6, delivery_exception 6,
+email_chain 6, inspection_report 6, maintenance_report 6, quality_incident_report 6,
+recall_notice 6, supplier_contract 6, supplier_scorecard 6, temperature_log 6,
+weather_report 6
+```
+
+### `raw.extracted_fields` columns (current — NO evidence columns)
+```
+doc_id, doc_type, field_name, field_value
+```
+> The new silver `extracted_fields` MUST add `page_id`, `bbox`, `source_text` (spec §4.2).
+
+### Registered domains (`platform.domain_configs`)
+```
+ap_three_way_match, compliance_due_diligence, supplier_performance, supply_chain
+```
+
+## Parity check (fill in after Task 3 builds the SDP)
+
+| Metric | Baseline | New (`template_raw`) | Match? |
+|---|---|---|---|
+| parsed_documents_content rows | 273 | _TBD_ | _TBD_ |
+| extracted_fields rows | 52 | _TBD_ | _TBD_ |
+| doc_type distribution | see above | _TBD_ | _TBD_ |
+| evidence columns present | no | _expect yes_ | _TBD_ |
+
+## Notes
+- Existing demo full-run (job `docintel_process_docs`) NOT re-run for baseline — table snapshot
+  above is the anchor; re-running the legacy job adds no signal given the revamp direction.
+- Legacy branches preserved: `demoV1`, `remove-vector-search` (worktrees removed, branches intact).
+- Salvaged references: `notebooks/05_vector_search.reference.py`, `notebooks/09_source_ingest.reference.py`.
