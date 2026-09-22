@@ -70,6 +70,16 @@ One SDP (`docintel_spine`) now consolidates old notebooks 01/02/03, config-drive
 
 SDP runtime notes: read config inside MV function bodies (not module top-level); `variant_explode` unavailable → use `explode(try_cast(... AS ARRAY<VARIANT>))`; `ai_extract` nests each field under `.value`.
 
+### T5 revised — endpoint-free retrieval (2026-09-22)
+
+Owner asked to avoid the always-on Vector Search endpoint. Confirmed `ai_prep_search` needs no endpoint (chunking only). New approach: `gold_chunks` MV embeds `chunk_to_embed` once via the **serverless FM API** (`databricks-gte-large-en`, pay-per-token, `CAST(ai_query(...) AS ARRAY<FLOAT>)`), retrieval via `vector_cosine_similarity` in plain SQL at query time.
+
+| Table | Rows | Notes |
+|---|---|---|
+| `template.gold_chunks` | 44 | 1024-dim embedding stored; no endpoint |
+
+Verified: query "temperature excursion on a refrigerated shipment" → correct top hits (0.805), 2.9s wall time, no Vector Search endpoint. Graduate to Delta Sync index (triggered sync / storage-optimized) only for large corpora needing ANN.
+
 ## Notes
 - Existing demo full-run (job `docintel_process_docs`) NOT re-run for baseline — table snapshot
   above is the anchor; re-running the legacy job adds no signal given the revamp direction.

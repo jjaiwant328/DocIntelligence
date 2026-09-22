@@ -16,3 +16,4 @@ resources:
         domain_id: supply_chain
         source_volume_path: /Volumes/jai_docintel/raw/documents/
         image_output_path: /Volumes/jai_docintel/template/_pipeline_meta/parsed_images/
+        embed_model: databricks-gte-large-en
