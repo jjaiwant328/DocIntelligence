@@ -28,8 +28,32 @@ def _load_extraction_configs():
     schemas_raw = rows[0]["extraction_schemas"] if rows else None
     if not schemas_raw:
         raise ValueError(f"No extraction_schemas configured for domain '{DOMAIN_ID}' in {CATALOG}.platform.domain_configs")
-    # {doc_type: {"schema": {field: {type, description}}, "instructions": "..."}}
-    return json.loads(schemas_raw)
+    parsed = json.loads(schemas_raw)
+    # Two storage shapes:
+    #  (a) dict  {doc_type: {"schema": {field: {...}}, "instructions": "..."}}   (pipeline format)
+    #  (b) list  [{"doc_type": ..., "fields": [{"name","description"}, ...]}]     (UI-saved format)
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        result = {}
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                continue
+            doc_type = entry.get("doc_type")
+            if not doc_type:
+                continue
+            schema = {}
+            for fld in entry.get("fields", []):
+                name = (fld.get("name") or "").strip()
+                if name:
+                    schema[name] = {"type": "string", "description": fld.get("description") or f"Value of {name}."}
+            if schema:
+                result[doc_type] = {
+                    "schema": schema,
+                    "instructions": f"Extract only explicitly stated values from this {doc_type.replace('_', ' ')} document. Return null for fields not found.",
+                }
+        return result
+    return {}
 
 
 @dp.materialized_view(

@@ -55,24 +55,23 @@ def silver_classified():
     )
 
 
+CHUNK_SIZE = 2000  # chars per fallback chunk
+MIN_CHUNK = 30
+
+
 @dp.materialized_view(
     name="silver_chunks",
-    comment="ai_prep_search chunks for Vector Search: chunk_to_embed / chunk_to_retrieve + provenance.",
+    comment="Search chunks: ai_prep_search where available (PDF/image), content-split fallback otherwise (e.g. TXT).",
 )
 def silver_chunks():
-    prepped = (
-        spark.read.table("silver_classified")
-        .filter("TRY_CAST(parsed_content:error_status AS STRING) IS NULL")
-        .select(
-            F.col("doc_id"),
-            F.col("doc_type"),
-            F.col("source_file"),
-            F.expr("ai_prep_search(parsed_content)").alias("prep_result"),
-        )
+    classified = spark.read.table("silver_classified")
+
+    # ── Primary: ai_prep_search (works on native ai_parse_document output) ──────
+    prep = (
+        classified.filter("TRY_CAST(parsed_content:error_status AS STRING) IS NULL")
+        .select("doc_id", "doc_type", "source_file", F.expr("ai_prep_search(parsed_content)").alias("prep_result"))
         .filter("TRY_CAST(prep_result:error_status AS STRING) IS NULL")
-    )
-    return (
-        prepped.selectExpr(
+        .selectExpr(
             "doc_id",
             "doc_type",
             "source_file",
@@ -87,5 +86,23 @@ def silver_chunks():
             "chunk:chunk_to_retrieve::STRING AS chunk_to_retrieve",
             "chunk:chunk_to_embed::STRING    AS chunk_to_embed",
         )
-        .filter(F.length(F.col("chunk_to_retrieve")) > 30)
+        .filter(F.length(F.col("chunk_to_retrieve")) > MIN_CHUNK)
     )
+
+    # ── Fallback: split plain content for docs ai_prep_search did not chunk ──────
+    prepped_ids = prep.select("doc_id").distinct()
+    content = spark.read.table("bronze_parsed_content").select("path", "content")
+    fallback = (
+        classified.join(content, on="path", how="inner")
+        .join(prepped_ids, on="doc_id", how="left_anti")
+        .filter(F.col("content").isNotNull() & (F.length("content") > MIN_CHUNK))
+        .withColumn("_n", F.expr(f"greatest(1, ceil(length(content) / {CHUNK_SIZE}))"))
+        .withColumn("chunk_position", F.explode(F.expr("sequence(0, cast(_n as int) - 1)")))
+        .withColumn("chunk_to_retrieve", F.expr(f"substring(content, chunk_position * {CHUNK_SIZE} + 1, {CHUNK_SIZE})"))
+        .withColumn("chunk_id", F.concat_ws("_", F.col("doc_id"), F.col("chunk_position")))
+        .withColumn("chunk_to_embed", F.col("chunk_to_retrieve"))
+        .filter(F.length(F.col("chunk_to_retrieve")) > MIN_CHUNK)
+        .select("doc_id", "doc_type", "source_file", "chunk_id", "chunk_position", "chunk_to_retrieve", "chunk_to_embed")
+    )
+
+    return prep.unionByName(fallback)
