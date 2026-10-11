@@ -69,17 +69,6 @@ except Exception as _e:
     _platform_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Platform routes not loaded: {_platform_load_error}")
 
-# Register Skills/Workflow overlay routes (additive; does not touch agent_query)
-_skills_load_error: str | None = None
-try:
-    from skill_routes import router as skills_router
-    app.include_router(skills_router)
-    print("✅ Skills/Workflow routes registered at /api/docintel/workflow-run, /skills, /skill-executions")
-except Exception as _e:
-    import traceback as _tb
-    _skills_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
-    print(f"⚠️ Skills/Workflow routes not loaded: {_skills_load_error}")
-
 # Register Sources / Inventory routes (Phase 2 connector-first)
 _sources_load_error: str | None = None
 try:

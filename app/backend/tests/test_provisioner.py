@@ -65,15 +65,12 @@ def test_provision_new_use_case():
     res = provision.provision(blueprint_id="supplier_performance",
                               use_case_id="sp_demo", name="SP Demo", run_sql=fake)
     assert res["ok"], res["steps"]
-    assert res["starter_workflow"] == "supplier_scorecard"
+    assert res["pipeline_job_id"] is None
     j = fake.joined()
     assert "INSERT INTO jai_docintel.platform.domain_configs" in j
     assert "CREATE SCHEMA IF NOT EXISTS jai_docintel.sp_demo" in j
     assert "CREATE VOLUME IF NOT EXISTS jai_docintel.sp_demo.documents" in j
-    assert "workflow_templates" in j          # starter workflow seeded
     assert "status='active'" in j             # marked active
-    # the seeded template must carry the resolved checks list, not the $blueprint ref
-    assert "price_variance" in j and "$blueprint" not in j
 
 
 def test_provision_existing_updates():
