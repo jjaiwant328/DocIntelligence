@@ -12,6 +12,8 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 GENERATOR = os.path.join(REPO_ROOT, "notebooks", "01_synthetic_corpus.py")
 
+sys.path.insert(0, REPO_ROOT)
+
 DOMAINS = ["supply_chain", "compliance", "compliance_due_diligence"]
 
 
