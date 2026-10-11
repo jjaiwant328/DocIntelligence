@@ -1,47 +1,11 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # DocIntelligence — Compliance Synthetic Document Corpus
-# MAGIC
-# MAGIC Generates ~50 realistic compliance documents for a convenience-retail chain
-# MAGIC (RaceTrac-style) and writes them as plain-text files to the Compliance UC Volume.
-# MAGIC
-# MAGIC Covers 6 compliance domains:
-# MAGIC - Environmental (UST / SPCC / EPA)
-# MAGIC - Food Safety (health inspections / HACCP)
-# MAGIC - OSHA / Safety
-# MAGIC - Fuel Operations (dispensers / tanks)
-# MAGIC - Alcohol & Tobacco licensing
-# MAGIC - Vendor / Supplier compliance
-# MAGIC
-# MAGIC Consistent entity names allow cross-document resolution:
-# MAGIC - Stores: Store_101 … Store_150 (Southeast region, GA/FL/TX)
-# MAGIC - Inspectors: Maria Chen, James Kowalski, Sandra Osei, Tom Rivera, Priya Nair
-# MAGIC - Vendors: PetroChem Supplies LLC, CleanFleet Solutions, SafeServe Foods Inc.
-# MAGIC - Regulations: 40 CFR Part 280, 29 CFR 1910, FDA 21 CFR Part 110, NFPA 30A
+"""Synthetic document corpus for the compliance domain (verbatim from the
+legacy notebooks/01_synthetic_corpus* generators). Consumed by the single
+parameterized generator notebooks/01_synthetic_corpus.py."""
 
-# COMMAND ----------
+VOLUME_PATH = "/Volumes/jai_docintel/compliance/documents"
 
-CATALOG     = "jai_docintel"
-SCHEMA      = "compliance"
-VOLUME_DOCS = "documents"
-VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_DOCS}"
-
-# COMMAND ----------
-
-import os
-
-def write_doc(filename: str, content: str):
-    path = f"{VOLUME_PATH}/{filename}"
-    with open(path, "w") as f:
-        f.write(content.strip())
-    print(f"Written: {filename}")
-
-# COMMAND ----------
-# MAGIC %md ## Environmental Compliance Documents
-
-# COMMAND ----------
-
-write_doc("env_ust_inspection_Store101_2025.txt", """
+DOCS = [
+    ("env_ust_inspection_Store101_2025.txt", """
 UNDERGROUND STORAGE TANK (UST) INSPECTION REPORT
 
 Document ID: UST-INSP-2025-0101
@@ -94,11 +58,8 @@ Line leak detection: OPERATIONAL
 
 NEXT SCHEDULED INSPECTION: March 2026
 Inspector Signature: Maria Chen    Date: March 12, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("env_ust_inspection_Store115_2025.txt", """
+"""),
+    ("env_ust_inspection_Store115_2025.txt", """
 UNDERGROUND STORAGE TANK (UST) INSPECTION REPORT
 
 Document ID: UST-INSP-2025-0115
@@ -135,11 +96,8 @@ Overall Assessment: COMPLIANT with minor administrative correction required.
 
 NEXT SCHEDULED INSPECTION: April 2026
 Inspector Signature: James Kowalski    Date: April 3, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("env_spcc_plan_Store101_2024.txt", """
+"""),
+    ("env_spcc_plan_Store101_2024.txt", """
 SPILL PREVENTION, CONTROL, AND COUNTERMEASURE (SPCC) PLAN
 
 Document ID: SPCC-2024-0101
@@ -186,11 +144,8 @@ All Store 101 employees complete annual SPCC awareness training. Records maintai
 Trainer: Sandra Osei, Regional EHS Coordinator
 
 Certifying PE: [Signature on file]    Date: January 15, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("env_epa_notice_Store101_2025.txt", """
+"""),
+    ("env_epa_notice_Store101_2025.txt", """
 NOTICE OF VIOLATION
 
 Document ID: EPA-NOV-2025-0044
@@ -225,11 +180,8 @@ Failure to respond may result in administrative penalties and/or compliance orde
 
 Issued By: Maria Chen, EPA Region IV Inspector #GA-UST-4412
 Date: March 20, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("env_leak_detection_Store128_2025.txt", """
+"""),
+    ("env_leak_detection_Store128_2025.txt", """
 LEAK DETECTION MONITORING REPORT
 
 Document ID: LEAK-MON-2025-0128
@@ -268,11 +220,8 @@ If confirmed release: Remediation plan required within 45 days.
 Environmental consultant: PetroChem Supplies LLC engaged.
 
 Report Prepared By: Tom Rivera    Date: February 28, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("env_audit_Store128_2025.txt", """
+"""),
+    ("env_audit_Store128_2025.txt", """
 ENVIRONMENTAL COMPLIANCE AUDIT REPORT
 
 Document ID: ENV-AUDIT-2025-0128
@@ -313,14 +262,8 @@ AUDIT CONCLUSION
 Two open findings require follow-up. No imminent release risk confirmed. Continue monitoring T-128B.
 
 Lead Auditor: Sandra Osei    Date: March 5, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Food Safety Compliance Documents
-
-# COMMAND ----------
-
-write_doc("food_health_inspection_Store101_2025.txt", """
+"""),
+    ("food_health_inspection_Store101_2025.txt", """
 FOOD SERVICE ESTABLISHMENT HEALTH INSPECTION REPORT
 
 Document ID: FOOD-INSP-2025-0101-A
@@ -365,11 +308,8 @@ INSPECTION RESULT: CONDITIONAL PASS
 Re-inspection scheduled: March 14, 2025
 
 Inspector Signature: Priya Nair    Date: February 14, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("food_health_inspection_Store115_2025.txt", """
+"""),
+    ("food_health_inspection_Store115_2025.txt", """
 FOOD SERVICE ESTABLISHMENT HEALTH INSPECTION REPORT
 
 Document ID: FOOD-INSP-2025-0115-A
@@ -418,11 +358,8 @@ Mandatory Re-inspection: February 22, 2025
 Failure to achieve 70+ on re-inspection may result in license suspension.
 
 Inspector Signature: James Kowalski    Date: January 22, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("food_haccp_plan_Store101_2024.txt", """
+"""),
+    ("food_haccp_plan_Store101_2024.txt", """
 HAZARD ANALYSIS AND CRITICAL CONTROL POINTS (HACCP) PLAN
 
 Document ID: HACCP-2024-CORP-001
@@ -474,11 +411,8 @@ Internal audit quarterly by District Manager.
 Third-party audit annually by SafeServe Foods Inc.
 
 Approved By: Director of Food Safety, RaceTrac Petroleum, Inc.    Date: June 1, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("food_corrective_action_Store115_2025.txt", """
+"""),
+    ("food_corrective_action_Store115_2025.txt", """
 FOOD SAFETY CORRECTIVE ACTION PLAN
 
 Document ID: FOOD-CAP-2025-0115
@@ -525,11 +459,8 @@ Verification: ServSafe certification will be provided upon passing exam.
 Status: IN PROGRESS — Exam February 5, 2025
 
 Submitted By: Carlos Mendez, District Manager    Date: January 28, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("food_temp_log_Store101_Feb2025.txt", """
+"""),
+    ("food_temp_log_Store101_Feb2025.txt", """
 FOOD SERVICE TEMPERATURE MONITORING LOG
 
 Document ID: FOOD-TEMP-2025-0101-FEB
@@ -568,14 +499,8 @@ Week 3: R. Johnson, T. Washington
 Week 4: A. Patel, J. Martinez
 
 Monthly Review: Store Manager    Date: March 1, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## OSHA / Safety Documents
-
-# COMMAND ----------
-
-write_doc("safety_inspection_Store128_2025.txt", """
+"""),
+    ("safety_inspection_Store128_2025.txt", """
 OSHA / WORKPLACE SAFETY INSPECTION REPORT
 
 Document ID: OSHA-INSP-2025-0128
@@ -616,11 +541,8 @@ Corrective Action: Schedule fire extinguisher service.
 Deadline: March 19, 2025
 
 Inspector: Sandra Osei    Date: March 5, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("safety_incident_report_Store101_2025.txt", """
+"""),
+    ("safety_incident_report_Store101_2025.txt", """
 WORKPLACE INCIDENT REPORT
 
 Document ID: INC-OSHA-2025-0101
@@ -662,11 +584,8 @@ OSHA 300 Log entry: Required (restricted work case)
 Workers' comp claim filed: Yes — claim #WC-2025-0312
 
 Store Manager Signature:     Date: March 3, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("safety_ppe_audit_All_2025.txt", """
+"""),
+    ("safety_ppe_audit_All_2025.txt", """
 PERSONAL PROTECTIVE EQUIPMENT (PPE) AUDIT REPORT
 
 Document ID: PPE-AUDIT-2025-Q1
@@ -710,11 +629,8 @@ AUDIT CONCLUSION
 Minor inventory gaps identified at Store_115 and Store_128. No systemic failures.
 
 Auditor: Sandra Osei    Date: March 28, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("safety_training_cert_Employee_2025.txt", """
+"""),
+    ("safety_training_cert_Employee_2025.txt", """
 SAFETY TRAINING COMPLETION RECORD
 
 Document ID: TRAIN-CERT-2025-SAFETY-0047
@@ -751,11 +667,8 @@ Industry course and demonstrated understanding of all required modules.
 
 Signed: OSHA Authorized Trainer    Date: February 20, 2025
 Employee Acknowledgment: David Okonkwo    Date: February 20, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("safety_corrective_action_Store128_2025.txt", """
+"""),
+    ("safety_corrective_action_Store128_2025.txt", """
 SAFETY CORRECTIVE ACTION PLAN
 
 Document ID: OSHA-CAP-2025-0128
@@ -788,14 +701,8 @@ Completed: March 14, 2025 — CLOSED
 ALL FINDINGS RESOLVED
 Store Manager: Kevin Nguyen    Date: March 14, 2025
 EHS Coordinator Review: Sandra Osei    Date: March 18, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Fuel Operations Documents
-
-# COMMAND ----------
-
-write_doc("fuel_dispenser_inspection_Store101_2025.txt", """
+"""),
+    ("fuel_dispenser_inspection_Store101_2025.txt", """
 FUEL DISPENSER INSPECTION AND CALIBRATION REPORT
 
 Document ID: FUEL-DISP-2025-0101
@@ -834,11 +741,8 @@ Dispenser inspection seals affixed to all 12 units by inspector.
 Certificates of inspection available for posting per Georgia law.
 
 Inspector: Tom Rivera    Date: March 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("fuel_tank_inspection_Store128_2025.txt", """
+"""),
+    ("fuel_tank_inspection_Store128_2025.txt", """
 PETROLEUM STORAGE TANK — ANNUAL INTEGRITY INSPECTION REPORT
 
 Document ID: FUEL-TANK-2025-0128
@@ -874,11 +778,8 @@ Remediation consultant PetroChem Supplies LLC engaged for Phase I Environmental 
 Phase I ESA target completion: April 15, 2025.
 
 Inspector: PetroChem Supplies LLC    Date: March 15, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("fuel_quality_report_Store101_Q1_2025.txt", """
+"""),
+    ("fuel_quality_report_Store101_Q1_2025.txt", """
 FUEL QUALITY COMPLIANCE REPORT
 
 Document ID: FUEL-QUAL-2025-Q1-0101
@@ -922,11 +823,8 @@ Sample FUEL-Q1-T101C (Diesel):
 CONCLUSION: All fuel products at Store 101 meet applicable EPA and ASTM quality specifications.
 
 Lab Director: PetroChem Supplies LLC    Date: March 17, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("fuel_corrective_action_Store128_2025.txt", """
+"""),
+    ("fuel_corrective_action_Store128_2025.txt", """
 FUEL OPERATIONS CORRECTIVE ACTION PLAN — CONFIRMED TANK RELEASE
 
 Document ID: FUEL-CAP-2025-0128
@@ -969,14 +867,8 @@ Target installation: June 2025 pending TCEQ CAP approval.
 Estimated Total Cost: $180,000 – $320,000 (depending on soil remediation scope)
 
 Prepared By: Regional Director of Operations    Date: March 17, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Alcohol & Tobacco Compliance Documents
-
-# COMMAND ----------
-
-write_doc("atc_alcohol_license_Store101_2025.txt", """
+"""),
+    ("atc_alcohol_license_Store101_2025.txt", """
 RETAIL ALCOHOL BEVERAGE LICENSE
 
 Document ID: LIC-ATC-GA-2025-0101
@@ -1008,11 +900,8 @@ Annual License Fee Paid: $650
 Receipt Number: GC-RCP-2025-0089
 
 Issued By: Gwinnett County Alcohol Control    Date: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("atc_tobacco_license_Store101_2025.txt", """
+"""),
+    ("atc_tobacco_license_Store101_2025.txt", """
 RETAIL TOBACCO DEALER PERMIT
 
 Document ID: LIC-TOB-GA-2025-0101
@@ -1043,11 +932,8 @@ Annual Permit Fee Paid: $125
 Receipt Number: GA-DOR-RCP-2025-0234
 
 Issued By: GA Department of Revenue    Date: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("atc_secret_shopper_Store115_2025.txt", """
+"""),
+    ("atc_secret_shopper_Store115_2025.txt", """
 SECRET SHOPPER COMPLIANCE AUDIT REPORT — ALCOHOL AND TOBACCO AGE VERIFICATION
 
 Document ID: ATC-SS-2025-0115-02
@@ -1090,11 +976,8 @@ REQUIRED RESPONSE (within 10 days — by March 10, 2025):
 
 ABT Case Number: FL-ABT-2025-08812
 Auditor: FL ABT Compliance Officer    Date: February 28, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("atc_corrective_action_Store115_2025.txt", """
+"""),
+    ("atc_corrective_action_Store115_2025.txt", """
 ALCOHOL AND TOBACCO COMPLIANCE CORRECTIVE ACTION PLAN
 
 Document ID: ATC-CAP-2025-0115
@@ -1134,11 +1017,8 @@ Enrollment provides reduced penalty exposure for future incidents if program mai
 Enrollment Number: FL-RSVP-2025-4412.
 
 Submitted By: Carlos Mendez, District Manager    Date: March 7, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("atc_state_inspection_Store128_TX_2025.txt", """
+"""),
+    ("atc_state_inspection_Store128_TX_2025.txt", """
 TEXAS ALCOHOLIC BEVERAGE COMMISSION COMPLIANCE INSPECTION
 
 Document ID: TABC-INSP-2025-0128
@@ -1178,11 +1058,8 @@ INSPECTION RESULT: PASS — NO VIOLATIONS
 Next routine inspection: approximately 18 months (July 2026).
 
 TABC Agent (Badge withheld per agency policy)    Date: January 15, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("atc_policy_age_verification_2024.txt", """
+"""),
+    ("atc_policy_age_verification_2024.txt", """
 AGE VERIFICATION AND ALCOHOL/TOBACCO COMPLIANCE POLICY
 
 Document ID: POLICY-ATC-2024-001
@@ -1237,11 +1114,8 @@ All employees must complete annual refresher training.
 Training records maintained in HR system.
 
 Approved By: VP of Operations and General Counsel    Date: September 1, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("atc_email_Store115_investigation_2025.txt", """
+"""),
+    ("atc_email_Store115_investigation_2025.txt", """
 EMAIL THREAD — STORE 115 ABT VIOLATION RESPONSE
 
 Document ID: EMAIL-ATC-2025-0115
@@ -1328,14 +1202,8 @@ our ABT defense file. I believe we have a strong case to avoid suspension given 
 and comprehensiveness of our response.
 
 Carlos
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Vendor Compliance Documents
-
-# COMMAND ----------
-
-write_doc("vendor_insurance_cert_PetroChem_2025.txt", """
+"""),
+    ("vendor_insurance_cert_PetroChem_2025.txt", """
 CERTIFICATE OF LIABILITY INSURANCE
 
 Document ID: VEN-INS-2025-PETROCHEM
@@ -1378,11 +1246,8 @@ CERTIFICATE HOLDER IS ADDITIONAL INSURED on all above policies.
 
 CONTACT: PetroChem Supplies LLC Risk Management — risk@petrochemsupplies.com
 Agent: Marsh & McLennan Companies    Issued: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("vendor_contract_CleanFleet_2025.txt", """
+"""),
+    ("vendor_contract_CleanFleet_2025.txt", """
 VENDOR SERVICE AGREEMENT — FLEET CLEANING AND FACILITY MAINTENANCE
 
 Document ID: VEN-CONTRACT-2025-CLEANFLEET
@@ -1420,11 +1285,8 @@ INSURANCE ON FILE: CleanFleet COI expires December 31, 2025. Renewal required.
 Signed: CleanFleet Solutions, Inc. (signature on file)
 Signed: RaceTrac Petroleum, Inc. (signature on file)
 Effective: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("vendor_food_cert_SafeServe_2025.txt", """
+"""),
+    ("vendor_food_cert_SafeServe_2025.txt", """
 FOOD SAFETY CERTIFICATION — VENDOR QUALIFICATION
 
 Document ID: VEN-FOOD-CERT-2025-SAFESERVE
@@ -1464,11 +1326,8 @@ APPROVED PRODUCT LIST
 - Breakfast Hot Dogs
 
 Certification Issued By: NSF International    Date: February 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("vendor_audit_CleanFleet_2025.txt", """
+"""),
+    ("vendor_audit_CleanFleet_2025.txt", """
 VENDOR COMPLIANCE AUDIT REPORT
 
 Document ID: VEN-AUDIT-2025-CLEANFLEET
@@ -1508,11 +1367,8 @@ CleanFleet has been a reliable vendor for 3 years. Minor compliance gap on chemi
 process. No safety incidents.
 
 Auditor: Sandra Osei    Date: March 20, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("vendor_email_insurance_renewal_2025.txt", """
+"""),
+    ("vendor_email_insurance_renewal_2025.txt", """
 EMAIL THREAD — VENDOR INSURANCE RENEWAL TRACKING
 
 Document ID: EMAIL-VEN-2025-INS-RENEWAL
@@ -1575,14 +1431,8 @@ to VP Operations.
 Update: Orkin COI received March 5, 2025. Filed in portal. Issue resolved.
 
 Sandra
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Additional Policy and Permit Documents
-
-# COMMAND ----------
-
-write_doc("permit_ust_operating_Store101_2025.txt", """
+"""),
+    ("permit_ust_operating_Store101_2025.txt", """
 UNDERGROUND STORAGE TANK OPERATING PERMIT
 
 Document ID: PERMIT-UST-GA-2025-0101
@@ -1616,11 +1466,8 @@ Annual Permit Fee: $450 per tank ($1,350 total)
 Receipt: GA-EPD-RCP-2025-UST-0099
 
 Issued By: Georgia Environmental Protection Division    Date: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("permit_food_service_Store115_2025.txt", """
+"""),
+    ("permit_food_service_Store115_2025.txt", """
 FOOD SERVICE ESTABLISHMENT PERMIT
 
 Document ID: PERMIT-FOOD-FL-2025-0115
@@ -1659,11 +1506,8 @@ Annual Fee Paid: $275
 Receipt: OC-HD-RCP-2025-0412
 
 Issued By: Orange County Health Department    Date: January 1, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("permit_ust_operating_Store128_TX_2025.txt", """
+"""),
+    ("permit_ust_operating_Store128_TX_2025.txt", """
 PETROLEUM STORAGE TANK PERMIT
 
 Document ID: PERMIT-UST-TX-2025-0128
@@ -1701,11 +1545,8 @@ Receipt: TCEQ-FEE-2025-0128-PST
 
 Issued By: TCEQ Petroleum Storage Tank Division    Date: January 1, 2025
 AMENDED: March 18, 2025 (T-128B enforcement notation added)
-""")
-
-# COMMAND ----------
-
-write_doc("policy_compliance_program_2024.txt", """
+"""),
+    ("policy_compliance_program_2024.txt", """
 ENTERPRISE COMPLIANCE PROGRAM POLICY
 
 Document ID: POLICY-COMP-2024-001
@@ -1766,11 +1607,8 @@ RaceTrac strictly prohibits retaliation against any employee who reports a compl
 in good faith. Violations of this policy are grounds for termination.
 
 Approved By: General Counsel and CEO    Date: October 1, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("training_cert_food_safety_Store115_2025.txt", """
+"""),
+    ("training_cert_food_safety_Store115_2025.txt", """
 FOOD HANDLER TRAINING COMPLETION RECORD
 
 Document ID: TRAIN-CERT-2025-FOOD-0115-BATCH
@@ -1812,11 +1650,8 @@ Certificates submitted to Orange County Health Department and Florida ABT as sup
 for corrective action plans.
 
 Instructor Certification: SafeServe Foods Inc.    Date: March 7, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("training_cert_osha_Store133_2025.txt", """
+"""),
+    ("training_cert_osha_Store133_2025.txt", """
 OSHA HAZARD COMMUNICATION TRAINING RECORD
 
 Document ID: TRAIN-CERT-2025-HAZCM-0133
@@ -1849,11 +1684,8 @@ All employees acknowledged understanding and signed training roster (on file).
 Next training due: January 2026
 
 Instructor: Sandra Osei    Date: January 30, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("risk_assessment_Store145_2025.txt", """
+"""),
+    ("risk_assessment_Store145_2025.txt", """
 STORE COMPLIANCE RISK ASSESSMENT
 
 Document ID: RISK-ASSESS-2025-0145
@@ -1914,11 +1746,8 @@ Store 145 is a model compliance store. Zero open findings across all domains.
 Recommend Store 145 as a benchmark for district-level best practices training.
 
 Assessor: Sandra Osei    Date: March 25, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("risk_assessment_Store115_2025.txt", """
+"""),
+    ("risk_assessment_Store115_2025.txt", """
 STORE COMPLIANCE RISK ASSESSMENT
 
 Document ID: RISK-ASSESS-2025-0115
@@ -1978,11 +1807,8 @@ Enhanced monitoring requirements for Store 115 for next 12 months:
 Next risk re-assessment: September 10, 2025
 
 Assessors: Sandra Osei, Carlos Mendez    Date: March 10, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("env_spcc_policy_2024.txt", """
+"""),
+    ("env_spcc_policy_2024.txt", """
 ENVIRONMENTAL COMPLIANCE POLICY — UST AND SPCC
 
 Document ID: POLICY-ENV-2024-002
@@ -2028,11 +1854,8 @@ October: UST permit renewal applications due
 December: Year-end ATG summary review
 
 Approved By: Chief Compliance Officer    Date: March 1, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("food_email_reinspection_Store115_2025.txt", """
+"""),
+    ("food_email_reinspection_Store115_2025.txt", """
 EMAIL THREAD — STORE 115 HEALTH INSPECTION FOLLOW-UP
 
 Document ID: EMAIL-FOOD-2025-0115-REINSP
@@ -2111,11 +1934,8 @@ Re-inspection conducted today. Score: 89/100. All three Priority violations have
 resolved satisfactorily. Store 115 remains in good standing.
 
 James Kowalski
-""")
-
-# COMMAND ----------
-
-write_doc("vendor_insurance_alert_Orkin_2025.txt", """
+"""),
+    ("vendor_insurance_alert_Orkin_2025.txt", """
 VENDOR COMPLIANCE ALERT — EXPIRED CERTIFICATE OF INSURANCE
 
 Document ID: VEN-ALERT-2025-ORKIN
@@ -2157,14 +1977,8 @@ PREVENTION
 Vendor COI expiration dates added to RaceTrac compliance calendar with 60-day advance alerts.
 
 Reported By: Sandra Osei    Date: March 5, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Regulatory Change Documents (Gap Fill)
-
-# COMMAND ----------
-
-write_doc("regulatory_change_epa_ust_2025.txt", """
+"""),
+    ("regulatory_change_epa_ust_2025.txt", """
 REGULATORY CHANGE NOTICE
 
 Document ID: REG-CHG-2025-EPA-001
@@ -2223,11 +2037,8 @@ regulations for any additional obligations beyond federal minimums.
 Prepared By: RaceTrac Regulatory Affairs Team
 Review Date: January 22, 2025
 Attorney Review Recommended: YES — significant penalty exposure
-""")
-
-# COMMAND ----------
-
-write_doc("regulatory_change_fdep_food_2025.txt", """
+"""),
+    ("regulatory_change_fdep_food_2025.txt", """
 REGULATORY CHANGE NOTICE
 
 Document ID: REG-CHG-2025-FDEP-002
@@ -2289,11 +2100,8 @@ REQUIRED ACTIONS
 Prepared By: RaceTrac Food Safety Compliance Team
 Review Date: February 10, 2025
 Attorney Review Recommended: NO
-""")
-
-# COMMAND ----------
-
-write_doc("regulatory_change_tabc_2025.txt", """
+"""),
+    ("regulatory_change_tabc_2025.txt", """
 REGULATORY CHANGE NOTICE
 
 Document ID: REG-CHG-2025-TABC-003
@@ -2358,11 +2166,8 @@ Personal liability: Employee performing alcohol service without certification �
 Prepared By: RaceTrac Alcohol & Tobacco Compliance Team
 Review Date: January 14, 2025
 Attorney Review Recommended: YES — criminal misdemeanor exposure for uncertified employees
-""")
-
-# COMMAND ----------
-
-write_doc("regulatory_change_osha_hazmat_2026.txt", """
+"""),
+    ("regulatory_change_osha_hazmat_2026.txt", """
 REGULATORY CHANGE NOTICE
 
 Document ID: REG-CHG-2026-OSHA-004
@@ -2420,11 +2225,8 @@ REQUIRED ACTIONS
 Prepared By: RaceTrac EHS Compliance Team
 Review Date: June 1, 2025
 Attorney Review Recommended: NO
-""")
-
-# COMMAND ----------
-
-write_doc("multi_jurisdiction_ust_comparison_2025.txt", """
+"""),
+    ("multi_jurisdiction_ust_comparison_2025.txt", """
 CORPORATE COMPLIANCE BULLETIN
 
 Document ID: CORP-BULL-2025-UST-001
@@ -2529,36 +2331,5 @@ Attorney Review Recommended: YES for financial responsibility and penalty exposu
 Prepared By: RaceTrac Regulatory Affairs — Ananth Krishnaswamy
 Reviewed By: Sarah Kim, Legal Counsel
 Date: March 15, 2025
-""")
-
-# COMMAND ----------
-
-print("\n" + "="*60)
-print("COMPLIANCE CORPUS GENERATION COMPLETE")
-print("="*60)
-
-import os
-files = os.listdir(VOLUME_PATH)
-txt_files = [f for f in files if f.endswith('.txt')]
-print(f"\nTotal .txt documents written: {len(txt_files)}")
-
-domains = {
-    "env_": "Environmental",
-    "food_": "Food Safety",
-    "safety_": "OSHA/Safety",
-    "fuel_": "Fuel Operations",
-    "atc_": "Alcohol & Tobacco",
-    "vendor_": "Vendor Compliance",
-    "permit_": "Permits",
-    "policy_": "Policies",
-    "risk_": "Risk Assessments",
-    "training_": "Training",
-    "regulatory_": "Regulatory Changes",
-    "multi_": "Multi-Jurisdiction",
-}
-for prefix, label in domains.items():
-    count = len([f for f in txt_files if f.startswith(prefix)])
-    if count > 0:
-        print(f"  {label}: {count} documents")
-
-print("\nReady for PDF conversion (run 00c_generate_pdfs.py against compliance volume)")
+"""),
+]

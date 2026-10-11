@@ -1,83 +1,11 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # DocIntelligence — Compliance Due Diligence Synthetic Corpus (Store Development)
-# MAGIC
-# MAGIC Generates ~21 realistic RaceTrac store-development feasibility documents and writes
-# MAGIC them as plain-text files.
-# MAGIC
-# MAGIC **Markets covered:** Tampa FL, Dallas TX, Atlanta GA
-# MAGIC **Projects:** SD-2024-201 (Tampa), SD-2024-202 (Dallas/v2024), SD-2025-203 (Dallas/v2025), SD-2023-204 (Atlanta)
-# MAGIC
-# MAGIC **Document types (all 10 classification labels):**
-# MAGIC - `feasibility_request` — store-dev feasibility emails (`.eml`)
-# MAGIC - `municipal_requirement` — municipal / county requirement summary docs
-# MAGIC - `alcohol_license` — DABT / TABC license applications and approvals
-# MAGIC - `tobacco_license` — state tobacco dealer permit
-# MAGIC - `business_license` — county business tax receipts / occupational licenses
-# MAGIC - `zoning_document` — zoning verification / compatibility letters
-# MAGIC - `permit` — building / certificate-of-occupancy permits
-# MAGIC - `historical_response` — prior feasibility responses with dates (memory / recall)
-# MAGIC - `regulatory_change` — before/after regulatory pair (Dallas alcohol v2024→v2025)
-# MAGIC - `consultant_correspondence` — consultant status memos
-# MAGIC
-# MAGIC **Dallas before/after regulatory pair** (change-detection driver):
-# MAGIC - v2024 (`muni_req_dallas_TX_alcohol_v2024.txt`): standard TABC process, ~6-week lead time
-# MAGIC - v2025 (`muni_req_dallas_TX_alcohol_v2025.txt`): new distance-exception certificate required,
-# MAGIC   ~14-week lead time; affects SD-2025-203
-# MAGIC - `regulatory_change_dallas_alcohol_v2024_v2025.txt`: structured REGULATORY CHANGE DETECTED doc
-# MAGIC
-# MAGIC **Bootstrap flow (Databricks):**
-# MAGIC   Run after `setup_compliance_due_diligence.py` creates the schema + volume.
-# MAGIC   corpus → volume → `00c_generate_pdfs.py` → domain activated.
-# MAGIC
-# MAGIC **Extraction fields embedded in every doc** (for AI extraction):
-# MAGIC   project_id, store_number, address, market, state, municipality, county,
-# MAGIC   request_type, requester, priority, requirement_type, authority, license_type,
-# MAGIC   issuing_authority, lead_time, renewal_period, effective_date, expiration_date,
-# MAGIC   responder, response_date, source_document
+"""Synthetic document corpus for the compliance_due_diligence domain (verbatim from the
+legacy notebooks/01_synthetic_corpus* generators). Consumed by the single
+parameterized generator notebooks/01_synthetic_corpus.py."""
 
-# COMMAND ----------
+VOLUME_PATH = "/Volumes/jai_docintel/compliance_due_diligence/documents"
 
-import os
-import pathlib
-
-CATALOG     = "jai_docintel"
-SCHEMA      = "compliance_due_diligence"
-VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/documents"
-
-# COMMAND ----------
-
-def _resolve_output_dir() -> str:
-    """Return volume path in Databricks, local sample_data directory otherwise."""
-    try:
-        dbutils  # noqa: F821 — available only in Databricks
-        out = VOLUME_PATH
-        os.makedirs(out, exist_ok=True)
-        return out
-    except NameError:
-        pass
-    repo_root = pathlib.Path(__file__).resolve().parents[1]
-    out = str(repo_root / "domains" / "compliance_due_diligence" / "sample_data")
-    os.makedirs(out, exist_ok=True)
-    return out
-
-OUTPUT_DIR = _resolve_output_dir()
-print(f"Output directory: {OUTPUT_DIR}")
-
-# COMMAND ----------
-
-def write_doc(filename: str, content: str):
-    path = os.path.join(OUTPUT_DIR, filename)
-    with open(path, "w") as f:
-        f.write(content.strip())
-    print(f"Written: {filename}")
-
-# COMMAND ----------
-# MAGIC %md ## Tampa FL — Project SD-2024-201 (Store #5201)
-
-# COMMAND ----------
-
-write_doc("feasy_email_tampa_SD201_2024.eml", """
+DOCS = [
+    ("feasy_email_tampa_SD201_2024.eml", """
 From: Ryan Holloway <r.holloway@racetrac.com>
 To: Kendra Patel <k.patel@racetrac.com>
 CC: Marcus Dawson <m.dawson@storedevelopmentconsulting.com>
@@ -131,11 +59,8 @@ Please provide a full requirements memo by April 5, 2024.
 Ryan Holloway
 Store Development Manager — Southeast
 RaceTrac Petroleum, Inc.
-""")
-
-# COMMAND ----------
-
-write_doc("muni_req_hillsborough_FL_2024.txt", """
+"""),
+    ("muni_req_hillsborough_FL_2024.txt", """
 MUNICIPAL REQUIREMENTS SUMMARY — STORE DEVELOPMENT FEASIBILITY
 
 Document ID: MUNI-REQ-2024-SD201-HILLSBOROUGH
@@ -224,11 +149,8 @@ OVERALL FEASIBILITY ASSESSMENT: FEASIBLE — NO MATERIAL OBSTACLES
 Recommended next step: Submit alcohol license pre-application; file site plan review by May 1, 2024.
 
 Prepared By: Kendra Patel    Date: April 3, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("alcohol_license_hillsborough_SD201_2024.txt", """
+"""),
+    ("alcohol_license_hillsborough_SD201_2024.txt", """
 FLORIDA DIVISION OF ALCOHOLIC BEVERAGES AND TOBACCO
 LICENSE APPLICATION AND APPROVAL
 
@@ -290,11 +212,8 @@ Renewal application due: August 1, 2025. Annual fee: $1,820.
 Failure to renew results in license lapse; 30-day grace period with late fee ($250).
 
 Issued By: Florida DABT Tampa District    Date: August 14, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("tobacco_license_hillsborough_SD201_2024.txt", """
+"""),
+    ("tobacco_license_hillsborough_SD201_2024.txt", """
 FLORIDA DEPARTMENT OF REVENUE — TOBACCO PRODUCTS DEALER PERMIT
 
 Document ID: LIC-TOB-FL-2024-SD201
@@ -348,11 +267,8 @@ RENEWAL
 Renewal due: June 1, 2025. Annual fee: $50.
 
 Issued By: Florida Department of Revenue    Date: May 28, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("zoning_hillsborough_SD201_2024.txt", """
+"""),
+    ("zoning_hillsborough_SD201_2024.txt", """
 ZONING COMPATIBILITY AND LAND USE VERIFICATION
 
 Document ID: ZONE-2024-SD201-TAMPA
@@ -425,11 +341,8 @@ NEXT STEPS
 
 City Planner: Michael S. Torres, AICP    Date: April 10, 2024
 City of Tampa Planning & Development Department
-""")
-
-# COMMAND ----------
-
-write_doc("business_license_hillsborough_SD201_2025.txt", """
+"""),
+    ("business_license_hillsborough_SD201_2025.txt", """
 HILLSBOROUGH COUNTY TAX COLLECTOR — BUSINESS TAX RECEIPT
 
 Document ID: BTR-HILL-2025-SD201
@@ -482,11 +395,8 @@ PROFESSIONAL LICENSES ON FILE
 This receipt does not waive any other permit or license requirement.
 
 Issued By: Hillsborough County Tax Collector    Date: January 2, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("permit_co_tampa_SD201_2025.txt", """
+"""),
+    ("permit_co_tampa_SD201_2025.txt", """
 CITY OF TAMPA — CERTIFICATE OF OCCUPANCY
 
 Document ID: PERMIT-CO-TAMPA-2025-SD201
@@ -548,11 +458,8 @@ CONDITIONS
 
 Building Official: James R. Kowalski, CBO    Date: January 10, 2025
 City of Tampa Construction Services
-""")
-
-# COMMAND ----------
-
-write_doc("consultant_tampa_SD201_2024.txt", """
+"""),
+    ("consultant_tampa_SD201_2024.txt", """
 CONSULTANT STATUS MEMORANDUM — STORE DEVELOPMENT FEASIBILITY
 
 Document ID: CONSULT-MEMO-2024-SD201
@@ -624,11 +531,8 @@ RISK ASSESSMENT: LOW — No regulatory obstacles. On track for Q1 2025 opening.
 Marcus Dawson
 Principal Consultant — Store Development Consulting LLC
 Phone: (404) 555-0187 | m.dawson@storedevelopmentconsulting.com
-""")
-
-# COMMAND ----------
-
-write_doc("hist_response_tampa_SD201_2025.txt", """
+"""),
+    ("hist_response_tampa_SD201_2025.txt", """
 HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
 
 Document ID: HIST-RESP-2025-SD201
@@ -681,14 +585,8 @@ Municipality precedent established: City of Tampa / Hillsborough County — LOW 
 Recommend this market for future expansion. Prior responses can be used as templates.
 
 Completed By: Kendra Patel, Senior Development Analyst    Date: January 15, 2025
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Dallas TX — Project SD-2024-202 (Store #5202) — v2024 Regulatory Baseline
-
-# COMMAND ----------
-
-write_doc("feasy_email_dallas_SD202_2024.eml", """
+"""),
+    ("feasy_email_dallas_SD202_2024.eml", """
 From: Ryan Holloway <r.holloway@racetrac.com>
 To: Kendra Patel <k.patel@racetrac.com>
 CC: Marcus Dawson <m.dawson@storedevelopmentconsulting.com>
@@ -739,11 +637,8 @@ Priority: High. Please deliver requirements memo by July 22, 2024.
 Ryan Holloway
 Store Development Manager — Southeast/Southwest
 RaceTrac Petroleum, Inc.
-""")
-
-# COMMAND ----------
-
-write_doc("muni_req_dallas_TX_alcohol_v2024.txt", """
+"""),
+    ("muni_req_dallas_TX_alcohol_v2024.txt", """
 DALLAS DEVELOPMENT SERVICES — ALCOHOL LICENSE REQUIREMENTS SUMMARY
 VERSION: v2024 (Effective through December 31, 2024)
 
@@ -817,11 +712,8 @@ Lead time for CO: 2–3 weeks after final inspection.
 
 OVERALL ASSESSMENT (v2024): STRAIGHTFORWARD — Standard TABC process. No city-level hurdles.
 Prepared By: Kendra Patel    Date: July 19, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("alcohol_license_dallas_SD202_v2024.txt", """
+"""),
+    ("alcohol_license_dallas_SD202_v2024.txt", """
 TEXAS ALCOHOLIC BEVERAGE COMMISSION — LICENSE APPROVAL
 
 Document ID: LIC-TABC-TX-2024-SD202
@@ -879,11 +771,8 @@ Renewal application must be submitted 30 days prior to expiration.
 Biennial fee: $394.
 
 Issued By: Texas Alcoholic Beverage Commission    Date: September 16, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("hist_response_dallas_SD202_2024.txt", """
+"""),
+    ("hist_response_dallas_SD202_2024.txt", """
 HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
 
 Document ID: HIST-RESP-2024-SD202
@@ -932,14 +821,8 @@ MUNICIPALITY PRECEDENT: City of Dallas — MODERATE COMPLEXITY (permitting queue
 Alcohol process: SIMPLE (v2024 standard track). No city-level alcohol restrictions.
 
 Completed By: Kendra Patel, Senior Development Analyst    Date: December 10, 2024
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Dallas TX — Project SD-2025-203 (Store #5203) — v2025 New Distance Waiver Requirement
-
-# COMMAND ----------
-
-write_doc("feasy_email_dallas_SD203_2025.eml", """
+"""),
+    ("feasy_email_dallas_SD203_2025.eml", """
 From: Ryan Holloway <r.holloway@racetrac.com>
 To: Kendra Patel <k.patel@racetrac.com>
 CC: Marcus Dawson <m.dawson@storedevelopmentconsulting.com>
@@ -990,11 +873,8 @@ Target requirements memo: February 24, 2025.
 Ryan Holloway
 Store Development Manager — Southeast/Southwest
 RaceTrac Petroleum, Inc.
-""")
-
-# COMMAND ----------
-
-write_doc("muni_req_dallas_TX_alcohol_v2025.txt", """
+"""),
+    ("muni_req_dallas_TX_alcohol_v2025.txt", """
 DALLAS DEVELOPMENT SERVICES — ALCOHOL LICENSE REQUIREMENTS SUMMARY
 VERSION: v2025 (Effective January 1, 2025 — Ordinance No. 32891)
 
@@ -1095,11 +975,8 @@ from Q4 2025 to Q1 2026.
 ACTION REQUIRED: File DEC application immediately. Do not submit TABC application until DEC is in hand.
 
 Prepared By: Kendra Patel    Date: February 20, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("regulatory_change_dallas_alcohol_v2024_v2025.txt", """
+"""),
+    ("regulatory_change_dallas_alcohol_v2024_v2025.txt", """
 REGULATORY CHANGE DETECTED
 
 Document ID: REGULATORY-CHANGE-DALLAS-ALCOHOL-V2024-V2025
@@ -1177,11 +1054,8 @@ RECOMMENDED ACTIONS
    San Antonio) — trend may spread.
 
 Prepared By: Kendra Patel, Senior Development Analyst    Date: February 20, 2025
-""")
-
-# COMMAND ----------
-
-write_doc("consultant_dallas_SD203_2025.txt", """
+"""),
+    ("consultant_dallas_SD203_2025.txt", """
 CONSULTANT ADVISORY MEMORANDUM — REGULATORY CHANGE IMPACT
 
 Document ID: CONSULT-MEMO-2025-SD203
@@ -1257,14 +1131,8 @@ Please confirm how you want to proceed. I am available for a call this week.
 
 Marcus Dawson
 Principal Consultant — Store Development Consulting LLC
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Atlanta GA — Project SD-2023-204 (Store #5204) — Historical Response
-
-# COMMAND ----------
-
-write_doc("feasy_email_atlanta_SD204_2023.eml", """
+"""),
+    ("feasy_email_atlanta_SD204_2023.eml", """
 From: Ryan Holloway <r.holloway@racetrac.com>
 To: Kendra Patel <k.patel@racetrac.com>
 Date: September 5, 2023
@@ -1307,11 +1175,8 @@ FEASIBILITY SCOPE
 Priority: Medium. Target opening Q1 2024. Please deliver requirements memo by September 22, 2023.
 
 Ryan Holloway
-""")
-
-# COMMAND ----------
-
-write_doc("muni_req_fulton_GA_2023.txt", """
+"""),
+    ("muni_req_fulton_GA_2023.txt", """
 MUNICIPAL REQUIREMENTS SUMMARY — STORE DEVELOPMENT FEASIBILITY
 
 Document ID: MUNI-REQ-2023-SD204-FULTON
@@ -1394,11 +1259,8 @@ Key Items:
 OVERALL ASSESSMENT: FEASIBLE — LOW COMPLEXITY. Former gas-station site may accelerate UST permitting.
 
 Prepared By: Kendra Patel    Date: September 20, 2023
-""")
-
-# COMMAND ----------
-
-write_doc("business_license_fulton_GA_SD204_2024.txt", """
+"""),
+    ("business_license_fulton_GA_SD204_2024.txt", """
 FULTON COUNTY TAX COMMISSIONER — OCCUPATION TAX CERTIFICATE
 
 Document ID: OTC-FULTON-2024-SD204
@@ -1450,11 +1312,8 @@ ASSOCIATED LICENSES ON FILE
 - Georgia EPD UST Registration: GA-EPD-UST-2024-SD204 (active)
 
 Issued By: Fulton County Tax Commissioner    Date: January 29, 2024
-""")
-
-# COMMAND ----------
-
-write_doc("hist_response_atlanta_SD204_2024.txt", """
+"""),
+    ("hist_response_atlanta_SD204_2024.txt", """
 HISTORICAL FEASIBILITY RESPONSE — PROJECT COMPLETION RECORD
 
 Document ID: HIST-RESP-2024-SD204
@@ -1508,70 +1367,5 @@ Alcohol process: MODERATE (11 weeks; background check is rate-limiting step).
 No distance waivers or special city approvals needed.
 
 Completed By: Kendra Patel, Senior Development Analyst    Date: March 8, 2024
-""")
-
-# COMMAND ----------
-# MAGIC %md ## Summary — Corpus Manifest
-
-# COMMAND ----------
-
-DOCS = [
-    # Tampa FL — SD-2024-201
-    "feasy_email_tampa_SD201_2024.eml",
-    "muni_req_hillsborough_FL_2024.txt",
-    "alcohol_license_hillsborough_SD201_2024.txt",
-    "tobacco_license_hillsborough_SD201_2024.txt",
-    "zoning_hillsborough_SD201_2024.txt",
-    "business_license_hillsborough_SD201_2025.txt",
-    "permit_co_tampa_SD201_2025.txt",
-    "consultant_tampa_SD201_2024.txt",
-    "hist_response_tampa_SD201_2025.txt",
-    # Dallas TX — SD-2024-202 (v2024 baseline)
-    "feasy_email_dallas_SD202_2024.eml",
-    "muni_req_dallas_TX_alcohol_v2024.txt",
-    "alcohol_license_dallas_SD202_v2024.txt",
-    "hist_response_dallas_SD202_2024.txt",
-    # Dallas TX — SD-2025-203 (v2025 new distance waiver)
-    "feasy_email_dallas_SD203_2025.eml",
-    "muni_req_dallas_TX_alcohol_v2025.txt",
-    "regulatory_change_dallas_alcohol_v2024_v2025.txt",
-    "consultant_dallas_SD203_2025.txt",
-    # Atlanta GA — SD-2023-204 (historical)
-    "feasy_email_atlanta_SD204_2023.eml",
-    "muni_req_fulton_GA_2023.txt",
-    "business_license_fulton_GA_SD204_2024.txt",
-    "hist_response_atlanta_SD204_2024.txt",
+"""),
 ]
-
-present = [d for d in DOCS if os.path.exists(os.path.join(OUTPUT_DIR, d))]
-missing = [d for d in DOCS if not os.path.exists(os.path.join(OUTPUT_DIR, d))]
-
-print(f"\n{'='*60}")
-print(f"Corpus summary — {len(present)}/{len(DOCS)} documents written")
-print(f"Output directory: {OUTPUT_DIR}")
-print(f"{'='*60}")
-print("\nDocument manifest:")
-for fname in present:
-    size = os.path.getsize(os.path.join(OUTPUT_DIR, fname))
-    print(f"  {fname}  ({size:,} bytes)")
-if missing:
-    print(f"\nMISSING ({len(missing)}):")
-    for fname in missing:
-        print(f"  {fname}")
-print(f"\n{'='*60}")
-print("Classification label coverage:")
-label_map = {
-    "feasibility_request":       [f for f in present if f.startswith("feasy_")],
-    "municipal_requirement":     [f for f in present if f.startswith("muni_req_")],
-    "alcohol_license":           [f for f in present if f.startswith("alcohol_")],
-    "tobacco_license":           [f for f in present if f.startswith("tobacco_")],
-    "business_license":          [f for f in present if f.startswith("business_")],
-    "zoning_document":           [f for f in present if f.startswith("zoning_")],
-    "permit":                    [f for f in present if f.startswith("permit_")],
-    "historical_response":       [f for f in present if f.startswith("hist_")],
-    "regulatory_change":         [f for f in present if f.startswith("regulatory_")],
-    "consultant_correspondence": [f for f in present if f.startswith("consultant_")],
-}
-for label, files in label_map.items():
-    status = "OK" if files else "MISSING"
-    print(f"  {label:30s}: {len(files)} doc(s)  [{status}]")
