@@ -22,9 +22,9 @@ class LLMSchemaAdapter(Adapter):
         raw = ctx.chat_completion(prompt)
         data = _extract_json(raw)
         if data is None:
-            raise SkillError(f"{contract.id}: model did not return JSON")
-        evidence = [Evidence(**e) if isinstance(e, dict) else e
-                    for e in (data.get("evidence") or [])]
+            snippet = (raw or "").strip().replace("\n", " ")[:180] or "(empty response)"
+            raise SkillError(f"{contract.id}: model did not return JSON — got: {snippet}")
+        evidence = [_coerce_evidence(e) for e in (data.get("evidence") or [])]
         # keep evidence in outputs as dicts too (schema declares it)
         if "evidence" in contract.outputs:
             data["evidence"] = [e.to_dict() for e in evidence]
@@ -40,6 +40,24 @@ class LLMSchemaAdapter(Adapter):
         # blank any unfilled placeholders
         out = re.sub(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", "", out)
         return out
+
+
+def _coerce_evidence(e):
+    """Normalize a model-returned evidence item to an Evidence object.
+
+    The model may return a dict (mapped by keyword), a plain string (treated as
+    source_text), or an already-constructed Evidence. Unknown dict keys are
+    dropped so a stray field can't crash construction."""
+    if isinstance(e, Evidence):
+        return e
+    if isinstance(e, str):
+        return Evidence(document_id="", source_text=e)
+    if isinstance(e, dict):
+        allowed = {"document_id", "locator", "source_text", "confidence", "method"}
+        kwargs = {k: v for k, v in e.items() if k in allowed}
+        kwargs.setdefault("document_id", "")
+        return Evidence(**kwargs)
+    return Evidence(document_id="", source_text=str(e))
 
 
 def _fmt(v):

@@ -1,0 +1,19 @@
+resources:
+  pipelines:
+    docintel_spine:
+      name: docintel_spine
+      catalog: jai_docintel
+      schema: template
+      serverless: true
+      channel: PREVIEW
+      photon: true
+      development: true
+      libraries:
+        - glob:
+            include: ../transformations/**
+      configuration:
+        catalog: jai_docintel
+        domain_id: supply_chain
+        source_volume_path: /Volumes/jai_docintel/raw/documents/
+        image_output_path: /Volumes/jai_docintel/template/_pipeline_meta/parsed_images/
+        embed_model: databricks-gte-large-en

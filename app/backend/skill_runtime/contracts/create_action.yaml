@@ -10,6 +10,7 @@ inputs:
   project:          {type: string, required: false}
 outputs:
   action_ids: {type: array}
+  actions:    {type: array}   # [{action_id, action_type, description, priority, status}]
 required_capabilities: [sql]
 ontology_dependencies: [Action]
 evidence_requirements: optional

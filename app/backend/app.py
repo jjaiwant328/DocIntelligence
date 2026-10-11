@@ -80,6 +80,52 @@ except Exception as _e:
     _skills_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Skills/Workflow routes not loaded: {_skills_load_error}")
 
+# Register Sources / Inventory routes (Phase 2 connector-first)
+_sources_load_error: str | None = None
+try:
+    from source_routes import router as source_router
+    app.include_router(source_router)
+    print("✅ Source routes registered at /api/sources, /api/inventory")
+except Exception as _e:
+    import traceback as _tb
+    _sources_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Source routes not loaded: {_sources_load_error}")
+
+# Register Connector credential-config routes
+_connectors_load_error: str | None = None
+try:
+    from connector_routes import router as connector_router
+    app.include_router(connector_router)
+    print("✅ Connector routes registered at /api/connectors")
+except Exception as _e:
+    import traceback as _tb
+    _connectors_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Connector routes not loaded: {_connectors_load_error}")
+
+# Register thin-spine routes (endpoint-free search + evidence over docintel_spine tables).
+# Additive — does not affect existing routes.
+_spine_load_error: str | None = None
+try:
+    from spine_routes import router as spine_router
+    app.include_router(spine_router)
+    print("✅ Spine routes registered at /api/spine (search, evidence, domains)")
+except Exception as _e:
+    import traceback as _tb
+    _spine_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ Spine routes not loaded: {_spine_load_error}")
+
+# Mount the in-app MCP server (headless tools) at /mcp/ — makes DocIntelligence's
+# capabilities callable by any MCP client. Must run before the catch-all route.
+_mcp_load_error: str | None = None
+try:
+    import mcp_server
+    mcp_server.attach(app)
+    print("✅ MCP server mounted at /mcp/ (tools: list_domains, search_documents, list_documents, query_agent)")
+except Exception as _e:
+    import traceback as _tb
+    _mcp_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
+    print(f"⚠️ MCP server not mounted: {_mcp_load_error}")
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -101,6 +147,10 @@ def health_check():
         "docintel_error": _docintel_load_error,
         "platform_routes": "loaded" if _platform_load_error is None else "FAILED",
         "platform_error": _platform_load_error,
+        "mcp_server": "mounted" if _mcp_load_error is None else "FAILED",
+        "mcp_error": _mcp_load_error,
+        "source_routes": "loaded" if _sources_load_error is None else "FAILED",
+        "source_error": _sources_load_error,
     }
 
 # Pydantic models
@@ -1787,27 +1837,6 @@ def serve_static_asset(asset_path: str):
     return serve_react_app(asset_path)
 
 def serve_react_app(full_path: str):
-    """Handle Next.js page routes - serve appropriate index.html"""
-    # If the request is for a specific HTML file, serve it
-    if full_path.endswith('.html'):
-        file_path = f"{target_dir}/{full_path}"
-        if os.path.exists(file_path):
-            return FileResponse(file_path)
-    
-    
-    # Route each Next.js page to its pre-rendered index.html
-    page_routes = [
-        "next-steps",
-        "document-intelligence",
-        "supply-chain",
-        "agent",
-        "setup",
-    ]
-    for route in page_routes:
-        if full_path.startswith(route):
-            file_path = f"{target_dir}/{route}/index.html"
-            if os.path.exists(file_path):
-                return FileResponse(file_path)
-
-    # For all other routes, serve the main index.html
-    return FileResponse(f"{target_dir}/index.html") 
+    """Handle Next.js page routes - serve the appropriate pre-rendered index.html."""
+    from static_routing import resolve_page_file
+    return FileResponse(resolve_page_file(target_dir, full_path))

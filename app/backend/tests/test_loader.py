@@ -22,8 +22,9 @@ def test_registry_loads_and_validates():
 def test_full_library_enabled():
     reg = load_registry()
     ids = set(reg.enabled_ids())
-    # Scope A: full 25-skill library enabled; the DD subset is a subset of it.
-    assert len(ids) == 25
+    # Scope A: full 25-skill library + reconcile_documents (P3) = 26; the DD
+    # subset is a subset of it.
+    assert len(ids) == 26
     assert DUE_DILIGENCE_SKILLS <= ids
 
 
@@ -39,7 +40,7 @@ def test_list_all_matches_enabled():
     reg = load_registry()
     all_rows = reg.list(enabled_only=False)
     enabled = reg.list(enabled_only=True)
-    assert len(all_rows) == len(enabled) == 25
+    assert len(all_rows) == len(enabled) == 26
 
 
 if __name__ == "__main__":

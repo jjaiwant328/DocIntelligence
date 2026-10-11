@@ -1,0 +1,19 @@
+resources:
+  pipelines:
+    docintel_spine_cdd:
+      name: docintel_spine_cdd
+      catalog: jai_docintel
+      schema: template_cdd
+      serverless: true
+      channel: PREVIEW
+      photon: true
+      development: true
+      libraries:
+        - glob:
+            include: ../transformations/**
+      configuration:
+        catalog: jai_docintel
+        domain_id: compliance_due_diligence
+        source_volume_path: /Volumes/jai_docintel/compliance_due_diligence/documents/
+        image_output_path: /Volumes/jai_docintel/template_cdd/_pipeline_meta/parsed_images/
+        embed_model: databricks-gte-large-en

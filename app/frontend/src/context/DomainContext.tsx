@@ -16,9 +16,28 @@ export interface DomainInfo {
   schema_ready?: boolean;
 }
 
+/** A project/case within a project (from platform.projects). */
+export interface ProjectInfo {
+  project_id: string;
+  name?: string;
+  municipality?: string;
+  state?: string;
+  status?: string;
+  owner?: string;
+  collaborators?: string[];
+}
+
 interface DomainContextValue {
   domain: DomainInfo;
   setDomain: (d: DomainInfo) => void;
+  /** The active project/case, scoping Skills / Workflows / Executions. */
+  project: ProjectInfo | null;
+  setProject: (p: ProjectInfo | null) => void;
+  /** Demo identity: the user we are "acting as" and whether access is enforced. */
+  actingUser: string;
+  setActingUser: (u: string) => void;
+  enforceAccess: boolean;
+  setEnforceAccess: (v: boolean) => void;
 }
 
 const DEFAULT_DOMAIN: DomainInfo = {
@@ -29,9 +48,18 @@ const DEFAULT_DOMAIN: DomainInfo = {
   schema_ready: false,
 };
 
+/** Demo users to "act as" — pure app-level identity, not Databricks auth. */
+export const DEMO_USERS = ["Alex Chen", "Jordan Smith", "Sam Rivera", "Taylor Kim"];
+
 export const DomainContext = createContext<DomainContextValue>({
   domain: DEFAULT_DOMAIN,
   setDomain: () => {},
+  project: null,
+  setProject: () => {},
+  actingUser: DEMO_USERS[0],
+  setActingUser: () => {},
+  enforceAccess: false,
+  setEnforceAccess: () => {},
 });
 
 export function useDomain(): DomainContextValue {

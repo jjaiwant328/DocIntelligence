@@ -1,0 +1,100 @@
+id: supplier_performance
+name: Supplier Performance
+description: >
+  Reconcile suppliers' operational paperwork — master contracts, delivery
+  schedules, and invoices — against contract terms to score delivery, pricing,
+  and SLA performance, and raise disputes for the discrepancies.
+
+# ── Document types → ai_classify labels ───────────────────────────────────────
+classification_labels:
+  master_contract: "A supply agreement setting pricing, SLAs, lead times, and penalties for a supplier."
+  delivery_schedule: "A planned or actual delivery schedule listing promised dates and quantities per line."
+  invoice: "A supplier invoice billing for delivered goods, with quantities, unit prices, and totals."
+
+# ── Per-doc-type extraction (ai_extract): fields + instructions ────────────────
+extraction_schemas:
+  master_contract:
+    schema:
+      supplier_name:   {type: string, description: "Legal name of the supplier/vendor."}
+      contract_number: {type: string, description: "Contract or agreement reference number."}
+      unit_price:      {type: string, description: "Agreed unit price(s) per SKU/line."}
+      lead_time_days:  {type: string, description: "Agreed delivery lead time in days."}
+      on_time_sla_pct: {type: string, description: "Contracted on-time delivery SLA percentage."}
+      penalty_terms:   {type: string, description: "Late-delivery or price-breach penalty terms."}
+      effective_dates: {type: string, description: "Contract start and end dates."}
+    instructions: "Extract the governing commercial terms. Keep numbers verbatim."
+  delivery_schedule:
+    schema:
+      supplier_name:   {type: string, description: "Supplier the schedule is for."}
+      po_number:       {type: string, description: "Related purchase order number, if any."}
+      promised_date:   {type: string, description: "Promised/scheduled delivery date per line."}
+      actual_date:     {type: string, description: "Actual delivery date per line, if present."}
+      sku:             {type: string, description: "Item/SKU identifier."}
+      quantity:        {type: string, description: "Scheduled or delivered quantity."}
+    instructions: "Extract per-line promised vs actual dates and quantities."
+  invoice:
+    schema:
+      supplier_name:   {type: string, description: "Supplier issuing the invoice."}
+      invoice_number:  {type: string, description: "Invoice number."}
+      po_number:       {type: string, description: "Referenced purchase order number."}
+      sku:             {type: string, description: "Item/SKU billed."}
+      quantity:        {type: string, description: "Quantity billed."}
+      unit_price:      {type: string, description: "Unit price billed."}
+      total_amount:    {type: string, description: "Invoice total."}
+      invoice_date:    {type: string, description: "Invoice date."}
+    instructions: "Extract billed quantities, unit prices, and totals verbatim."
+
+entity_types: [Supplier, Contract, PurchaseOrder, Invoice, DeliverySchedule]
+
+agent_system_prompt: >
+  You are a supplier-performance analyst. Answer only from the supplier's
+  contracts, delivery schedules, and invoices. Cite the document behind every
+  figure. Flag on-time-delivery shortfalls, price variances vs the contract, and
+  SLA breaches.
+
+suggested_questions:
+  - "Which suppliers are breaching their on-time delivery SLA?"
+  - "Where are invoices priced above the contracted unit price?"
+  - "What is the total financial exposure from billing discrepancies?"
+
+# ── Skills this use case enables (subset of the 25-skill registry) ─────────────
+enabled_skills:
+  - classify_document
+  - extract_entities
+  - search_documents
+  - reconcile_documents
+  - generate_executive_summary
+  - create_work_object
+  - create_action
+
+# ── Reconciliation spec (drives reconcile_documents) ───────────────────────────
+reconciliation:
+  reference_types: [master_contract, delivery_schedule]
+  subject_types: [invoice]
+  checks:
+    - "on_time_delivery: compare each delivery schedule's actual_date vs promised_date; flag late lines and compute on-time %"
+    - "price_variance: compare each invoice unit_price vs the contract unit_price; flag overbilling and sum the $ impact"
+    - "sla_breach: compare computed on-time % vs the contract on_time_sla_pct; flag if below"
+
+# ── Starter workflow seeded into workflow_templates ────────────────────────────
+starter_workflow:
+  id: supplier_scorecard
+  version: "1.0"
+  approval_before: create_action
+  steps:
+    - id: open_review
+      skill: create_work_object
+      inputs_map: {domain: $input.domain, project: $input.project, type: review}
+    - id: reconcile
+      skill: reconcile_documents
+      inputs_map:
+        documents: $docs.items
+        checks: $blueprint.reconciliation.checks
+        reference_types: $blueprint.reconciliation.reference_types
+        subject_types: $blueprint.reconciliation.subject_types
+    - id: summary
+      skill: generate_executive_summary
+      inputs_map: {findings: $steps.reconcile.findings, risk: $steps.reconcile.scorecard.overall}
+    - id: disputes
+      skill: create_action
+      inputs_map: {domain: $input.domain, project: $input.project, proposed_actions: $steps.reconcile.findings}

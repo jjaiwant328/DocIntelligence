@@ -58,7 +58,7 @@ const STEP_TITLES = [
 ];
 
 const STEP_DESCRIPTIONS = [
-  "Name your subject area and describe what it covers",
+  "Name your project and describe what it covers",
   "Define the types of documents this domain will process",
   "Map extraction fields to each document type",
   "Define the entity types and key relationships",
@@ -283,7 +283,7 @@ export default function SetupWizard() {
           ← Domains
         </button>
         <span className="text-gray-200">|</span>
-        <h1 className="text-sm font-bold text-gray-900">New Subject Area Setup</h1>
+        <h1 className="text-sm font-bold text-gray-900">Custom Project Setup <span className="font-normal text-gray-400">(advanced)</span></h1>
       </div>
 
       {/* Step progress */}

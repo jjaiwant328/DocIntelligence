@@ -12,10 +12,6 @@ from workflow_engine.engine import WorkflowRun, StepRecord  # noqa: E402
 
 def test_workflow_run_returns_run_dict(monkeypatch=None):
     # Fake the pieces that need live Databricks.
-    class FakeDomain:
-        platform_domain_id = "compliance_due_diligence"
-        schema_vec = "compliance_due_diligence"
-
     fake_run = WorkflowRun(
         template_id="due_diligence", template_version="1.0",
         domain="compliance", status="pending_approval",
@@ -26,12 +22,11 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
 
     class FakeEngine:
         def __init__(self, *a, **k): pass
-        def run(self, template, domain, inputs):
+        def run(self, template, domain, inputs, docs=None, params=None):
             assert template == "due_diligence"
             assert inputs["project"] == "Store 1827"
             return fake_run
 
-    skill_routes.domain_loader = lambda d: FakeDomain()
     skill_routes.build_live_context = lambda pid: object()
     skill_routes.Dispatcher = lambda *a, **k: object()
     skill_routes.WorkflowEngine = FakeEngine
@@ -46,10 +41,11 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
     fake_routes = types.ModuleType("docintel_routes")
     fake_routes.run_sql = lambda q, timeout_secs=50: []
     fake_routes.CATALOG = "jai_docintel"
+    fake_routes._get_domain_schemas = lambda pid: {"schema_raw": "raw"}
     sys.modules["docintel_routes"] = fake_routes
 
     req = skill_routes.WorkflowRunRequest(
-        template="due_diligence", domain_id="compliance", project="Store 1827")
+        template="due_diligence", domain_id="compliance_due_diligence", project="Store 1827")
     result = asyncio.run(skill_routes.workflow_run(req))
     assert result["status"] == "pending_approval"
     assert result["work_object_id"] == "WO-1"
@@ -58,7 +54,7 @@ def test_workflow_run_returns_run_dict(monkeypatch=None):
 
 def test_request_model_defaults():
     req = skill_routes.WorkflowRunRequest(project="X")
-    assert req.template == "due_diligence" and req.domain_id == "compliance"
+    assert req.template == "due_diligence" and req.domain_id == "compliance_due_diligence"
     assert req.approve is False
 
 

@@ -1,0 +1,94 @@
+id: ap_three_way_match
+name: AP Invoice 3-Way Match
+description: >
+  Match each supplier invoice against its purchase order and goods-receipt note
+  to catch overbilling, duplicate invoices, price/quantity variances, and missing
+  receipts before payment.
+
+classification_labels:
+  purchase_order: "A purchase order authorizing the buy: line items, quantities, unit prices, and PO number."
+  goods_receipt: "A goods-receipt note recording what was actually received against a PO."
+  invoice: "A supplier invoice requesting payment, referencing a PO, with billed quantities and prices."
+
+extraction_schemas:
+  purchase_order:
+    schema:
+      po_number:    {type: string, description: "Purchase order number."}
+      vendor_name:  {type: string, description: "Vendor the PO is issued to."}
+      sku:          {type: string, description: "Item/SKU ordered."}
+      quantity:     {type: string, description: "Quantity ordered."}
+      unit_price:   {type: string, description: "Authorized unit price."}
+      total_amount: {type: string, description: "PO total."}
+    instructions: "Extract the authorized quantities and prices verbatim."
+  goods_receipt:
+    schema:
+      grn_number:      {type: string, description: "Goods-receipt note number."}
+      po_number:       {type: string, description: "Referenced purchase order number."}
+      sku:             {type: string, description: "Item/SKU received."}
+      quantity_received: {type: string, description: "Quantity actually received."}
+      received_date:   {type: string, description: "Date goods were received."}
+    instructions: "Extract received quantities and dates verbatim."
+  invoice:
+    schema:
+      invoice_number: {type: string, description: "Invoice number."}
+      po_number:      {type: string, description: "Referenced purchase order number."}
+      vendor_name:    {type: string, description: "Vendor issuing the invoice."}
+      sku:            {type: string, description: "Item/SKU billed."}
+      quantity:       {type: string, description: "Quantity billed."}
+      unit_price:     {type: string, description: "Unit price billed."}
+      total_amount:   {type: string, description: "Invoice total."}
+      invoice_date:   {type: string, description: "Invoice date."}
+    instructions: "Extract billed quantities, prices, and totals verbatim."
+
+entity_types: [Vendor, PurchaseOrder, GoodsReceipt, Invoice]
+
+agent_system_prompt: >
+  You are an accounts-payable analyst performing 3-way match. Answer only from
+  the purchase orders, goods-receipt notes, and invoices provided. Cite the
+  document behind every figure. Flag overbilling, quantity mismatches, duplicate
+  invoices, and invoices with no matching receipt.
+
+suggested_questions:
+  - "Which invoices bill more than the PO authorized?"
+  - "Which invoices have no matching goods receipt?"
+  - "Are there duplicate invoices for the same PO?"
+
+enabled_skills:
+  - classify_document
+  - extract_entities
+  - search_documents
+  - reconcile_documents
+  - generate_executive_summary
+  - create_work_object
+  - create_action
+
+reconciliation:
+  reference_types: [purchase_order, goods_receipt]
+  subject_types: [invoice]
+  checks:
+    - "price_match: invoice unit_price must equal the PO unit_price; flag overbilling and sum $ impact"
+    - "quantity_match: invoice quantity must not exceed goods_receipt quantity_received; flag over-billed quantity"
+    - "receipt_exists: every invoice's po_number must have a matching goods_receipt; flag invoices with no receipt"
+    - "duplicate_invoice: flag two invoices billing the same po_number + sku + amount"
+
+starter_workflow:
+  id: three_way_match
+  version: "1.0"
+  approval_before: create_action
+  steps:
+    - id: open_review
+      skill: create_work_object
+      inputs_map: {domain: $input.domain, project: $input.project, type: review}
+    - id: reconcile
+      skill: reconcile_documents
+      inputs_map:
+        documents: $docs.items
+        checks: $blueprint.reconciliation.checks
+        reference_types: $blueprint.reconciliation.reference_types
+        subject_types: $blueprint.reconciliation.subject_types
+    - id: summary
+      skill: generate_executive_summary
+      inputs_map: {findings: $steps.reconcile.findings, risk: $steps.reconcile.scorecard.overall}
+    - id: holds
+      skill: create_action
+      inputs_map: {domain: $input.domain, project: $input.project, proposed_actions: $steps.reconcile.findings}

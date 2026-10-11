@@ -1,0 +1,35 @@
+cases:
+  - name: happy
+    inputs:
+      documents:
+        - {doc_id: C1, doc_type: master_contract, text: "unit price $10, on-time SLA 95%"}
+        - {doc_id: I1, doc_type: invoice, text: "billed unit price $12 for SKU-1"}
+      checks: ["price_variance: invoice unit_price vs contract unit_price"]
+      reference_types: [master_contract]
+      subject_types: [invoice]
+    fake: {model: '{"findings":[{"check":"price_variance","severity":"high","subject_doc":"I1","reference_doc":"C1","detail":"invoice billed $12 vs contracted $10","amount_impact":2}],"scorecard":{"overall":"breach","metrics":[{"name":"price_variance","value":20,"unit":"%","target":"0","status":"fail"}]},"evidence":[{"document_id":"I1","source_text":"billed unit price $12","method":"reconciliation"}]}'}
+    expect: {status: ok, output_has: [findings, scorecard], min_evidence: 1}
+  - name: insufficient_evidence   # nothing to reconcile → clean scorecard
+    inputs:
+      documents:
+        - {doc_id: C1, doc_type: master_contract, text: "unit price $10"}
+        - {doc_id: I1, doc_type: invoice, text: "billed $10"}
+      checks: ["price_variance"]
+    fake: {model: '{"findings":[],"scorecard":{"overall":"on_track","metrics":[]},"evidence":[{"document_id":"I1","source_text":"billed $10","method":"reconciliation"}]}'}
+    expect: {status: ok, output_has: [findings, scorecard]}
+  - name: missing_input
+    inputs: {documents: [{doc_id: I1, doc_type: invoice, text: "x"}]}
+    fake: {model: '{"findings":[],"scorecard":{}}'}
+    expect: {status: error, error_contains: checks}
+  - name: ambiguous   # a required reference document is missing → that is a finding
+    inputs:
+      documents: [{doc_id: I1, doc_type: invoice, text: "invoice for PO-9 no receipt"}]
+      checks: ["receipt_exists: every invoice needs a goods_receipt"]
+      reference_types: [goods_receipt]
+      subject_types: [invoice]
+    fake: {model: '{"findings":[{"check":"receipt_exists","severity":"high","subject_doc":"I1","reference_doc":"","detail":"no goods_receipt for PO-9","amount_impact":0}],"scorecard":{"overall":"at_risk","metrics":[]},"evidence":[{"document_id":"I1","source_text":"invoice for PO-9 no receipt","method":"reconciliation"}]}'}
+    expect: {status: ok, output_has: [findings]}
+  - name: invalid
+    inputs: {documents: "not a list", checks: []}
+    fake: {model: '{}'}
+    expect: {status: error}

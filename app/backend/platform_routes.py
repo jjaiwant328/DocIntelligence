@@ -343,3 +343,41 @@ def activate_domain(req: ActivateRequest):
         WHERE domain_id = '{_esc(req.domain_id)}'
     """)
     return {"success": True, "domain_id": req.domain_id, "status": "active"}
+
+
+# ── Blueprints + one-call use-case provisioning ────────────────────────────────
+
+@router.get("/blueprints")
+def list_blueprints():
+    """The declarative use-case blueprints a citizen developer can start from."""
+    from provisioner import loader
+    return {"blueprints": loader.list_blueprints()}
+
+
+class ProvisionRequest(BaseModel):
+    blueprint_id: str
+    use_case_id: str = ""          # defaults to the blueprint id
+    name: str = ""
+    owner: str = "app_user"
+    dry_run: bool = False
+    create_pipeline_job: bool = False   # also stand up the ingestion pipeline job
+
+
+@router.post("/provision")
+def provision_use_case(req: ProvisionRequest):
+    """Stand up a whole use case from a blueprint in one call: register config,
+    create schema/volumes, seed the starter workflow, create the project, activate.
+    Replaces the wizard + the manual scripts/create_domain_job.py."""
+    from provisioner import provision as _prov
+    use_case_id = (req.use_case_id or req.blueprint_id).strip()
+    res = _prov.provision(
+        blueprint_id=req.blueprint_id, use_case_id=use_case_id,
+        name=req.name, owner=req.owner,
+        run_sql=lambda q: run_sql(q), catalog=CATALOG, dry_run=req.dry_run,
+        create_pipeline_job=req.create_pipeline_job, ws_client=w,
+    )
+    if not res.get("ok"):
+        # surface a 400 for a bad blueprint id, else return the step detail
+        if res.get("error", "").startswith("unknown blueprint"):
+            raise HTTPException(status_code=400, detail=res["error"])
+    return res

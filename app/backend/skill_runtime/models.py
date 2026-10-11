@@ -97,6 +97,7 @@ class SkillContract:
     category: str
     adapter: str
     implementation: str
+    description: str = ""
     inputs: dict = field(default_factory=dict)
     outputs: dict = field(default_factory=dict)
     required_capabilities: list = field(default_factory=list)

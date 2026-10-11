@@ -2,8 +2,10 @@
 
 import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { DomainContext, DomainInfo } from "@/context/DomainContext";
-import Link from "next/link";
+import { DomainContext, DomainInfo, ProjectInfo, DEMO_USERS } from "@/context/DomainContext";
+import { ProjectPicker } from "@/components/ProjectPicker";
+import { ProjectDocuments } from "@/components/ProjectDocuments";
+import { NewProjectWizard } from "@/components/NewProjectWizard";
 import { DocViewerPanel } from "@/components/DocViewerPanel";
 import { PipelineRunProvider } from "@/context/PipelineRunContext";
 import { PipelineStatusPopup } from "@/components/PipelineStatusPopup";
@@ -13,13 +15,32 @@ const DocIntelligence = dynamic(() => import("./document-intelligence/page"), {
   ssr: false,
   loading: () => <LoadingPane label="Document Intelligence" />,
 });
-const ControlTower = dynamic(() => import("./supply-chain/page"), {
+// Phase 5: connector-first workspace
+const SourcesTab = dynamic(() => import("./sources/page"), {
   ssr: false,
-  loading: () => <LoadingPane label="Control Tower" />,
+  loading: () => <LoadingPane label="Sources" />,
 });
-const AIAgent = dynamic(() => import("./agent/page"), {
+const ProjectTab = dynamic(() => import("./project/page"), {
   ssr: false,
-  loading: () => <LoadingPane label="AI Agent" />,
+  loading: () => <LoadingPane label="Project Workspace" />,
+});
+// Control Tower retired — Overview/Knowledge Graph/Action Center/Compliance Map
+// are now produced as workflow outputs (see Executions). Copilot kept as its own tab.
+const SkillsTab = dynamic(() => import("./skills/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Skills" />,
+});
+const WorkflowsTab = dynamic(() => import("./workflows/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Workflows" />,
+});
+const ExecutionsTab = dynamic(() => import("./executions/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Executions" />,
+});
+const CopilotTab = dynamic(() => import("./copilot/page"), {
+  ssr: false,
+  loading: () => <LoadingPane label="Copilot" />,
 });
 
 function LoadingPane({ label }: { label: string }) {
@@ -34,6 +55,24 @@ function LoadingPane({ label }: { label: string }) {
 }
 
 const WORKSPACE_TABS = [
+  {
+    id: "sources",
+    icon: "🔌",
+    label: "Sources",
+    shortLabel: "Sources",
+    badge: "Connect · Crawl",
+    badgeColor: "bg-orange-100 text-orange-700",
+    description: "Register and connect external data sources (Google Drive, SharePoint, S3). Metadata is crawled without copying file content.",
+  },
+  {
+    id: "project",
+    icon: "📁",
+    label: "Project Workspace",
+    shortLabel: "Workspace",
+    badge: "Inventory · Search",
+    badgeColor: "bg-teal-100 text-teal-700",
+    description: "Browse the document inventory for this project and run hybrid vector + full-text search.",
+  },
   {
     id: "doc",
     icon: "📄",
@@ -53,13 +92,40 @@ const WORKSPACE_TABS = [
     description: "Browse all parsed and extracted documents, run pipelines, and manage the document corpus.",
   },
   {
-    id: "tower",
-    icon: "📊",
-    label: "Control Tower",
-    shortLabel: "Control Tower",
-    badge: "Live Analytics",
+    id: "skills",
+    icon: "🧩",
+    label: "Skills",
+    shortLabel: "Skills",
+    badge: "Apply to Docs",
+    badgeColor: "bg-purple-100 text-purple-700",
+    description: "Apply reusable skills to this project's parsed documents and inspect evidence-backed output.",
+  },
+  {
+    id: "workflows",
+    icon: "🔀",
+    label: "Workflows",
+    shortLabel: "Workflows",
+    badge: "Compose · Run",
+    badgeColor: "bg-teal-100 text-teal-700",
+    description: "Visually assemble skills into deterministic workflow templates, save them per project, and run them.",
+  },
+  {
+    id: "executions",
+    icon: "▶",
+    label: "Executions",
+    shortLabel: "Executions",
+    badge: "Runs · Outputs",
     badgeColor: "bg-green-100 text-green-700",
-    description: "Incident overview, ontology map, supplier risk rankings, and action center.",
+    description: "Every workflow and skill run with its outputs — actions, entities, findings — each traceable to evidence.",
+  },
+  {
+    id: "copilot",
+    icon: "🧠",
+    label: "Copilot",
+    shortLabel: "Copilot",
+    badge: "Ask · Cited",
+    badgeColor: "bg-sky-100 text-sky-700",
+    description: "Ask questions across this project's documents; grounded answers with cited sources.",
   },
   // AI Agent tab removed — redundant with Copilot Studio → Ask Copilot, which uses the
   // same Vector Search + LLM path for these domains and is a richer superset (structured
@@ -75,7 +141,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 const DOMAIN_ICONS: Record<string, string> = {
   supply_chain: "🏭",
-  compliance:   "⚖️",
+  compliance_due_diligence: "⚖️",
   procurement:  "🛒",
   finance:      "💰",
   hr:           "👥",
@@ -86,8 +152,9 @@ export default function Home() {
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [domainsLoading, setDomainsLoading] = useState(true);
 
-  // Landing page tab: "overview" | "areas"
-  const [landingTab, setLandingTab] = useState<"overview" | "areas">("overview");
+  // Landing page tab: "areas" (Projects — a user's work) is the default landing;
+  // "overview" (platform architecture) is the secondary tab.
+  const [landingTab, setLandingTab] = useState<"overview" | "areas">("areas");
 
   // Live FMAPI model config
   const [modelConfig, setModelConfig] = useState<{
@@ -105,6 +172,9 @@ export default function Home() {
     status: "active",
     schema_ready: false,
   });
+  const [project, setProject] = useState<ProjectInfo | null>(null);
+  const [actingUser, setActingUser] = useState<string>(DEMO_USERS[0]);
+  const [enforceAccess, setEnforceAccess] = useState<boolean>(false);
 
   // ── Global document search ─────────────────────────────────────────────────
   const [searchOpen,    setSearchOpen]    = useState(false);
@@ -235,6 +305,7 @@ export default function Home() {
   const openDomain = (d: DomainInfo) => {
     setActiveDomain(d);
     setDomainCtxState(d);
+    setProject(null);   // project is scoped to a project
     setActiveTab("doc");
     pushUrl(d.domain_id, "doc");  // push so browser Back returns to landing
   };
@@ -276,7 +347,7 @@ export default function Home() {
           <span className="text-xs font-bold text-gray-700 mr-5 hidden sm:block">DocIntelligence</span>
           {([
             { id: "overview", icon: "🗺", label: "Platform Overview",  desc: "Architecture, how-to guide, and available connectors." },
-            { id: "areas",    icon: "📂", label: "Subject Areas",      desc: "Select or create a subject area to open its workspace." },
+            { id: "areas",    icon: "📂", label: "Projects",           desc: "Open a project (use case) or create a new one from a blueprint." },
           ] as const).map(t => (
             <button
               key={t.id}
@@ -297,14 +368,14 @@ export default function Home() {
               </span>
             </button>
           ))}
-          {/* Subject Areas count pill — always visible */}
+          {/* Projects count pill — always visible */}
           <div className="ml-auto flex items-center gap-2">
             {landingTab === "overview" && (
               <button
                 onClick={() => setLandingTab("areas")}
                 className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5"
               >
-                📂 {domainsLoading ? "…" : `${domains.length} Subject Area${domains.length !== 1 ? "s" : ""}`} →
+                📂 {domainsLoading ? "…" : `${domains.length} Project${domains.length !== 1 ? "s" : ""}`} →
               </button>
             )}
             {landingTab === "areas" && !domainsLoading && (
@@ -318,7 +389,7 @@ export default function Home() {
           <AppOverview onGoToAreas={() => setLandingTab("areas")} liveModelConfig={modelConfig} />
         )}
         {landingTab === "areas" && (
-          <SubjectAreasPanel
+          <ProjectsPanel
             domains={domains}
             domainsLoading={domainsLoading}
             onOpenDomain={openDomain}
@@ -333,36 +404,74 @@ export default function Home() {
   const currentTab = WORKSPACE_TABS.find(t => t.id === activeTab)!;
 
   return (
-    <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState }}>
+    <DomainContext.Provider value={{ domain: domainCtxState, setDomain: setDomainCtxState, project, setProject, actingUser, setActingUser, enforceAccess, setEnforceAccess }}>
       <PipelineRunProvider>
       <main className="flex-1 flex flex-col bg-gray-50">
-        {/* Domain + tab bar */}
-        <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-0 min-h-[48px]">
-          {/* Back to landing */}
-          <button
-            onClick={() => { setLandingTab("areas"); closeDomain(); }}
-            title="Back to Subject Areas"
-            className="flex items-center gap-1.5 mr-3 text-xs font-medium text-gray-400 hover:text-gray-700 py-3 border-r border-gray-100 pr-3 flex-shrink-0"
-          >
-            ← <span className="hidden sm:inline text-gray-500">Subject Areas</span>
-          </button>
-
-          {/* Domain badge */}
-          <div className="flex items-center gap-1.5 mr-4 flex-shrink-0 border-r border-gray-100 pr-4 py-3">
+        {/* Context row: breadcrumb (Projects › this project) + Case picker + identity/search */}
+        <div className="bg-white border-b border-gray-100 px-4 flex items-center gap-3 min-h-[44px]">
+          {/* Breadcrumb */}
+          <nav className="flex items-center gap-1.5 flex-shrink-0 text-xs" aria-label="Breadcrumb">
+            <button
+              onClick={() => { setLandingTab("areas"); closeDomain(); }}
+              title="Back to Projects"
+              className="text-gray-400 hover:text-gray-700 font-medium">
+              Projects
+            </button>
+            <span className="text-gray-300">›</span>
             <span className="text-base">{domainIcon}</span>
-            <span className="text-xs font-bold text-gray-800">{activeDomain.name}</span>
+            <span className="font-bold text-gray-800">{activeDomain.name}</span>
             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${STATUS_COLOR[activeDomain.status ?? "active"] ?? STATUS_COLOR.active}`}>
               {activeDomain.status ?? "active"}
             </span>
+          </nav>
+
+          {/* Case picker — scopes Skills / Workflows / Executions */}
+          <div className="flex items-center flex-shrink-0 border-l border-gray-100 pl-3">
+            <ProjectPicker
+              domainId={activeDomain.domain_id}
+              project={project}
+              onChange={setProject}
+            />
           </div>
 
-          {/* Workspace tabs */}
+          {/* Right: demo identity + search */}
+          <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+            {/* Demo identity: act-as user + access enforcement toggle */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-gray-200 bg-gray-50"
+              title="Demo identity — simulate who is using the app. When 'enforce' is on, only projects you own or collaborate on are shown. App-level only (not real auth).">
+              <span className="text-[11px]">👤</span>
+              <select value={actingUser} onChange={(e) => setActingUser(e.target.value)}
+                className="text-xs bg-transparent border-none focus:outline-none max-w-[110px]">
+                {DEMO_USERS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <label className="flex items-center gap-1 text-[10px] text-gray-500 border-l border-gray-200 pl-1.5">
+                <input type="checkbox" checked={enforceAccess} onChange={(e) => setEnforceAccess(e.target.checked)} />
+                enforce
+              </label>
+            </div>
+            {/* Global search button */}
+            <button
+              onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); setTimeout(() => searchInputRef.current?.focus(), 50); }}
+              title="Search documents (⌘K)"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-white hover:border-gray-300 text-xs text-gray-500 transition-colors cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span className="hidden sm:inline">Search docs</span>
+              <kbd className="hidden lg:inline text-[10px] bg-gray-200 text-gray-400 px-1 rounded">⌘K</kbd>
+            </button>
+          </div>
+        </div>
+
+        {/* Tab row */}
+        <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-0 min-h-[40px] overflow-x-auto">
           {WORKSPACE_TABS.map(t => (
             <button
               key={t.id}
               onClick={() => switchTab(t.id)}
               title={t.description}
-              className={`group relative flex items-center gap-1.5 px-4 py-3 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap
+              className={`group relative flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap
                 ${activeTab === t.id
                   ? "border-blue-600 text-blue-700 bg-blue-50/40"
                   : "border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300"
@@ -377,38 +486,29 @@ export default function Home() {
               </span>
             </button>
           ))}
-
-          {/* Right: search button + active tab badge */}
-          <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-            {/* Global search button */}
-            <button
-              onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); setTimeout(() => searchInputRef.current?.focus(), 50); }}
-              title="Search documents (⌘K)"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-white hover:border-gray-300 text-xs text-gray-500 transition-colors cursor-pointer"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <span className="hidden sm:inline">Search docs</span>
-              <kbd className="hidden lg:inline text-[10px] bg-gray-200 text-gray-400 px-1 rounded">⌘K</kbd>
-            </button>
-
-            {/* Active tab badge */}
-            <div className="hidden lg:flex items-center gap-1.5 text-xs text-gray-400">
-              <span>{currentTab.icon}</span>
-              <span className="font-medium text-gray-600">{currentTab.label}</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${currentTab.badgeColor}`}>
-                {currentTab.badge}
-              </span>
-            </div>
+          {/* Active tab hint */}
+          <div className="ml-auto hidden lg:flex items-center flex-shrink-0 pl-3">
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${currentTab.badgeColor}`}>
+              {currentTab.badge}
+            </span>
           </div>
         </div>
 
         {/* Module content — domain passed as explicit prop to eliminate context drift */}
         <div className="flex-1">
-          {activeTab === "doc"     && <DocIntelligence domain={activeDomain!} />}
-          {activeTab === "library" && <DocIntelligence domain={activeDomain!} initialStep="library" />}
-          {activeTab === "tower"   && <ControlTower domain={activeDomain!} />}
+          {activeTab === "sources"    && <SourcesTab domain={activeDomain!} />}
+          {activeTab === "project"    && <ProjectTab domain={activeDomain!} />}
+          {activeTab === "doc"        && <DocIntelligence domain={activeDomain!} />}
+          {activeTab === "library"    && (
+            <div>
+              <div className="px-4 pt-4"><ProjectDocuments domain={activeDomain!} /></div>
+              <DocIntelligence domain={activeDomain!} initialStep="library" />
+            </div>
+          )}
+          {activeTab === "skills"     && <SkillsTab domain={activeDomain!} />}
+          {activeTab === "workflows"  && <WorkflowsTab domain={activeDomain!} />}
+          {activeTab === "executions" && <ExecutionsTab domain={activeDomain!} />}
+          {activeTab === "copilot"    && <CopilotTab domain={activeDomain!} />}
         </div>
       </main>
 
@@ -561,53 +661,53 @@ const PIPELINE_STAGES = [
   },
   {
     icon: "📊",
-    label: "Govern & Act",
+    label: "Reconcile & Act",
     color: "border-emerald-400 bg-emerald-50",
     text: "text-emerald-700",
-    items: ["Unity Catalog lineage", "Action log & reports", "Control Tower UI", "Scheduled pipeline"],
+    items: ["Reconcile skill → findings", "Performance scorecard", "Actions behind approval gate", "Lossless run history"],
   },
 ];
 
 const HOW_TO_STEPS = [
   {
     step: "1",
-    title: "Upload Documents",
-    tab: "Docs tab",
-    color: "bg-blue-600",
-    desc: "Go to Document Intelligence → upload one or more PDFs. Files land in the Unity Catalog Volume.",
-    tip: "Supported: PDF, TXT. Any document type — contracts, invoices, reports, emails.",
+    title: "Pick or create a Project",
+    tab: "Projects screen",
+    color: "bg-gray-700",
+    desc: "Open an existing project, or click + New Project and pick a blueprint (Supplier Performance, AP 3-Way Match, or Blank). One call provisions the schema, document types, skills, and a starter workflow — no wizard, no redeploy.",
+    tip: "A project is a use case. Blueprints are declarative, so a new one stands up in seconds.",
   },
   {
     step: "2",
-    title: "Run the Pipeline",
-    tab: "Docs tab",
+    title: "Add documents",
+    tab: "Document Intelligence · Library",
     color: "bg-blue-600",
-    desc: "Click ▶ Run Pipeline Now in the Document Library panel. The pipeline parses, classifies, extracts fields, builds the knowledge graph, and indexes for search.",
-    tip: "Takes ~5–10 min for a batch of 10–20 docs. Also runs automatically nightly at 2 AM UTC.",
+    desc: "Upload PDFs (or use a seeded corpus). The pipeline parses with ai_parse_document, classifies each doc type, extracts typed fields, and indexes for search. Tag documents to a case in the Library.",
+    tip: "Any document type — contracts, invoices, delivery schedules, purchase orders, goods receipts.",
   },
   {
     step: "3",
-    title: "Explore Control Tower",
-    tab: "Control Tower tab",
-    color: "bg-green-600",
-    desc: "View the incident dashboard, ontology map, supplier risk scores, and take actions. Actions are logged for audit and reporting.",
-    tip: "Click any node in the ontology graph to see entity details and relationships.",
+    title: "Assemble a Workflow",
+    tab: "Workflows tab",
+    color: "bg-teal-600",
+    desc: "Drag reusable skills into a template — they auto-wire by contract. Declare typed run-time inputs, and set an approval gate before any consequential action.",
+    tip: "One template, many runs. The engine orders the steps deterministically — no orchestration hidden in a prompt.",
   },
   {
     step: "4",
-    title: "Ask the AI Agent",
-    tab: "AI Agent tab",
-    color: "bg-purple-600",
-    desc: "Ask natural-language questions like 'Which restaurants received the recalled product?' or 'What is our financial exposure?' The agent reasons across all documents and structured tables.",
-    tip: "Suggested questions appear at the top of the chat. The agent cites specific lot numbers, dates, and amounts.",
+    title: "Run & review",
+    tab: "Executions tab",
+    color: "bg-green-600",
+    desc: "Run the workflow; it reconciles the documents and halts at the approval gate. Executions shows the scorecard, severity-tagged findings with $ impact, and the evidence behind each — then approve to create the actions.",
+    tip: "Every run is auto-saved losslessly and reopens with full detail for audit.",
   },
   {
     step: "5",
-    title: "Add New Subject Areas",
-    tab: "Home → New Subject Area",
-    color: "bg-gray-700",
-    desc: "Return to the Subject Area selector and click + New Subject Area to run the setup wizard for Compliance, Procurement, HR, or any custom domain.",
-    tip: "The wizard uses AI to suggest classification labels and extraction schemas for your domain.",
+    title: "Ask Copilot",
+    tab: "Copilot tab",
+    color: "bg-sky-600",
+    desc: "Ask natural-language questions across the project's documents — e.g. 'Where are we billed above the contracted price?' Answers are grounded, with per-fact source links.",
+    tip: "Copilot answers only from this project's indexed documents and cites the source of every claim.",
   },
 ];
 
@@ -721,8 +821,11 @@ const CONNECTOR_STATUS_STYLE: Record<string, { badge: string; label: string }> =
   partner:   { badge: "bg-purple-100 text-purple-700",label: "Partner" },
 };
 
-// ── Subject Areas Panel (standalone tab) ────────────────────────────────────
-function SubjectAreasPanel({
+// ── Projects Panel (standalone tab) ─────────────────────────────────────────
+// A "Project" is a use case (the top-level container, provisioned from a
+// blueprint). Each has its own document pipeline, ontology, and AI agent, and
+// holds one or more Cases (the sub-level, picked inside the workspace).
+function ProjectsPanel({
   domains,
   domainsLoading,
   onOpenDomain,
@@ -731,15 +834,35 @@ function SubjectAreasPanel({
   domainsLoading: boolean;
   onOpenDomain: (d: DomainInfo) => void;
 }) {
+  const [showWizard, setShowWizard] = useState(false);
   return (
     <div className="flex-1 bg-gray-50 p-6 overflow-auto">
+      {showWizard && (
+        <NewProjectWizard
+          onClose={() => setShowWizard(false)}
+          onCreated={(useCaseId, name) => {
+            setShowWizard(false);
+            onOpenDomain({ domain_id: useCaseId, name, status: "active" });
+          }}
+        />
+      )}
       <div className="max-w-6xl mx-auto">
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-gray-900">Subject Areas</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Select a subject area to open its workspace, or configure a new one.
-            Each subject area has its own document pipeline, ontology, and AI agent.
-          </p>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Projects</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              A project is a use case — open one to work in it, or create a new one
+              from a blueprint. Each project has its own document pipeline, ontology,
+              and AI agent.
+            </p>
+          </div>
+          {!domainsLoading && domains.length > 0 && (
+            <button
+              onClick={() => setShowWizard(true)}
+              className="flex-shrink-0 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5">
+              <span className="text-base leading-none">+</span> New Project
+            </button>
+          )}
         </div>
 
         {domainsLoading ? (
@@ -747,6 +870,22 @@ function SubjectAreasPanel({
             {[1, 2, 3].map(i => (
               <div key={i} className="h-48 bg-white rounded-xl border-2 border-gray-100 animate-pulse" />
             ))}
+          </div>
+        ) : domains.length === 0 ? (
+          <div className="bg-white rounded-xl border-2 border-dashed border-gray-200 py-16 px-6 flex flex-col items-center text-center">
+            <div className="w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mb-4">
+              <span className="text-3xl">📂</span>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 mb-1.5">Create your first project</h3>
+            <p className="text-sm text-gray-500 max-w-md mb-5">
+              Start from a blueprint — Supplier Performance, AP 3-Way Match, or a blank use case.
+              It provisions the schema, document types, skills, and a starter workflow for you.
+            </p>
+            <button
+              onClick={() => setShowWizard(true)}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-lg transition-colors flex items-center gap-1.5">
+              <span className="text-base leading-none">+</span> New Project from a blueprint
+            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
@@ -774,7 +913,7 @@ function SubjectAreasPanel({
                     {d.name}
                   </h3>
                   <p className="text-xs text-gray-500 leading-relaxed line-clamp-3">
-                    {d.description || "Document Intelligence subject area"}
+                    {d.description || "Document Intelligence project"}
                   </p>
                   <div className="mt-4 flex items-center justify-between">
                     <span className="text-[10px] text-gray-400">
@@ -782,7 +921,7 @@ function SubjectAreasPanel({
                     </span>
                     {d.status !== "configuring" ? (
                       <span className="text-xs font-semibold text-blue-600 group-hover:text-blue-800 flex items-center gap-1">
-                        Open workspace <span className="group-hover:translate-x-1 transition-transform inline-block">→</span>
+                        Open project <span className="group-hover:translate-x-1 transition-transform inline-block">→</span>
                       </span>
                     ) : (
                       <span className="text-[10px] text-yellow-600 font-medium">Setting up…</span>
@@ -792,28 +931,28 @@ function SubjectAreasPanel({
               );
             })}
 
-            {/* Add New Subject Area */}
-            <Link
-              href="/setup"
+            {/* New Project — provision a use case from a blueprint (P3) */}
+            <button
+              onClick={() => setShowWizard(true)}
               className="group text-left bg-white rounded-xl border-2 border-dashed border-gray-200 p-6 hover:border-blue-400 hover:shadow-xl hover:-translate-y-1 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 flex flex-col items-center justify-center min-h-[180px]"
             >
               <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-3 group-hover:bg-blue-100 transition-colors">
                 <span className="text-2xl font-bold text-blue-500">+</span>
               </div>
               <h3 className="text-sm font-bold text-gray-700 group-hover:text-blue-700 mb-1.5 text-center">
-                New Subject Area
+                New Project
               </h3>
               <p className="text-xs text-gray-400 text-center leading-relaxed">
-                Compliance, Procurement, HR, Finance, or any custom domain
+                Supplier Performance, AP 3-Way Match, or a blank use case — from a blueprint
               </p>
-            </Link>
+            </button>
           </div>
         )}
 
         {/* Platform info strip */}
         <div className="mt-8 bg-white rounded-xl border border-gray-200 px-5 py-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-gray-500">
           <span className="font-semibold text-gray-700 self-center">HOW IT WORKS</span>
-          {["Upload documents", "AI parses & classifies", "Fields extracted", "Ontology built", "Vector index created", "AI Agent answers questions"].map((s, i) => (
+          {["Add documents", "AI parses & classifies", "Fields extracted", "Assemble a workflow", "Reconcile & score", "Findings & actions"].map((s, i) => (
             <span key={s} className="flex items-center gap-1.5">
               <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-700 font-bold text-[10px] flex items-center justify-center flex-shrink-0">{i + 1}</span>
               {s}
@@ -843,11 +982,12 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
                 Multi-Domain Document Intelligence Platform
               </h1>
               <p className="text-sm text-gray-500 max-w-2xl">
-                Transforms unstructured documents into a governed semantic knowledge layer —
-                combining Document AI, Ontology, Vector Search, and Databricks AI Agents (FMAPIs) on the Databricks Lakehouse.
+                Stand up a document use case from a blueprint, then let reusable skills and a
+                deterministic workflow engine reconcile the documents — cited findings, a performance
+                scorecard, and actions — on Document AI, Vector Search, and the Databricks Lakehouse.
               </p>
               <div className="flex flex-wrap gap-2 mt-3">
-                {["Unity Catalog", "Delta Lake", "AI Functions", "Vector Search", "Databricks AI Agents", "Auto Loader"].map(t => (
+                {["Blueprints", "Reusable Skills", "Workflow Engine", "Vector Search", "Unity Catalog", "Lakebase"].map(t => (
                   <span key={t} className="text-[10px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{t}</span>
                 ))}
               </div>
@@ -855,8 +995,8 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
             <div className="hidden lg:flex flex-col items-end gap-3 flex-shrink-0">
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { v: "5",   l: "Pipeline Stages" },
-                  { v: "3",   l: "App Modules" },
+                  { v: "26",  l: "Reusable Skills" },
+                  { v: "3",   l: "Blueprints" },
                   { v: "12+", l: "Connectors" },
                 ].map(({ v, l }) => (
                   <div key={l} className="text-center bg-gray-50 rounded-lg px-4 py-3">
@@ -869,7 +1009,7 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
                 onClick={onGoToAreas}
                 className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"
               >
-                📂 Go to Subject Areas →
+                📂 Go to Projects →
               </button>
             </div>
           </div>
@@ -877,9 +1017,9 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
           {/* Mental model */}
           <div className="grid grid-cols-3 gap-4">
             {[
-              { q: "What happened?",     a: "Documents", icon: "📄", color: "border-blue-200 bg-blue-50",    tc: "text-blue-700" },
-              { q: "What does it mean?", a: "Ontology",  icon: "🕸", color: "border-amber-200 bg-amber-50",  tc: "text-amber-700" },
-              { q: "What should we do?", a: "AI Agent",  icon: "🤖", color: "border-purple-200 bg-purple-50", tc: "text-purple-700" },
+              { q: "What happened?",     a: "Documents & Ontology", icon: "📄", color: "border-blue-200 bg-blue-50",    tc: "text-blue-700" },
+              { q: "What's wrong?",      a: "Findings & Scorecard", icon: "🔎", color: "border-amber-200 bg-amber-50",  tc: "text-amber-700" },
+              { q: "What should we do?", a: "Workflows & Actions",  icon: "✅", color: "border-emerald-200 bg-emerald-50", tc: "text-emerald-700" },
             ].map(({ q, a, icon, color, tc }) => (
               <div key={q} className={`rounded-lg border p-4 ${color}`}>
                 <p className="text-xl mb-1">{icon}</p>
@@ -969,7 +1109,7 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
                 scheduleColor: "bg-blue-100 text-blue-700",
                 icon: "⚙",
                 iconBg: "bg-blue-50 text-blue-600",
-                when: "Runs once per new subject area. Triggered automatically by clicking Provision in the setup wizard (Step 6). Creates the Unity Catalog schema, document Volume, and Delta tables for the domain.",
+                when: "Runs once per new project. Triggered automatically by clicking Provision in the setup wizard (Step 6). Creates the Unity Catalog schema, document Volume, and Delta tables for the domain.",
                 tasks: ["Bootstrap platform registry", "Create domain UC schema", "Create raw/ontology/vectors/agents schemas", "Create UC Volume for documents", "Seed domain_configs table"],
                 note: "Run only once per domain. Re-running is safe.",
               },
@@ -1018,13 +1158,13 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
           {/* New domain / connector guidance */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-              <p className="text-xs font-semibold text-blue-800 mb-2">Adding a New Subject Area</p>
+              <p className="text-xs font-semibold text-blue-800 mb-2">Adding a New Project</p>
               <ol className="space-y-1 text-xs text-blue-700">
-                {["Go to Home → Subject Areas → + New Subject Area.",
-                  "Complete the 7-step wizard: name, doc types (with ai_classify descriptions), extraction schema, ontology entities, system prompt, provision.",
-                  "The wizard triggers the Setup New Domain job automatically at Step 6.",
-                  "Once the job completes, click Activate — the new workspace appears in the Subject Areas grid.",
-                  "Upload documents and click Run Pipeline Now to process them."
+                {["Go to Home → Projects → + New Project.",
+                  "Pick a blueprint: Supplier Performance, AP 3-Way Match, or Blank (build-your-own).",
+                  "One call provisions the UC schema + document volume, registers the doc types / extraction schemas / skills, and seeds a starter workflow.",
+                  "The new Project opens straight away — it's already in the Projects grid, active.",
+                  "Upload documents (or seed a corpus), then run its workflow from the Workflows tab."
                 ].map((s, i) => (
                   <li key={i} className="flex gap-1.5"><span className="font-bold flex-shrink-0">{i + 1}.</span>{s}</li>
                 ))}
@@ -1276,7 +1416,7 @@ function AppOverview({ onGoToAreas, liveModelConfig }: {
             </div>
             <div>
               <p className="font-semibold text-gray-800 mb-1">Multi-Domain by Design</p>
-              <p>The same pipeline that processes supply chain documents can be configured for Compliance, HR, Procurement, or any domain. Each Subject Area gets its own UC schemas, AI prompts, and agent tools.</p>
+              <p>The same pipeline that processes supply chain documents can be configured for Compliance, HR, Procurement, or any domain. Each Project gets its own UC schemas, AI prompts, and agent tools.</p>
             </div>
           </div>
         </div>

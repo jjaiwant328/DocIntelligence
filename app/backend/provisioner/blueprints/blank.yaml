@@ -1,0 +1,35 @@
+id: blank
+name: Blank use case
+description: >
+  An empty use case. Provisions the schema, volume, and pipeline so you can add
+  your own document types, extraction schemas, skills, and workflow in the app —
+  the build-it-on-the-fly starting point for a citizen developer.
+
+classification_labels:
+  document: "A generic document — replace with your own document types."
+
+extraction_schemas:
+  document:
+    schema:
+      title: {type: string, description: "Document title or heading."}
+      date:  {type: string, description: "A primary date on the document."}
+    instructions: "Extract the most salient fields. Replace with your own schema."
+
+entity_types: [Document]
+
+agent_system_prompt: >
+  You answer questions strictly from the documents in this use case. Cite the
+  document behind every claim.
+
+suggested_questions:
+  - "What documents are in this use case?"
+
+enabled_skills:
+  - classify_document
+  - extract_entities
+  - search_documents
+  - generate_executive_summary
+
+# No starter workflow — the citizen developer assembles one in the Workflows tab.
+starter_workflow: null
+reconciliation: null

@@ -2,6 +2,9 @@
 id: compliance_audit
 version: "1.0"
 approval_before: create_action
+# Declared run-time inputs — collected in a form before the run, referenced as $param.*.
+inputs:
+  - {name: evidence_depth, type: number, label: "Evidence passages per requirement", default: 6, required: false}
 steps:
   - id: create_audit
     skill: create_work_object
@@ -11,7 +14,7 @@ steps:
     inputs_map: {domain: $input.domain, project: $input.project, candidate_requirements: $domain.requirements, context: $input.context}
   - id: collect_evidence
     skill: find_supporting_evidence
-    inputs_map: {query: $input.project, schema_vec: $input.schema_vec, k: 6}
+    inputs_map: {query: $input.project, schema_vec: $input.schema_vec, k: $param.evidence_depth}
   - id: evaluate
     skill: assess_requirement
     inputs_map: {requirements: $steps.identify_requirements.requirements, evidence: $steps.collect_evidence.evidence}

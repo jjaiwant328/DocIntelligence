@@ -35,6 +35,23 @@ SCH_VEC   = os.getenv("DOCINTEL_SCHEMA_VEC", "vectors")
 WH_ID     = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
 AGENT_MODEL = os.getenv("DOCINTEL_AGENT_MODEL", "databricks-claude-sonnet-4-5")
 
+# ── Cached WorkspaceClient ─────────────────────────────────────────────────────
+# Instantiating WorkspaceClient() re-runs auth/credential negotiation every time.
+# A single complex route (e.g. agent-query) fires several SQL statements, so cache
+# one process-wide client and reuse it everywhere.
+_ws_client: Optional[WorkspaceClient] = None
+_ws_lock = threading.Lock()
+
+
+def _ws() -> WorkspaceClient:
+    """Return the process-wide cached WorkspaceClient (auth negotiated once)."""
+    global _ws_client
+    if _ws_client is None:
+        with _ws_lock:
+            if _ws_client is None:
+                _ws_client = WorkspaceClient()
+    return _ws_client
+
 # Ordered fallback list tried when the primary model endpoint is unavailable
 _MODEL_FALLBACKS = [
     AGENT_MODEL,
@@ -53,7 +70,7 @@ def _resolve_model() -> str:
     if _available_models_cache:
         return _available_models_cache[0]
     try:
-        w = WorkspaceClient()
+        w = _ws()
         ready = {ep.name for ep in w.serving_endpoints.list() if ep.state and str(ep.state.ready) in ("READY", "EndpointStateReady.READY")}
         for m in dict.fromkeys(_MODEL_FALLBACKS):  # deduplicated, order preserved
             if m in ready:
@@ -106,7 +123,7 @@ def _get_domain_schemas(domain_id: str) -> dict:
             return _domain_cache[domain_id]
 
     def _run_query(stmt: str):
-        w = WorkspaceClient()
+        w = _ws()
         resp = w.statement_execution.execute_statement(
             warehouse_id=WH_ID,
             statement=stmt,
@@ -120,17 +137,19 @@ def _get_domain_schemas(domain_id: str) -> dict:
 
     cfg = None
 
-    # Attempt 1: full select including parse_instructions + volume_path
+    # Select the columns that actually exist in domain_configs — including
+    # analytics_config (so the pipeline-job lookup can find a registered job) and
+    # volume_docs (so we can derive the document volume, since there is no
+    # volume_path column). The nested fallback covers older tables missing those.
     try:
         cfg = _run_query(f"""
             SELECT schema_raw, schema_ont, schema_vec, schema_agt,
-                   classification_labels, extraction_schemas,
-                   parse_instructions, volume_path, agent_system_prompt
+                   classification_labels, extraction_schemas, agent_system_prompt,
+                   volume_docs, analytics_config
             FROM {CATALOG}.platform.domain_configs
             WHERE domain_id = '{domain_id}' LIMIT 1
         """)
     except Exception as e1:
-        # Attempt 2: without new columns (may not exist yet)
         try:
             cfg = _run_query(f"""
                 SELECT schema_raw, schema_ont, schema_vec, schema_agt,
@@ -142,15 +161,21 @@ def _get_domain_schemas(domain_id: str) -> dict:
             print(f"[domain_config] lookup failed for '{domain_id}': {e1}; retry: {e2}")
 
     if cfg:
+        schema_raw  = cfg.get("schema_raw") or "raw"
+        volume_docs = cfg.get("volume_docs") or "documents"
         result = {
-            "schema_raw":            cfg.get("schema_raw")  or "raw",
+            "schema_raw":            schema_raw,
             "schema_ont":            cfg.get("schema_ont")  or "ontology",
             "schema_vec":            cfg.get("schema_vec")  or "vectors",
             "schema_agt":            cfg.get("schema_agt")  or "agents",
             "classification_labels": cfg.get("classification_labels"),
             "extraction_schemas":    cfg.get("extraction_schemas"),
-            "parse_instructions":    cfg.get("parse_instructions"),
-            "volume_path":           cfg.get("volume_path"),
+            "parse_instructions":    None,   # no such column; parse hints load elsewhere
+            # domain_configs has no volume_path column — derive the document volume
+            # from the schema + volume name. This is what enables the Process UI.
+            "volume_path":           f"/Volumes/{CATALOG}/{schema_raw}/{volume_docs}/",
+            "volume_docs":           volume_docs,
+            "analytics_config":      cfg.get("analytics_config"),
             "agent_system_prompt":   cfg.get("agent_system_prompt"),
         }
         with _domain_cache_lock:
@@ -179,6 +204,11 @@ class LogActionRequest(BaseModel):
     priority: str = "MEDIUM"  # LOW | MEDIUM | HIGH | CRITICAL
     incident_ref: str = "RCL-2024-0012"
     logged_by: str = "app_user"
+
+class ActionStatusRequest(BaseModel):
+    status: str                            # ASSIGNED | ESCALATED | CLOSED
+    logged_by: Optional[str] = None        # set when assigning
+    domain_id: str = "supply_chain"
 
 # ── Robust JSON parser (handles common LLM output quirks) ─────────────────────
 
@@ -273,7 +303,7 @@ def _robust_json_loads(raw: str) -> dict:
 def run_sql(query: str, timeout_secs: int = 50) -> list:
     """Execute SQL on the configured warehouse and return rows as list of dicts."""
     try:
-        w = WorkspaceClient()
+        w = _ws()
         resp = w.statement_execution.execute_statement(
             warehouse_id=WH_ID,
             statement=query,
@@ -339,11 +369,18 @@ def _vs_search(query: str, schema_vec: str, k: int = 6, doc_type_filter: str = N
         where = ""
         if doc_type_filter:
             where = f"WHERE doc_type = '{_sql_lit(doc_type_filter, 200)}'"
+        # ai_similarity() is non-deterministic and Databricks rejects it directly in
+        # ORDER BY (INVALID_NON_DETERMINISTIC_EXPRESSIONS). Compute the score as a
+        # derived column in a subquery, then order by that column.
         rows = run_sql(f"""
             SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve
-            FROM {catalog}.{schema}.document_chunks
-            {where}
-            ORDER BY ai_similarity(chunk_to_retrieve, '{lit}') DESC
+            FROM (
+                SELECT chunk_id, doc_id, doc_type, chunk_to_retrieve,
+                       ai_similarity(chunk_to_retrieve, '{lit}') AS _score
+                FROM {catalog}.{schema}.document_chunks
+                {where}
+            ) t
+            ORDER BY _score DESC
             LIMIT {k}
         """, timeout_secs=30) or []
         return [
@@ -1136,6 +1173,25 @@ def _resolve_pipeline_job(domain_id: str, domain_cfg: dict) -> tuple[int, str]:
     )
 
 
+def _ensure_pipeline_job(domain_id: str, domain_cfg: dict) -> tuple[int, str]:
+    """Return (job_id, job_name) for a domain, creating the job on demand when the
+    domain has none yet. Blueprint-provisioned use cases (supplier_performance,
+    ap_three_way_match, …) get schemas + a volume but no pipeline job unless
+    provisioned with create_pipeline_job=true; this lazily stands one up (built
+    for THIS domain's schema/volume, since each job's parse/extract tasks are
+    baked to a specific schema), registers its id, and grants the app SP — so the
+    first import/process for a new use case wires its pipeline automatically."""
+    try:
+        return _resolve_pipeline_job(domain_id, domain_cfg)
+    except HTTPException:
+        from provisioner.pipeline_job import provision_pipeline_job
+        w = WorkspaceClient()
+        job_id = provision_pipeline_job(
+            w=w, run_sql=lambda q: run_sql(q, timeout_secs=45),
+            domain_id=domain_id, cfg=domain_cfg, catalog=CATALOG)
+        return int(job_id), f"DocIntelligence — {domain_id.replace('_', ' ').title()} Pipeline"
+
+
 @router.post("/trigger-pipeline")
 async def trigger_pipeline(
     domain_id:      str  = "supply_chain",
@@ -1219,6 +1275,88 @@ async def trigger_pipeline(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── External document sources (via the MCP sources server) ───────────────────
+class SourceImportRequest(BaseModel):
+    source: str = "gdrive"
+    doc_refs: List[str]
+    domain_id: str = "compliance_due_diligence"
+    project_id: str = ""
+    trigger_pipeline: bool = True
+
+
+@router.get("/sources")
+async def list_document_sources():
+    """List external document sources (Google Drive…) the MCP server can read,
+    with each source's mode (live/synthetic) and connection status."""
+    import mcp_sources
+    if not mcp_sources.configured():
+        return {"configured": False, "sources": []}
+    try:
+        return {"configured": True, "sources": await mcp_sources.list_sources()}
+    except Exception as e:
+        return {"configured": True, "sources": [], "error": str(e)}
+
+
+@router.get("/sources/{source}/documents")
+async def list_source_documents(source: str, folder: str = "", query: str = ""):
+    """Browse documents available in a source (proxied to the MCP server)."""
+    import mcp_sources
+    try:
+        return await mcp_sources.list_documents(source, folder, query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"sources server error: {e}")
+
+
+@router.get("/sources/{source}/auth-url")
+async def source_auth_url(source: str):
+    """The URL the user visits to authorize a live source connection (OAuth)."""
+    import mcp_sources
+    return {"auth_url": mcp_sources.auth_url(source)}
+
+
+@router.post("/sources/import")
+async def import_from_source(req: SourceImportRequest):
+    """Fetch selected documents from a source via MCP, land them in the domain's
+    UC Volume, and (optionally) trigger the existing parse/skill pipeline."""
+    import base64
+    import io
+    import mcp_sources
+    w = WorkspaceClient()
+    schemas = _get_domain_schemas(req.domain_id)
+    volume_path = (schemas.get("volume_path") or "").rstrip("/")
+    if not volume_path:
+        raise HTTPException(status_code=400, detail=f"no volume path for domain {req.domain_id}")
+
+    landed, errors = [], []
+    for ref in req.doc_refs:
+        try:
+            doc = await mcp_sources.fetch_document(req.source, ref)
+            content = base64.b64decode(doc.get("content_b64", ""))
+            filename = doc.get("filename") or doc.get("name") or ref.split("/")[-1]
+            w.files.upload(file_path=f"{volume_path}/{filename}",
+                           contents=io.BytesIO(content), overwrite=True)
+            landed.append(filename)
+        except Exception as e:
+            errors.append({"doc_ref": ref, "error": str(e)})
+
+    result: dict = {"landed": landed, "count": len(landed),
+                    "volume_path": volume_path + "/", "errors": errors}
+
+    if req.trigger_pipeline and landed:
+        try:
+            job_id, job_name = _ensure_pipeline_job(req.domain_id, schemas)
+            run = w.jobs.run_now(job_id=job_id, job_parameters={
+                "domain_id": req.domain_id, "volume_path": volume_path + "/",
+                "mode": "batch", "batch_size": "999", "doc_types": "",
+                "skip_no_schema": "false", "schema_mode": "hybrid",
+            })
+            result["pipeline_run_id"] = run.run_id
+            result["job_name"] = job_name
+        except Exception as e:
+            result["pipeline_error"] = str(e)
+    return result
 
 
 # Human-friendly labels for each pipeline task key
@@ -1882,48 +2020,61 @@ async def document_library(domain_id: str = "supply_chain"):
     _d = _get_domain_schemas(domain_id)
     _raw = _d["schema_raw"]; _ont = _d["schema_ont"]
     try:
+        # Single query: the top-100 docs plus their extracted-field map and entity
+        # count, joined in SQL. The field map is aggregated with map_from_entries
+        # (deduping field_name via the inner GROUP BY so duplicate keys can't clash)
+        # and returned as a JSON object string, which we parse below. This replaces
+        # three sequential warehouse round-trips with one.
         docs = run_sql(f"""
-            SELECT
-                doc_id,
-                filename,
-                COALESCE(doc_type, 'unknown') AS doc_type,
-                CAST(processed_ts AS STRING) AS processed_ts,
-                LENGTH(raw_text)              AS char_count,
-                ROUND(LENGTH(raw_text) / 5.0) AS est_word_count,
-                LEFT(raw_text, 500)           AS text_preview
-            FROM {CATALOG}.{_raw}.parsed_documents
-            ORDER BY processed_ts DESC
-            LIMIT 100
-        """)
-
-        if docs:
-            doc_ids_sql = ", ".join(f"'{d['doc_id']}'" for d in docs)
-            fields_raw = run_sql(f"""
-                SELECT doc_id, field_name, field_value
-                FROM {CATALOG}.{_raw}.extracted_fields
-                WHERE doc_id IN ({doc_ids_sql})
-                  AND field_value IS NOT NULL
-                ORDER BY doc_id, field_name
-            """)
-            fields_map: dict = {}
-            for row in fields_raw:
-                fid = row["doc_id"]
-                if fid not in fields_map:
-                    fields_map[fid] = {}
-                fields_map[fid][row["field_name"]] = row["field_value"]
-
-            entity_counts_raw = run_sql(f"""
+            WITH docs AS (
+                SELECT
+                    doc_id,
+                    filename,
+                    COALESCE(doc_type, 'unknown') AS doc_type,
+                    CAST(processed_ts AS STRING) AS processed_ts,
+                    LENGTH(raw_text)              AS char_count,
+                    ROUND(LENGTH(raw_text) / 5.0) AS est_word_count,
+                    LEFT(raw_text, 500)           AS text_preview
+                FROM {CATALOG}.{_raw}.parsed_documents
+                ORDER BY processed_ts DESC
+                LIMIT 100
+            ),
+            fields AS (
+                SELECT ef.doc_id,
+                       map_from_entries(collect_list(struct(ef.field_name AS key,
+                                                            ef.field_value AS value))) AS field_map
+                FROM (
+                    SELECT doc_id, field_name, MAX(field_value) AS field_value
+                    FROM {CATALOG}.{_raw}.extracted_fields
+                    WHERE field_value IS NOT NULL
+                      AND doc_id IN (SELECT doc_id FROM docs)
+                    GROUP BY doc_id, field_name
+                ) ef
+                GROUP BY ef.doc_id
+            ),
+            ent AS (
                 SELECT source AS doc_id, COUNT(*) AS entity_count
                 FROM {CATALOG}.{_ont}.entities
-                WHERE source IN ({doc_ids_sql})
+                WHERE source IN (SELECT doc_id FROM docs)
                 GROUP BY source
-            """)
-            entity_count_map = {r["doc_id"]: r["entity_count"] for r in (entity_counts_raw or [])}
+            )
+            SELECT d.doc_id, d.filename, d.doc_type, d.processed_ts,
+                   d.char_count, d.est_word_count, d.text_preview,
+                   TO_JSON(f.field_map)          AS extracted_fields_json,
+                   COALESCE(ent.entity_count, 0) AS entity_count
+            FROM docs d
+            LEFT JOIN fields f ON f.doc_id = d.doc_id
+            LEFT JOIN ent   ON ent.doc_id = d.doc_id
+            ORDER BY d.processed_ts DESC
+        """)
 
-            for d in docs:
-                d["extracted_fields"] = fields_map.get(d["doc_id"], {})
-                d["entity_count"]     = entity_count_map.get(d["doc_id"], 0)
-                d["doc_type_label"]   = DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"].replace("_", " ").title())
+        for d in (docs or []):
+            fj = d.pop("extracted_fields_json", None)
+            try:
+                d["extracted_fields"] = json.loads(fj) if fj else {}
+            except Exception:
+                d["extracted_fields"] = {}
+            d["doc_type_label"] = DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"].replace("_", " ").title())
 
         return {"documents": docs or [], "total": len(docs or [])}
 
@@ -2167,6 +2318,29 @@ async def get_action_log(incident_ref: str = None, limit: int = 50, domain_id: s
     return {"incident_ref": incident_ref, "actions": rows or [], "total": len(rows or [])}
 
 
+# Workflow-created actions (action_log) lifecycle: DRAFT → ASSIGNED/ESCALATED → CLOSED.
+_ACTION_LOG_STATUSES = {"ASSIGNED", "ESCALATED", "CLOSED"}
+
+@router.patch("/action-log/{action_id}")
+async def update_action_log_status(action_id: str, req: ActionStatusRequest):
+    """Transition a workflow-created action to a new status so it can be acted
+    upon from the Executions → Actions tab (assign / escalate / resolve)."""
+    new_status = req.status.upper()
+    if new_status not in _ACTION_LOG_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"status must be one of {sorted(_ACTION_LOG_STATUSES)}")
+    _agt_schema = _get_domain_schemas(req.domain_id)["schema_agt"]
+    _tbl = f"{CATALOG}.{_agt_schema}.action_log"
+    _ensure_action_log_table(_tbl)
+    aid = action_id.replace("'", "''")
+    sets = [f"status = '{new_status}'"]
+    if new_status == "ASSIGNED" and req.logged_by:
+        sets.append(f"logged_by = '{req.logged_by.replace(chr(39), chr(39) * 2)}'")
+    run_sql(f"UPDATE {_tbl} SET {', '.join(sets)} WHERE action_id = '{aid}'",
+            timeout_secs=30)
+    return {"action_id": action_id, "status": new_status}
+
+
 @router.get("/action-report")
 async def action_report(incident_ref: str = "RCL-2024-0012", domain_id: str = "supply_chain"):
     """
@@ -2383,10 +2557,11 @@ class CopilotQueryRequest(BaseModel):
     domain_id: str
     query: str
     prompt_override: Optional[str] = None
+    project_id: Optional[str] = None   # scope the answer to one project's documents
 
 
 @router.get("/copilot-prompt")
-async def get_copilot_prompt(domain_id: str = "compliance"):
+async def get_copilot_prompt(domain_id: str = "compliance_due_diligence"):
     """Return the saved guiding prompt for a domain (or null if not yet set)."""
     try:
         rows = run_sql(f"""
@@ -3659,13 +3834,34 @@ async def copilot_query(req: CopilotQueryRequest):
             "'[no source]'. Do not put filenames anywhere except in these brackets."
         )
 
+        # If a project is selected, restrict retrieval to that project's tagged docs.
+        _project_doc_set = None
+        if req.project_id:
+            try:
+                from db import operational as _opstore
+                from db.lakebase import LakebaseUnavailable as _LBU
+                try:
+                    _ids = _opstore.doc_ids_for_project(domain_id=req.domain_id,
+                                                        project_id=str(req.project_id))
+                    _project_doc_set = {d for d in _ids if d}
+                except _LBU:
+                    pid = str(req.project_id).replace("'", "''")
+                    _rows = run_sql(f"""
+                        SELECT doc_id FROM {CATALOG}.platform.document_project_tags
+                        WHERE domain_id = '{req.domain_id}' AND project_id = '{pid}'
+                    """, timeout_secs=30) or []
+                    _project_doc_set = {r.get("doc_id") for r in _rows if r.get("doc_id")}
+            except Exception as _pe:
+                print(f"[copilot] project doc filter failed: {_pe}")
+
         # Retrieve relevant doc context via ai_similarity ranking (best-effort)
         context_text = ""
         cited_docs: list = []
         try:
             _domain = _get_domain_schemas(req.domain_id)
             _vec = _domain["schema_vec"]
-            data = _vs_search(req.query, _vec, k=6)
+            # over-fetch when filtering to a project so enough survive the filter
+            data = _vs_search(req.query, _vec, k=20 if _project_doc_set else 6)
             if not data:
                 raise RuntimeError("no ai_similarity results")
             chunks = []
@@ -3673,9 +3869,13 @@ async def copilot_query(req: CopilotQueryRequest):
                 doc_id = row[1] if len(row) > 1 else "unknown"
                 doc_type = row[2] if len(row) > 2 else ""
                 chunk = row[3] if len(row) > 3 else ""
+                if _project_doc_set is not None and doc_id not in _project_doc_set:
+                    continue
                 if doc_id not in cited_docs:
                     cited_docs.append(doc_id)
                 chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
+                if len(cited_docs) >= 6:
+                    break
             context_text = "\n\n---\n\n".join(chunks)
         except Exception as vs_err:
             # Fall back: pull recent parsed doc text snippets from SQL
@@ -4973,7 +5173,7 @@ def _ensure_copilot_prompts_table():
 
 
 @router.get("/copilot-prompts")
-async def list_copilot_prompts(domain_id: str = "compliance"):
+async def list_copilot_prompts(domain_id: str = "compliance_due_diligence"):
     """Return all named prompts for a domain, ordered newest first."""
     _ensure_copilot_prompts_table()
     try:

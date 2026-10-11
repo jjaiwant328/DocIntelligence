@@ -394,13 +394,13 @@ const DEFAULT_PLAYBOOKS: Playbook[] = [
 // Domain-specific category sets
 const CATEGORIES_BY_DOMAIN: Record<string, string[]> = {
   supply_chain: ["All", "Recall", "Supplier", "Carrier", "Investigation", "Financial", "Communication"],
-  compliance:   ["All", "Violation", "Permit", "Inspection", "Training", "Vendor", "Filing"],
+  compliance_due_diligence: ["All", "Violation", "Permit", "Inspection", "Training", "Vendor", "Filing"],
 };
 const DEFAULT_CATEGORIES = ["All", "Action", "Review", "Communication", "Filing", "Investigation"];
 
 function getDomainPlaybooks(domainId: string): Playbook[] {
   if (domainId === "supply_chain") return SC_PLAYBOOKS;
-  if (domainId === "compliance")   return COMPLIANCE_PLAYBOOKS;
+  if (domainId === "compliance_due_diligence") return COMPLIANCE_PLAYBOOKS;
   return DEFAULT_PLAYBOOKS;
 }
 function getDomainCategories(domainId: string): string[] {
@@ -437,45 +437,17 @@ const CAT_DOT: Record<string,string> = {
 
 // ── Top-level navigation definition ──────────────────────────────────────────
 
-function buildTabs(domainId: string) {
-  const categories = getDomainCategories(domainId);
+function buildTabs(_domainId: string) {
+  // Phase 5 (connector-first redesign): Knowledge Graph, Action Center, and
+  // Compliance Map are retired from this shell — their outputs are now surfaced
+  // in the Executions tab and the new Project Workspace. Component code remains
+  // on disk for reference. Overview and Copilot Studio are kept.
   return [
     {
       id: "overview",
       icon: "📊",
       label: "Overview",
       tooltip: "Document processing stats, entity distribution, and key extractions",
-    },
-    {
-      id: "ontology",
-      icon: "🕸",
-      label: "Knowledge Graph",
-      tooltip: "Interactive knowledge graph — entities extracted from documents and their relationships",
-      subs: [
-        { id:"graph",    label:"Graph View" },
-        { id:"entities", label:"Entity List" },
-      ],
-    },
-    {
-      id: "actions",
-      icon: "⚡",
-      label: "Action Center",
-      tooltip: "Log actions, track open items, and generate response reports for this subject area",
-      subs: [
-        ...categories.map(c => ({ id: c.toLowerCase(), label: c })),
-        { id: "reports", label: "Action Reports" },
-      ],
-    },
-    {
-      id: "compliance_map",
-      icon: "🗺",
-      label: "Compliance Map",
-      tooltip: "Jurisdiction × document-type coverage matrix — see which regulations apply where and identify gaps",
-      subs: [
-        { id: "map",    label: "Coverage Matrix" },
-        { id: "digest", label: "Action Digest" },
-        { id: "pulse",  label: "Regulatory Pulse" },
-      ],
     },
     {
       id: "copilot",
@@ -651,7 +623,7 @@ const BRIEFING_QUERIES_BY_DOMAIN: Record<string, string[]> = {
     "What shipments or lots have temperature excursions or quality issues pending resolution?",
     "What contract obligations or SLA violations are at risk in the next 30 days?",
   ],
-  compliance: [
+  compliance_due_diligence: [
     "Summarize all compliance correspondence and identify open action items, owners, and deadlines.",
     "What regulatory risks are currently identified across all documents? Cite sources.",
     "Which stores or jurisdictions have the most pending violations or corrective actions?",
@@ -951,7 +923,7 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
           <div>
             <h2 className="text-base font-semibold text-gray-800">Copilot Studio — Setup &amp; Readiness</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              Define the guiding instructions for this subject area&apos;s AI.
+              Define the guiding instructions for this project&apos;s AI.
             </p>
           </div>
           {!showAddNew && !saving && (
@@ -968,10 +940,10 @@ function CopilotStudio({ domainId, sub, apiBase, onSwitchToSetup, onSwitchSub, o
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-2">
           <p className="text-xs font-bold text-blue-900">ℹ️ How Copilot Studio works</p>
           <ul className="text-xs text-blue-800 space-y-1 pl-3 list-disc">
-            <li>The <strong>active prompt</strong> is the guiding principle for this subject area — it sets the AI&apos;s focus, tone, and reasoning framework.</li>
+            <li>The <strong>active prompt</strong> is the guiding principle for this project — it sets the AI&apos;s focus, tone, and reasoning framework.</li>
             <li>It drives <strong>Intelligence Briefings</strong>, <strong>Ask Copilot</strong> queries, and the <strong>AI Agent</strong> for this domain.</li>
             <li>No model is trained or saved to the catalog. The prompt is sent at query time to the Databricks Foundation Model API (DBRX / Llama 3). Your documents are retrieved via Vector Search and injected as context.</li>
-            <li>You can save <strong>multiple named prompts</strong> and switch the active one at any time. Only <strong>one prompt is active</strong> per subject area.</li>
+            <li>You can save <strong>multiple named prompts</strong> and switch the active one at any time. Only <strong>one prompt is active</strong> per project.</li>
             {promptLibrary.length > 0 && (
               <li className="font-semibold text-blue-900">
                 {promptLibrary.length} prompt{promptLibrary.length > 1 ? "s" : ""} saved for this domain —&nbsp;

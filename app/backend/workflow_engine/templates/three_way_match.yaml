@@ -1,0 +1,29 @@
+id: three_way_match
+version: "1.0"
+name: "AP 3-Way Match (prebuilt)"
+description: >
+  Prebuilt Accounts-Payable workflow. Matches each supplier invoice against its
+  purchase order and goods-receipt note to catch overbilling, duplicate invoices,
+  price/quantity variances, and missing receipts, then places holds before payment.
+approval_before: create_action
+steps:
+  - id: open_review
+    skill: create_work_object
+    inputs_map: {domain: $input.domain, project: $input.project, type: review}
+  - id: reconcile
+    skill: reconcile_documents
+    inputs_map:
+      documents: $docs.items
+      checks:
+        - "price_match: invoice unit_price must equal the PO unit_price; flag overbilling and sum $ impact"
+        - "quantity_match: invoice quantity must not exceed goods_receipt quantity_received; flag over-billed quantity"
+        - "receipt_exists: every invoice's po_number must have a matching goods_receipt; flag invoices with no receipt"
+        - "duplicate_invoice: flag two invoices billing the same po_number + sku + amount"
+      reference_types: [purchase_order, goods_receipt]
+      subject_types: [invoice]
+  - id: summary
+    skill: generate_executive_summary
+    inputs_map: {findings: $steps.reconcile.findings, risk: $steps.reconcile.scorecard.overall}
+  - id: holds
+    skill: create_action
+    inputs_map: {domain: $input.domain, project: $input.project, proposed_actions: $steps.reconcile.findings}

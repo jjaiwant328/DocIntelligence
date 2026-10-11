@@ -62,12 +62,20 @@ def _install_stubs():
 
 
 def _load_module():
+    before = set(sys.modules)
     _install_stubs()
+    added = set(sys.modules) - before  # only the stubs WE just injected
     here = os.path.dirname(os.path.abspath(__file__))
     mod_path = os.path.join(here, "..", "docintel_routes.py")
     spec = importlib.util.spec_from_file_location("docintel_routes", mod_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # docintel_routes has now bound the names it needs (WorkspaceClient,
+    # StatementState, APIRouter, BaseModel). Remove only the stubs we added so
+    # they don't leak into other test modules — e.g. test_provisioner imports
+    # the REAL databricks.sdk.service.jobs, which our fake (no __path__) shadows.
+    for name in added:
+        sys.modules.pop(name, None)
     return mod
 
 
@@ -141,7 +149,10 @@ def test_vs_search_builds_expected_sql_and_shape(monkeypatch=None):
     # per-domain schema resolved, not hardcoded to vectors
     assert "compliance_due_diligence.document_chunks" in q
     assert "ai_similarity(chunk_to_retrieve" in q
-    assert "ORDER BY ai_similarity" in q
+    # ai_similarity() is computed as _score in a subquery (Databricks rejects the
+    # non-deterministic call directly in ORDER BY), then ordered by that alias.
+    assert "AS _score" in q
+    assert "ORDER BY _score" in q
     assert "LIMIT 6" in q
     # drop-in shape: [chunk_id, doc_id, doc_type, chunk_to_retrieve]
     assert rows[0] == ["c1", "d1", "permit", "hello"]

@@ -10,11 +10,13 @@ from tests.test_engine import FakeDispatcher  # noqa: E402
 
 
 def test_compliance_requirements():
-    d = load_domain("compliance")
+    # P4: the use_case_id IS the id (no overlay); compliance's canonical id is
+    # compliance_due_diligence (= project = Lakehouse schema).
+    d = load_domain("compliance_due_diligence")
     assert d.requirements == ["zoning", "alcohol_license",
                               "environmental_permit", "business_license"]
     assert "Municipality" in d.ontology_entities
-    assert d.schema_vec == "compliance_due_diligence"
+    assert d.id == "compliance_due_diligence"
 
 
 def test_supply_chain_requirements():
@@ -30,8 +32,8 @@ def test_same_template_different_domain_no_engine_change():
     fake = FakeDispatcher()
     eng = WorkflowEngine(fake, domain_loader=load_domain)
 
-    eng.run("due_diligence", "compliance",
-            {"domain": "compliance", "project": "Store 1827",
+    eng.run("due_diligence", "compliance_due_diligence",
+            {"domain": "compliance_due_diligence", "project": "Store 1827",
              "schema_vec": "compliance_due_diligence", "approve": True})
     comp_reqs = [c[1] for c in fake.calls
                  if c[0] == "extract_requirements"][0]["candidate_requirements"]
