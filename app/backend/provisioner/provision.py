@@ -103,21 +103,6 @@ def create_schema_and_volumes(run_sql, cfg: dict, catalog: str = CATALOG_DEFAULT
             print(f"[provision] volume {schema}.{vol} not created (ingestion-only): {e}")
 
 
-def seed_starter_workflow(run_sql, blueprint: dict, use_case_id: str,
-                          catalog: str = CATALOG_DEFAULT) -> Optional[str]:
-    sw = blueprint.get("starter_workflow")
-    if not sw:
-        return None
-    from skill_runtime import template_store as tstore
-    steps = loader.resolve_blueprint_refs(sw.get("steps") or [], blueprint)
-    tstore.save_template(
-        run_sql, use_case_id, sw["id"], sw.get("name", sw["id"]),
-        steps=steps, approval_before=sw.get("approval_before"),
-        created_by="provisioner", catalog=catalog,
-    )
-    return sw["id"]
-
-
 def mark_active(run_sql, use_case_id: str, catalog: str = CATALOG_DEFAULT) -> None:
     run_sql(
         f"UPDATE {catalog}.platform.domain_configs SET status='active', "
@@ -165,10 +150,6 @@ def provision(*, blueprint_id: str, use_case_id: str, name: str = "",
                 w=ws_client, run_sql=run_sql, domain_id=use_case_id,
                 cfg=cfg, catalog=catalog)
         _step("create_pipeline_job", _job)
-    seeded = {"id": None}
-    def _seed():
-        seeded["id"] = seed_starter_workflow(run_sql, bp, use_case_id, catalog)
-    _step("seed_starter_workflow", _seed)
     if create_project_row and not dry_run:
         def _proj():
             from db import operational as opstore
@@ -187,7 +168,6 @@ def provision(*, blueprint_id: str, use_case_id: str, name: str = "",
         "use_case_id": use_case_id,
         "name": cfg["name"],
         "blueprint_id": blueprint_id,
-        "starter_workflow": seeded["id"],
         "pipeline_job_id": job["id"],
         "steps": steps,
     }

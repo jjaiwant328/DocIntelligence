@@ -22,17 +22,23 @@
 - Commit messages end with: `Co-authored-by: Isaac <no-reply@databricks.com>`
 - Databricks profile: `jai-az-ws`; workspace `adb-4101016551133680.0.azuredatabricks.net`.
 
-## Status (2026-09-22)
+## Status (2026-10-11)
 
 - ✅ **T1** cleanup (worktrees removed, refs salvaged, baseline captured)
 - ✅ **T2** `template` + `template_cdd` schemas provisioned
 - ✅ **T3** one SDP `docintel_spine` (bronze parse → silver classify/chunk → gold extract), verified
 - ✅ **T4** same pipeline runs `compliance_due_diligence` via config only (both domains verified)
-- ✅ **T5** endpoint-free retrieval (batch embed + `vector_cosine_similarity`) — Vector Search dropped
+- ✅ **T5** endpoint-free retrieval (batch embed + `vector_cosine_similarity`) — Vector Search dropped (spec §T5 stale: planned Delta Sync index, shipped endpoint-free)
 - 🔶 **T6** Lakeflow Connect — design/doc done (`pipelines/docintel_spine/ingest/lakeflow_connect_source.md`); **going live needs the source owner's OAuth** (external gate). Pipeline reads any `source_volume_path` in place.
-- ⏳ **T7–T8** strip backend/UI to spine + point app at `template` schema (destructive; confirm keep-agent + which UI)
-- ⏳ **T9** consolidate 3 corpus generators → 1
-- ⏳ **T10** cutover: retire old notebooks/bundle, delete old schema (owner pre-authorized post-parity)
+- ✅ **T7** backend stripped: skills/workflow/action/attorney/escalation removed; agent kept (legacy paths); suite 216 green
+- ✅ **T8** frontend collapsed to Sources · Search & Evidence · Agent (domain-driven); static build clean
+- ✅ **T9** corpus generators consolidated → `notebooks/01_synthetic_corpus.py` + `domains/<domain>/sample_data.py`; offline E2E byte-identical
+- ✅ **T10** cutover: old notebooks 02/03/04/05.ref/07/09.ref + `app/unstructured_workflow/` deleted; bundle trimmed to `docintel_setup_domain`; `app/CLAUDE.md` rewritten
+
+Additions beyond plan (2026-10-11): OpenJev judge (`judge.py`) — search rerank
+on `/api/spine/search` + field-confidence/doc-type validation on
+`/api/spine/evidence?validate=true`. `ai_decide` (SQL-side judge) is Beta-gated
+off in this workspace; gateway route used instead.
 
 Verified counts — supply_chain: 61 docs/13 types, 72 chunks, 96 fields · compliance: 24 docs/7 types, 41 chunks, 227 fields. Endpoint-free search returns relevant hits for both.
 
