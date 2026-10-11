@@ -73,6 +73,26 @@ class SearchRequest(BaseModel):
     question: str
     domain_id: str = "supply_chain"
     k: int = 5
+    rerank: bool = True
+
+
+RERANK_CANDIDATES = int(os.getenv("DOCINTEL_RERANK_CANDIDATES", "10"))
+
+
+def _rerank(question: str, rows: list[dict]) -> list[dict]:
+    """Judge-rerank candidates with OpenJev; fail-open to vector order."""
+    if not rows:
+        return rows
+    try:
+        from judge import JudgeClient
+
+        jc = JudgeClient.from_workspace(w)
+        for r in rows:
+            r["judge_score"] = round(jc.relevance(question, r.get("chunk_to_retrieve", "")), 4)
+        return sorted(rows, key=lambda r: r["judge_score"], reverse=True)
+    except Exception as _e:  # pragma: no cover
+        print(f"⚠️ judge rerank skipped: {_e}")
+        return rows
 
 
 @router.get("/domains")
@@ -82,9 +102,13 @@ def list_spine_domains():
 
 @router.post("/search")
 def search(req: SearchRequest):
-    """Endpoint-free semantic search: embed the query once, cosine over stored chunk vectors."""
+    """Endpoint-free semantic search: embed the query once, cosine over stored chunk vectors.
+
+    Pulls up to RERANK_CANDIDATES vector hits, then reranks with the OpenJev
+    judge (skip with rerank=false) and returns the top k."""
     schema = _schema(req.domain_id)
     k = max(1, min(req.k, 25))
+    cand = max(k, min(2 * k, RERANK_CANDIDATES)) if req.rerank else k
     q = _esc(req.question)
     sql = f"""
         WITH qy AS (SELECT CAST(ai_query('{EMBED_MODEL}', '{q}') AS ARRAY<FLOAT>) AS qv)
@@ -92,9 +116,12 @@ def search(req: SearchRequest):
                round(vector_cosine_similarity(embedding, qy.qv), 4) AS score
         FROM {CATALOG}.{schema}.gold_chunks, qy
         ORDER BY score DESC
-        LIMIT {k}
+        LIMIT {cand}
     """
-    return {"domain_id": req.domain_id, "question": req.question, "results": run_sql(sql)}
+    rows = run_sql(sql)
+    if req.rerank:
+        rows = _rerank(req.question, rows)
+    return {"domain_id": req.domain_id, "question": req.question, "results": rows[:k]}
 
 
 @router.get("/evidence")
