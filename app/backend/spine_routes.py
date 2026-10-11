@@ -125,8 +125,11 @@ def search(req: SearchRequest):
 
 
 @router.get("/evidence")
-def evidence(doc_id: str, domain_id: str = "supply_chain"):
-    """Evidence trail for a document: type + source file, extracted fields, and source chunks."""
+def evidence(doc_id: str, domain_id: str = "supply_chain", validate: bool = False):
+    """Evidence trail for a document: type + source file, extracted fields, and source chunks.
+
+    With validate=true, also runs the OpenJev judge over the document: a
+    per-field correctness probability and a doc-type verification choice."""
     schema = _schema(domain_id)
     did = _esc(doc_id)
     doc = run_sql(
@@ -140,4 +143,24 @@ def evidence(doc_id: str, domain_id: str = "supply_chain"):
     chunks = run_sql(
         f"SELECT chunk_position, chunk_to_retrieve AS source_text FROM {CATALOG}.{schema}.gold_chunks WHERE doc_id = '{did}' ORDER BY chunk_position"
     )
-    return {"document": doc[0], "extracted_fields": fields, "source_chunks": chunks}
+    out = {"document": doc[0], "extracted_fields": fields, "source_chunks": chunks}
+    if validate:
+        out["validation"] = _validate(doc[0], fields, chunks, schema)
+    return out
+
+
+def _validate(doc: dict, fields: list[dict], chunks: list[dict], schema: str) -> dict:
+    """Judge-validate one document's extraction; fail-open with an error field."""
+    try:
+        from judge import JudgeClient
+
+        types = [r["doc_type"] for r in run_sql(
+            f"SELECT DISTINCT doc_type FROM {CATALOG}.{schema}.gold_documents"
+        ) if r.get("doc_type")]
+        doc_text = "\n\n".join(c.get("source_text", "") for c in chunks[:6])
+        return JudgeClient.from_workspace(w).validate_extraction(
+            doc_text, doc.get("doc_type", ""), fields, types
+        )
+    except Exception as _e:  # pragma: no cover
+        print(f"⚠️ judge validation skipped: {_e}")
+        return {"error": str(_e)}

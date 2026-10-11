@@ -13,10 +13,17 @@ interface SearchHit {
   judge_score?: number;
 }
 
+interface Validation {
+  field_confidence?: Record<string, number>;
+  type_check?: { extracted_type: string; judge_choice: string; confidence: number; match: boolean };
+  error?: string;
+}
+
 interface Evidence {
   document: { doc_id: string; doc_type: string; source_file: string };
   extracted_fields: { field_name: string; field_value: string }[];
   source_chunks: { chunk_position: number; source_text: string }[];
+  validation?: Validation;
 }
 
 export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
@@ -27,6 +34,7 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
   const [error, setError] = useState("");
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
 
   const runSearch = async () => {
     if (!question.trim()) return;
@@ -47,17 +55,18 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
     }
   };
 
-  const openEvidence = async (docId: string) => {
-    setEvidenceLoading(true);
+  const openEvidence = async (docId: string, validate = false) => {
+    if (validate) setValidating(true); else setEvidenceLoading(true);
     try {
       const ev = await apiCall<Evidence>(
-        `/api/spine/evidence?doc_id=${encodeURIComponent(docId)}&domain_id=${encodeURIComponent(domain.domain_id)}`
+        `/api/spine/evidence?doc_id=${encodeURIComponent(docId)}&domain_id=${encodeURIComponent(domain.domain_id)}${validate ? "&validate=true" : ""}`
       );
       setEvidence(ev);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setEvidenceLoading(false);
+      setValidating(false);
     }
   };
 
@@ -130,15 +139,62 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
           </h3>
           <p className="text-xs text-gray-400 mb-3 font-mono">{evidence.document.source_file}</p>
 
-          <h4 className="text-sm font-medium text-gray-700 mb-1">Extracted fields</h4>
+          <div className="flex items-center gap-2 mb-1">
+            <h4 className="text-sm font-medium text-gray-700">Extracted fields</h4>
+            {!evidence.validation && (
+              <button
+                onClick={() => openEvidence(evidence.document.doc_id, true)}
+                disabled={validating}
+                className="text-xs px-2 py-0.5 bg-emerald-600 text-white rounded disabled:opacity-50"
+              >
+                {validating ? "Judging…" : "Validate with judge"}
+              </button>
+            )}
+            {evidence.validation?.type_check && (
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded ${
+                  evidence.validation.type_check.match
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                type: {evidence.validation.type_check.extracted_type}
+                {evidence.validation.type_check.match
+                  ? " ✓"
+                  : ` → judge says ${evidence.validation.type_check.judge_choice}`}{" "}
+                ({(evidence.validation.type_check.confidence * 100).toFixed(0)}%)
+              </span>
+            )}
+            {evidence.validation?.error && (
+              <span className="text-xs text-gray-400">judge unavailable</span>
+            )}
+          </div>
           <table className="w-full text-xs mb-4 border border-gray-200">
             <tbody>
-              {evidence.extracted_fields.map((f) => (
-                <tr key={f.field_name} className="border-b border-gray-100">
-                  <td className="px-2 py-1 font-mono text-gray-500 w-1/3">{f.field_name}</td>
-                  <td className="px-2 py-1 text-gray-800">{f.field_value}</td>
-                </tr>
-              ))}
+              {evidence.extracted_fields.map((f) => {
+                const conf = evidence.validation?.field_confidence?.[f.field_name];
+                return (
+                  <tr key={f.field_name} className="border-b border-gray-100">
+                    <td className="px-2 py-1 font-mono text-gray-500 w-1/3">{f.field_name}</td>
+                    <td className="px-2 py-1 text-gray-800">
+                      {f.field_value}
+                      {conf !== undefined && (
+                        <span
+                          className={`ml-2 px-1 py-0.5 rounded ${
+                            conf >= 0.7
+                              ? "bg-emerald-100 text-emerald-700"
+                              : conf >= 0.4
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {(conf * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
