@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
 import type { DomainInfo } from "@/context/DomainContext";
-import ConnectorsPanel from "@/components/ConnectorsPanel";
 
 interface Source {
   source_id:    string;
@@ -206,8 +205,7 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
                 onChange={e => setNewProvider(e.target.value)}
                 className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
-                <option value="gdrive">Google Drive</option>
-                <option value="gdrive_managed">Google Drive (managed — no setup)</option>
+                <option value="gdrive_managed">Google Drive (managed — workspace connector)</option>
                 <option value="sharepoint">SharePoint / OneDrive</option>
                 <option value="s3">AWS S3</option>
                 <option value="gcs">Google Cloud Storage</option>
@@ -376,8 +374,6 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
           Select a project in the toolbar to enable the Crawl action for that project.
         </p>
       )}
-
-      <ConnectorsPanel />
     </div>
   );
 }

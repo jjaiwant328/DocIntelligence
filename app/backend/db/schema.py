@@ -193,21 +193,6 @@ DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_chunks_hnsw ON document_chunks USING hnsw (embedding vector_cosine_ops)",
     "CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON document_chunks USING gin (tsv)",
     "CREATE INDEX IF NOT EXISTS idx_jobs_scope ON index_jobs (domain_id, project_id, status)",
-    # App-managed connector credentials (Task 1). Secrets live in Databricks secret
-    # scopes; only the ref pointer is stored here — client_secret is NEVER a column.
-    """
-    CREATE TABLE IF NOT EXISTS connectors (
-        provider      TEXT        PRIMARY KEY,
-        display_name  TEXT        NOT NULL DEFAULT '',
-        client_id     TEXT        NOT NULL DEFAULT '',
-        redirect_uri  TEXT        NOT NULL DEFAULT '',
-        scopes        JSONB       NOT NULL DEFAULT '[]'::jsonb,
-        secret_ref    TEXT        NOT NULL DEFAULT '',
-        status        TEXT        NOT NULL DEFAULT 'unconfigured',
-        updated_by    TEXT        NOT NULL DEFAULT '',
-        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-    """,
 ]
 
 
