@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
 import { useDomain } from "@/context/DomainContext";
-import type { DomainInfo } from "@/context/DomainContext";
+import type { DomainInfo, ProjectInfo } from "@/context/DomainContext";
 
 interface Source {
   source_id:    string;
@@ -33,7 +33,11 @@ const STATUS_STYLE: Record<string, { badge: string; label: string }> = {
 };
 
 export default function SourcesPage({ domain }: { domain: DomainInfo }) {
-  const { project } = useDomain();
+  const { project, setProject } = useDomain();
+
+  const [projects,        setProjects]        = useState<ProjectInfo[]>([]);
+  const [newProjectName,  setNewProjectName]  = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
 
   const [sources,      setSources]      = useState<Source[]>([]);
   const [loading,      setLoading]      = useState(true);
@@ -62,6 +66,45 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
   }, []);
 
   useEffect(() => { fetchSources(); }, [fetchSources]);
+
+  // Load projects for the active domain (backend auto-creates "Default" when
+  // none exist) and keep the context selection valid.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await apiCall<{ projects: ProjectInfo[] }>(
+          `/api/projects?domain_id=${encodeURIComponent(domain.domain_id)}`
+        );
+        const list = r.projects ?? [];
+        setProjects(list);
+        if (!project || !list.some(p => p.project_id === project.project_id)) {
+          setProject(list[0] ?? null);
+        }
+      } catch (e) {
+        setMsg(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [domain.domain_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function createProject() {
+    const name = newProjectName.trim();
+    if (!name) return;
+    setCreatingProject(true);
+    setMsg(null);
+    try {
+      const p = await apiCall<ProjectInfo>("/api/projects", {
+        method: "POST",
+        body: JSON.stringify({ domain_id: domain.domain_id, name }),
+      });
+      setProjects(prev => [...prev, p]);
+      setProject(p);
+      setNewProjectName("");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingProject(false);
+    }
+  }
 
   async function connect(sourceId: string) {
     setMsg(null);
@@ -178,6 +221,37 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
           <strong>non-sensitive, non-confidential documents</strong>. Do not connect
           drives with personal data, PII, credentials, or regulated records.
         </span>
+      </div>
+
+      {/* Project picker — crawl/index jobs are project-scoped */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <label className="text-[11px] font-semibold text-gray-500">Project</label>
+        <select
+          value={project?.project_id ?? ""}
+          onChange={e => {
+            const p = projects.find(x => x.project_id === e.target.value);
+            setProject(p ?? null);
+          }}
+          className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        >
+          {projects.map(p => (
+            <option key={p.project_id} value={p.project_id}>{p.name ?? p.project_id}</option>
+          ))}
+        </select>
+        <input
+          value={newProjectName}
+          onChange={e => setNewProjectName(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && createProject()}
+          placeholder="New project name"
+          className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        />
+        <button
+          onClick={createProject}
+          disabled={creatingProject || !newProjectName.trim()}
+          className="text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          {creatingProject ? "Creating…" : "+ Create"}
+        </button>
       </div>
 
       {/* Register form */}
@@ -349,7 +423,7 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
                       <input
                         value={managedFolder[src.source_id] ?? ""}
                         onChange={e => setManagedFolder(f => ({ ...f, [src.source_id]: e.target.value }))}
-                        placeholder="Folder ID (optional)"
+                        placeholder="Folder ID (optional — whole Drive if empty)"
                         className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
                       />
                       <button
