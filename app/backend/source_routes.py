@@ -104,7 +104,17 @@ def _strip_credential(row: Optional[dict]) -> Optional[dict]:
 
 @router.get("/sources/{source_id}/auth-url")
 def get_auth_url(source_id: str):
-    """Return the OAuth authorization URL for a source."""
+    """Return the OAuth authorization URL for a source.
+
+    Managed sources (gdrive_managed) authenticate on-behalf-of the caller at
+    crawl time — there is no OAuth URL; return 400 instead of forwarding to
+    the sources MCP server (which only knows the OAuth providers)."""
+    src = opstore.get_source(source_id)
+    if src and src.get("provider") == "gdrive_managed":
+        raise HTTPException(
+            status_code=400,
+            detail="Managed sources need no OAuth — use Connect & Crawl with a Drive folder ID.",
+        )
     return {"url": mcp_sources.auth_url(source_id)}
 
 

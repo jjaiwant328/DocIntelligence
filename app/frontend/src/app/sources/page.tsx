@@ -326,7 +326,7 @@ export default function SourcesPage({ domain }: { domain: DomainInfo }) {
 
                 {/* Action buttons */}
                 <div className="col-span-2 flex flex-wrap gap-1.5 self-center">
-                  {src.status === "disconnected" && (
+                  {src.status === "disconnected" && src.provider !== "gdrive_managed" && (
                     <button
                       onClick={() => connect(src.source_id)}
                       className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"

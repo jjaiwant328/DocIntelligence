@@ -116,12 +116,27 @@ def test_get_sources_returns_empty_list(monkeypatch):
 # ── GET /api/sources/{id}/auth-url ────────────────────────────────────────────
 
 def test_get_auth_url_delegates_to_mcp_sources(monkeypatch):
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"source_id": sid, "provider": "gdrive"})
     monkeypatch.setattr(source_routes.mcp_sources, "auth_url",
                         lambda source: f"https://example.com/auth/{source}")
     client = _make_client()
     resp = client.get("/api/sources/gdrive/auth-url")
     assert resp.status_code == 200
     assert resp.json()["url"] == "https://example.com/auth/gdrive"
+
+
+def test_get_auth_url_rejects_managed_source(monkeypatch):
+    """gdrive_managed authenticates OBO at crawl time — no OAuth URL exists."""
+    monkeypatch.setattr(source_routes.opstore, "get_source",
+                        lambda sid: {"source_id": sid, "provider": "gdrive_managed"})
+    def _boom(source):
+        raise AssertionError("must not forward managed sources to the MCP server")
+    monkeypatch.setattr(source_routes.mcp_sources, "auth_url", _boom)
+    client = _make_client()
+    resp = client.get("/api/sources/gdrive_managed/auth-url")
+    assert resp.status_code == 400
+    assert "Connect & Crawl" in resp.json()["detail"]
 
 
 # ── POST /api/sources/{id}/crawl ──────────────────────────────────────────────
