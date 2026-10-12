@@ -17,7 +17,7 @@ from .lakebase import LakebaseUnavailable
 from .repositories import (
     projects_repo, runs_repo, tags_repo,
     sources_repo, use_cases_repo, index_jobs_repo,
-    external_docs_repo, chunks_repo, connectors_repo,
+    external_docs_repo, chunks_repo,
 )
 
 _ensured = False
@@ -308,40 +308,3 @@ def hybrid_search(domain_id: str, project_id: str, query_embedding: list,
         return chunks_repo.hybrid_search(conn, domain_id, project_id,
                                          query_embedding, query_text,
                                          k=k, folder=folder, types=types)
-
-
-# ── Connectors ─────────────────────────────────────────────────────────────────
-
-def list_connectors() -> list[dict]:
-    _ensure()
-    with lakebase.connection() as conn:
-        return connectors_repo.list_connectors(conn)
-
-
-def get_connector(provider: str) -> Optional[dict]:
-    _ensure()
-    with lakebase.connection() as conn:
-        return connectors_repo.get_connector(conn, provider)
-
-
-def upsert_connector(provider: str, display_name: str, client_id: str,
-                     redirect_uri: str, scopes: list, secret_ref: str,
-                     status: str, updated_by: str) -> dict:
-    _ensure()
-    with lakebase.connection() as conn:
-        return connectors_repo.upsert_connector(
-            conn, provider, display_name, client_id,
-            redirect_uri, scopes, secret_ref, status, updated_by,
-        )
-
-
-def set_connector_status(provider: str, status: str) -> None:
-    _ensure()
-    with lakebase.connection() as conn:
-        connectors_repo.set_status(conn, provider, status)
-
-
-def delete_connector(provider: str) -> None:
-    _ensure()
-    with lakebase.connection() as conn:
-        connectors_repo.delete_connector(conn, provider)
