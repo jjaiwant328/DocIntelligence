@@ -523,3 +523,46 @@ def test_managed_crawl_401_without_forwarded_token(monkeypatch):
     r = TestClient(app).post("/api/sources/gd/managed-crawl",
                              json={"domain_id":"d","project_id":"p","root_folder":"F"})
     assert r.status_code == 401
+
+
+# ── /api/projects ─────────────────────────────────────────────────────────────
+
+def test_list_projects_auto_creates_default(monkeypatch):
+    calls = {"n": 0}
+    def fake_list(domain_id):
+        calls["n"] += 1
+        return [] if calls["n"] == 1 else [{"project_id": "default", "name": "Default"}]
+    created = {}
+    monkeypatch.setattr(source_routes.opstore, "list_projects", fake_list)
+    monkeypatch.setattr(source_routes.opstore, "create_project",
+                        lambda **kw: created.update(kw))
+    client = _make_client()
+    resp = client.get("/api/projects", params={"domain_id": "supply_chain"})
+    assert resp.status_code == 200
+    assert resp.json()["projects"][0]["project_id"] == "default"
+    assert created["project_id"] == "default"
+
+
+def test_list_projects_returns_existing_without_create(monkeypatch):
+    monkeypatch.setattr(source_routes.opstore, "list_projects",
+                        lambda d: [{"project_id": "p1", "name": "P1"}])
+    monkeypatch.setattr(source_routes.opstore, "create_project",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("no create")))
+    client = _make_client()
+    resp = client.get("/api/projects", params={"domain_id": "supply_chain"})
+    assert resp.json()["projects"][0]["project_id"] == "p1"
+
+
+def test_create_project_slugifies_and_409s_on_dupe(monkeypatch):
+    monkeypatch.setattr(source_routes.opstore, "name_exists", lambda d, n: False)
+    created = {}
+    monkeypatch.setattr(source_routes.opstore, "create_project",
+                        lambda **kw: created.update(kw))
+    client = _make_client()
+    resp = client.post("/api/projects", json={"domain_id": "supply_chain", "name": "Q3 Review 2026"})
+    assert resp.status_code == 200
+    assert resp.json()["project_id"] == "q3_review_2026"
+
+    monkeypatch.setattr(source_routes.opstore, "name_exists", lambda d, n: True)
+    resp = client.post("/api/projects", json={"domain_id": "supply_chain", "name": "Q3 Review 2026"})
+    assert resp.status_code == 409

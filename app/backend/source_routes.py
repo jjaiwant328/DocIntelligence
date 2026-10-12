@@ -56,6 +56,41 @@ async def _crawl_source(**kwargs):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+class ProjectCreateRequest(BaseModel):
+    domain_id: str
+    name: str = "Default"
+
+
+def _slug(name: str) -> str:
+    import re
+    s = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    return s or "default"
+
+
+@router.get("/projects")
+def list_projects(domain_id: str):
+    """List projects for a domain, auto-creating a Default project when none
+    exist so the UI dropdown is never a dead end."""
+    projects = opstore.list_projects(domain_id)
+    if not projects:
+        opstore.create_project(domain_id=domain_id, project_id="default",
+                               name="Default", owner="app_user")
+        projects = opstore.list_projects(domain_id)
+    return {"projects": projects}
+
+
+@router.post("/projects")
+def create_project(req: ProjectCreateRequest):
+    """Create a project (case) within a domain. Idempotent by name."""
+    name = (req.name or "").strip() or "Default"
+    if opstore.name_exists(req.domain_id, name):
+        raise HTTPException(status_code=409, detail=f"project '{name}' already exists")
+    project_id = _slug(name)
+    opstore.create_project(domain_id=req.domain_id, project_id=project_id,
+                           name=name, owner="app_user")
+    return {"project_id": project_id, "name": name, "domain_id": req.domain_id}
+
+
 @router.get("/sources")
 def list_sources():
     """List all registered sources from the operational store."""
