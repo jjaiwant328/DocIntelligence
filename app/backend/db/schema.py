@@ -132,6 +132,7 @@ DDL: list[str] = [
     # Backfill the native source reference on deployments created before the
     # connector-first redesign (ensure_schema ignores "already exists").
     "ALTER TABLE external_documents ADD COLUMN IF NOT EXISTS source_item_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE external_documents ADD COLUMN IF NOT EXISTS doc_type TEXT NOT NULL DEFAULT ''",
     """
     CREATE TABLE IF NOT EXISTS document_chunks (
         chunk_id       TEXT PRIMARY KEY,
