@@ -592,6 +592,29 @@ DEFAULT_SCHEMA = {
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
+def _agent_search_backend():
+    from search.lakebase_search import LakebaseSearch
+    return LakebaseSearch()
+
+
+def _agent_doc_context(question: str, domain_id: str) -> tuple[str, list[str]]:
+    """Lakebase hybrid search → context text + cited doc ids. Empty on failure."""
+    try:
+        rows = _agent_search_backend().search(domain_id, None, question, k=6)
+    except Exception:
+        return "", []
+    cited: list[str] = []
+    chunks: list[str] = []
+    for r in rows:
+        did = r["external_document_id"]
+        if did not in cited:
+            cited.append(did)
+        chunks.append(
+            f"[Source: {did} | Type: {r.get('doc_type') or r.get('mime_type','')} | {r.get('web_url','')}]\n{r.get('snippet','')}"
+        )
+    return "\n\n---\n\n".join(chunks), cited
+
+
 @router.post("/agent-query")
 async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     """
@@ -608,7 +631,6 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
     _domain = _get_domain_schemas(domain_id)
     _raw = _domain["schema_raw"]
-    _vec_schema = _domain.get("schema_vec", "vectors")
 
     _base_prompt = _domain.get("agent_system_prompt") or (
         f"You are the {domain_id.replace('_', ' ').title()} AI assistant. "
@@ -635,14 +657,9 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
 
                 @tool
                 def search_documents(query: str, doc_type_filter: str = None) -> str:
-                    """Search supply chain documents semantically using ai_similarity ranking."""
-                    data = _vs_search(query, _vec_schema, k=5, doc_type_filter=doc_type_filter)
-                    if not data:
-                        return "No relevant documents found."
-                    return "\n\n---\n\n".join(
-                        f"[Source: {r[1]} | Type: {r[2]}]\n{r[3]}"
-                        for r in data if len(r) > 3
-                    )
+                    """Search supply chain documents semantically over the Lakebase knowledge layer."""
+                    context, _cited = _agent_doc_context(query, "supply_chain")
+                    return context or "No relevant documents found."
 
                 uc_tools = uc_tools + [search_documents]
                 vs_tool_available = True
@@ -676,24 +693,8 @@ async def agent_query(req: AgentQueryRequest, domain_id: str = "supply_chain"):
     # ── All other domains: direct LLM with document context ──────────────────
     # (Same approach as copilot-query — no UC functions required)
     try:
-        context_text = ""
-        cited_docs: list = []
-
-        # 1. Try semantic (ai_similarity) search first
-        try:
-            data = _vs_search(req.question, _vec_schema, k=6)
-            if data:
-                chunks = []
-                for row in data:
-                    doc_id = row[1] if len(row) > 1 else "unknown"
-                    doc_type = row[2] if len(row) > 2 else ""
-                    chunk = row[3] if len(row) > 3 else ""
-                    if doc_id not in cited_docs:
-                        cited_docs.append(doc_id)
-                    chunks.append(f"[Source: {doc_id} | Type: {doc_type}]\n{chunk}")
-                context_text = "\n\n---\n\n".join(chunks)
-        except Exception:
-            pass
+        # 1. Lakebase hybrid search for document context (all ingested sources)
+        context_text, cited_docs = _agent_doc_context(req.question, domain_id)
 
         # 2. SQL fallback for document context if VS unavailable
         if not context_text:

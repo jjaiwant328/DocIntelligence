@@ -54,6 +54,7 @@ class LakebaseSearch:
         k: int = 10,
         folder: str = "",
         types: Optional[list[str]] = None,
+        doc_ids: Optional[list[str]] = None,
     ) -> list[dict]:
         """Embed *query* once then run hybrid search, returning up to *k* results."""
         # Embed the query (single text → single vector)
@@ -70,4 +71,5 @@ class LakebaseSearch:
                 k=k,
                 folder=folder,
                 types=types,
+                doc_ids=doc_ids,
             )

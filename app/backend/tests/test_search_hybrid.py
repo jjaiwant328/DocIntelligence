@@ -30,7 +30,7 @@ class _FakeChunksRepo:
         self.calls: list[dict] = []
 
     def hybrid_search(self, conn, domain_id, project_id, query_embedding,
-                      query_text, k=10, folder="", types=None):
+                      query_text, k=10, folder="", types=None, doc_ids=None):
         self.calls.append({
             "domain_id": domain_id,
             "project_id": project_id,

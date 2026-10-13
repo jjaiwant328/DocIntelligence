@@ -34,7 +34,7 @@ def test_search_uses_lakebase_backend(monkeypatch):
              "score": 0.5}]
 
     class FakeBackend:
-        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None, doc_ids=None):
             assert project_id is None
             return hits
 
@@ -64,7 +64,7 @@ def test_search_rerank_widens_candidate_limit(monkeypatch):
     captured = {}
 
     class FakeBackend:
-        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None, doc_ids=None):
             captured["k"] = k
             return []
 
@@ -134,3 +134,50 @@ def test_evidence_reads_lakebase(monkeypatch):
     assert out["document"]["source_url"] == "https://drive/x"
     assert out["extracted_fields"][0]["field_name"] == "total"
     assert out["source_chunks"][0]["source_text"] == "hello"
+
+
+def test_search_scoped_to_doc_set(monkeypatch):
+    captured = {}
+
+    class FakeBackend:
+        def search(self, domain_id, project_id, query, k=10, doc_ids=None, **kw):
+            captured["doc_ids"] = doc_ids
+            return []
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_doc_set_ids", lambda conn, sid: ["d1", "d2"])
+
+    class FakeLB:
+        from contextlib import contextmanager
+
+        @contextmanager
+        def connection(self):
+            yield object()
+
+    monkeypatch.setattr(s, "lakebase", FakeLB())
+    monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain",
+                                   k=3, doc_set_id="set1"))
+    assert captured["doc_ids"] == ["d1", "d2"]
+    assert out["results"] == []
+
+
+def test_search_empty_doc_set_short_circuits(monkeypatch):
+    class FakeBackend:
+        def search(self, *a, **k):
+            raise AssertionError("must not query backend for empty set")
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_doc_set_ids", lambda conn, sid: [])
+
+    class FakeLB:
+        from contextlib import contextmanager
+
+        @contextmanager
+        def connection(self):
+            yield object()
+
+    monkeypatch.setattr(s, "lakebase", FakeLB())
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain",
+                                   k=3, doc_set_id="set1"))
+    assert out["results"] == []

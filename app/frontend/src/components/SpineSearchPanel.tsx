@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiCall } from "@/lib/api-config";
 import type { DomainInfo } from "@/context/DomainContext";
+
+interface DocSet {
+  id: string;
+  name: string;
+  kind: "pinned" | "query";
+}
 
 interface SearchHit {
   doc_id: string;
@@ -11,6 +17,7 @@ interface SearchHit {
   chunk_to_retrieve: string;
   score: number;
   judge_score?: number;
+  source?: { provider: string; url: string };
 }
 
 interface Validation {
@@ -35,6 +42,26 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [docSets, setDocSets] = useState<DocSet[]>([]);
+  const [docSetId, setDocSetId] = useState("");
+
+  useEffect(() => {
+    setDocSetId("");
+    apiCall<{ doc_sets: DocSet[] }>(`/api/doc-sets?domain_id=${encodeURIComponent(domain.domain_id)}`)
+      .then(r => setDocSets(r.doc_sets ?? []))
+      .catch(() => setDocSets([]));
+  }, [domain.domain_id]);
+
+  const pinHit = async (docId: string) => {
+    const s = docSets.find(x => x.id === docSetId);
+    if (!s || s.kind !== "pinned") return;
+    try {
+      await apiCall(`/api/doc-sets/${s.id}/pin`, {
+        method: "POST",
+        body: JSON.stringify({ doc_ids: [docId] }),
+      });
+    } catch { /* silent — pin is opportunistic */ }
+  };
 
   const runSearch = async () => {
     if (!question.trim()) return;
@@ -44,7 +71,7 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
     try {
       const out = await apiCall<{ results: SearchHit[] }>("/api/spine/search", {
         method: "POST",
-        body: JSON.stringify({ question, domain_id: domain.domain_id, k: 5, rerank }),
+        body: JSON.stringify({ question, domain_id: domain.domain_id, k: 5, rerank, doc_set_id: docSetId }),
       });
       setHits(out.results ?? []);
     } catch (e) {
@@ -94,10 +121,27 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
           {loading ? "Searching…" : "Search"}
         </button>
       </div>
-      <label className="flex items-center gap-1 text-xs text-gray-500 mb-4">
-        <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} />
-        Judge rerank (OpenJev relevance scoring)
-      </label>
+      <div className="flex items-center gap-3 mb-4">
+        <label className="flex items-center gap-1 text-xs text-gray-500">
+          <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} />
+          Judge rerank (OpenJev relevance scoring)
+        </label>
+        {docSets.length > 0 && (
+          <select
+            value={docSetId}
+            onChange={(e) => setDocSetId(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1"
+            title="Scope search to a doc-set"
+          >
+            <option value="">All documents</option>
+            {docSets.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.kind})
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {error && <div className="text-sm text-red-600 mb-3">{error}</div>}
 
@@ -113,9 +157,28 @@ export default function SpineSearchPanel({ domain }: { domain: DomainInfo }) {
                   judge {(h.judge_score * 100).toFixed(0)}%
                 </span>
               )}
+              {h.source?.url && (
+                <a
+                  href={h.source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-auto text-xs text-blue-600 hover:underline"
+                >
+                  open ↗
+                </a>
+              )}
+              {docSetId && docSets.find(x => x.id === docSetId)?.kind === "pinned" && (
+                <button
+                  onClick={() => pinHit(h.doc_id)}
+                  className="text-xs text-purple-600 hover:underline"
+                  title="Pin into selected set"
+                >
+                  📌 pin
+                </button>
+              )}
               <button
                 onClick={() => openEvidence(h.doc_id)}
-                className="ml-auto text-xs text-blue-600 hover:underline"
+                className={`${h.source?.url ? "" : "ml-auto"} text-xs text-blue-600 hover:underline`}
               >
                 Evidence →
               </button>
