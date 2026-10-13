@@ -92,6 +92,15 @@ except Exception as _e:
     _spine_load_error = f"{type(_e).__name__}: {_e}\n{_tb.format_exc()}"
     print(f"⚠️ Spine routes not loaded: {_spine_load_error}")
 
+# Register doc-set assembly routes (pinned + query-defined sets over Lakebase).
+try:
+    from doc_set_routes import router as doc_set_router
+    app.include_router(doc_set_router)
+    print("✅ Doc-set routes registered at /api/doc-sets")
+except Exception as _e:
+    import traceback as _tb
+    print(f"⚠️ Doc-set routes not loaded: {type(_e).__name__}: {_e}\n{_tb.format_exc()}")
+
 # Mount the in-app MCP server (headless tools) at /mcp/ — makes DocIntelligence's
 # capabilities callable by any MCP client. Must run before the catch-all route.
 _mcp_load_error: str | None = None
