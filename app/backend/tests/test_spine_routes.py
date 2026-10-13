@@ -20,10 +20,6 @@ def test_unknown_domain_raises_404():
     assert ei.value.status_code == 404
 
 
-def test_sql_escaping():
-    assert s._esc("O'Brien") == "O''Brien"
-
-
 def test_list_domains_shape():
     out = s.list_spine_domains()
     ids = {d["domain_id"] for d in out["domains"]}
@@ -111,3 +107,28 @@ def test_rerank_fails_open(monkeypatch):
     monkeypatch.setitem(sys.modules, "judge", type(sys)("judge"))
     sys.modules["judge"].JudgeClient = BoomJudge
     assert s._rerank("q", rows) == rows
+
+
+def test_evidence_reads_lakebase(monkeypatch):
+    doc = {"external_document_id": "a.txt", "mime_type": "text/plain",
+           "path": "/v/a.txt", "web_url": "https://drive/x", "name": "a.txt"}
+    monkeypatch.setattr(s, "_lakebase_doc", lambda did, dom: doc)
+    monkeypatch.setattr(s.extracted_fields_repo, "list_for_doc",
+                        lambda conn, did: [{"field_name": "total", "field_value": "$5",
+                                            "page": 1, "bbox": None,
+                                            "source_text": "Total $5", "confidence": None}])
+    monkeypatch.setattr(s.chunks_repo, "list_for_doc",
+                        lambda conn, did: [{"chunk_id": "c1", "external_document_id": did,
+                                            "ordinal": 0, "location": "", "snippet": "hello"}])
+
+    class FakeLB:
+        from contextlib import contextmanager
+        @contextmanager
+        def connection(self):
+            yield object()
+
+    monkeypatch.setattr(s, "lakebase", FakeLB())
+    out = s.evidence("a.txt", "supply_chain")
+    assert out["document"]["source_url"] == "https://drive/x"
+    assert out["extracted_fields"][0]["field_name"] == "total"
+    assert out["source_chunks"][0]["source_text"] == "hello"

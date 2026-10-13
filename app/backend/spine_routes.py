@@ -16,20 +16,18 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import StatementState
+
+from db import lakebase
+from db.repositories import chunks_repo, extracted_fields_repo
 
 router = APIRouter(prefix="/api/spine", tags=["spine"])
 
 try:
     w = WorkspaceClient()
-    warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
     print("✅ spine_routes: Databricks client ready")
 except Exception as _e:  # pragma: no cover
     w = None
-    warehouse_id = None
     print(f"⚠️ spine_routes: Databricks client failed: {_e}")
-
-CATALOG = "jai_docintel"
 
 # domain_id → medallion schema produced by the spine pipeline
 SCHEMA_BY_DOMAIN = {
@@ -43,29 +41,6 @@ def _schema(domain_id: str) -> str:
     if not schema:
         raise HTTPException(status_code=404, detail=f"Unknown spine domain '{domain_id}'")
     return schema
-
-
-def _esc(s: str) -> str:
-    return (s or "").replace("'", "''")
-
-
-def run_sql(sql: str, wait: str = "50s"):
-    if not w or not warehouse_id:
-        raise HTTPException(status_code=503, detail="Databricks not configured")
-    result = w.statement_execution.execute_statement(statement=sql, warehouse_id=warehouse_id, wait_timeout=wait)
-    state = result.status.state if result.status else None
-    if state == StatementState.FAILED:
-        raise HTTPException(status_code=500, detail=str(result.status.error))
-    if state in (StatementState.PENDING, StatementState.RUNNING):
-        import time
-
-        time.sleep(3)
-        result = w.statement_execution.get_statement(result.statement_id)
-    rows = []
-    if result.result and result.result.data_array:
-        cols = [c.name for c in result.manifest.schema.columns]
-        rows = [dict(zip(cols, row)) for row in result.result.data_array]
-    return rows
 
 
 class SearchRequest(BaseModel):
@@ -128,39 +103,60 @@ def search(req: SearchRequest):
     return {"domain_id": req.domain_id, "question": req.question, "results": hits[:k]}
 
 
+def _lakebase_doc(doc_id: str, domain_id: str) -> dict | None:
+    with lakebase.connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT external_document_id, mime_type, path, web_url, name, doc_type "
+            "FROM external_documents WHERE external_document_id=%s AND domain_id=%s",
+            (doc_id, domain_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"external_document_id": row[0], "mime_type": row[1],
+            "path": row[2], "web_url": row[3], "name": row[4], "doc_type": row[5]}
+
+
 @router.get("/evidence")
 def evidence(doc_id: str, domain_id: str = "supply_chain", validate: bool = False):
-    """Evidence trail for a document: type + source file, extracted fields, and source chunks.
+    """Evidence trail from Lakebase: doc, extracted fields, source chunks, source URL.
 
     With validate=true, also runs the OpenJev judge over the document: a
     per-field correctness probability and a doc-type verification choice."""
-    schema = _schema(domain_id)
-    did = _esc(doc_id)
-    doc = run_sql(
-        f"SELECT doc_id, doc_type, source_file FROM {CATALOG}.{schema}.gold_documents WHERE doc_id = '{did}' LIMIT 1"
-    )
+    _schema(domain_id)
+    doc = _lakebase_doc(doc_id, domain_id)
     if not doc:
-        raise HTTPException(status_code=404, detail=f"No document '{doc_id}' in {schema}")
-    fields = run_sql(
-        f"SELECT field_name, field_value FROM {CATALOG}.{schema}.gold_extracted_fields WHERE doc_id = '{did}' ORDER BY field_name"
-    )
-    chunks = run_sql(
-        f"SELECT chunk_position, chunk_to_retrieve AS source_text FROM {CATALOG}.{schema}.gold_chunks WHERE doc_id = '{did}' ORDER BY chunk_position"
-    )
-    out = {"document": doc[0], "extracted_fields": fields, "source_chunks": chunks}
+        raise HTTPException(status_code=404, detail=f"No document '{doc_id}' in {domain_id}")
+    with lakebase.connection() as conn:
+        fields = extracted_fields_repo.list_for_doc(conn, doc_id)
+        chunks = chunks_repo.list_for_doc(conn, doc_id)
+    out = {
+        "document": {"doc_id": doc_id,
+                     "doc_type": doc.get("doc_type") or doc.get("mime_type", ""),
+                     "source_file": doc["path"], "source_url": doc["web_url"]},
+        "extracted_fields": fields,
+        "source_chunks": [{"chunk_position": c["ordinal"], "source_text": c["snippet"]}
+                          for c in chunks],
+    }
     if validate:
-        out["validation"] = _validate(doc[0], fields, chunks, schema)
+        out["validation"] = _validate(
+            {"doc_type": out["document"]["doc_type"]}, fields, out["source_chunks"], domain_id)
     return out
 
 
-def _validate(doc: dict, fields: list[dict], chunks: list[dict], schema: str) -> dict:
+def _validate(doc: dict, fields: list[dict], chunks: list[dict], domain_id: str) -> dict:
     """Judge-validate one document's extraction; fail-open with an error field."""
     try:
         from judge import JudgeClient
 
-        types = [r["doc_type"] for r in run_sql(
-            f"SELECT DISTINCT doc_type FROM {CATALOG}.{schema}.gold_documents"
-        ) if r.get("doc_type")]
+        with lakebase.connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT DISTINCT doc_type FROM external_documents WHERE domain_id=%s",
+                (domain_id,),
+            )
+            types = [r[0] for r in cur.fetchall() if r[0]]
         doc_text = "\n\n".join(c.get("source_text", "") for c in chunks[:6])
         return JudgeClient.from_workspace(w).validate_extraction(
             doc_text, doc.get("doc_type", ""), fields, types
