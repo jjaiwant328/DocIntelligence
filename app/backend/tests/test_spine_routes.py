@@ -20,40 +20,58 @@ def test_unknown_domain_raises_404():
     assert ei.value.status_code == 404
 
 
-def test_sql_escaping():
-    assert s._esc("O'Brien") == "O''Brien"
-
-
 def test_list_domains_shape():
     out = s.list_spine_domains()
     ids = {d["domain_id"] for d in out["domains"]}
     assert {"supply_chain", "compliance_due_diligence"} <= ids
 
 
-def test_search_builds_sql_without_warehouse(monkeypatch):
-    """search() should compose a cosine query against the domain's gold_chunks."""
-    captured = {}
-    monkeypatch.setattr(s, "run_sql", lambda sql, wait="50s": captured.setdefault("sql", sql) or [])
-    s.search(s.SearchRequest(question="temp excursion", domain_id="supply_chain", k=3, rerank=False))
-    sql = captured["sql"]
-    assert "vector_cosine_similarity" in sql
-    assert "jai_docintel.template.gold_chunks" in sql
-    assert "ai_query(" in sql
-    assert "LIMIT 3" in sql
+def test_search_uses_lakebase_backend(monkeypatch):
+    hits = [{"chunk_id": "c1", "external_document_id": "a.txt", "name": "a.txt",
+             "path": "/v/a.txt", "web_url": "https://drive/x", "mime_type": "text/plain",
+             "doc_type": "invoice",
+             "status": "indexed", "ordinal": 0, "location": "", "snippet": "hello",
+             "score": 0.5}]
+
+    class FakeBackend:
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+            assert project_id is None
+            return hits
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain", k=3))
+    r = out["results"][0]
+    assert r["doc_id"] == "a.txt"
+    assert r["doc_type"] == "invoice"
+    assert r["chunk_to_retrieve"] == "hello"
+    assert r["source"] == {"provider": "lakebase", "url": "https://drive/x"}
+
+
+def test_search_empty_corpus_returns_empty(monkeypatch):
+    class FakeBackend:
+        def search(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain", k=3))
+    assert out["results"] == []
 
 
 def test_search_rerank_widens_candidate_limit(monkeypatch):
-    """With rerank on, the SQL pulls 2k candidates (capped) for the judge."""
+    """With rerank on, the backend pulls 2k candidates (capped) for the judge."""
     captured = {}
 
-    def fake_run_sql(sql, wait="50s"):
-        captured["sql"] = sql
-        return []
+    class FakeBackend:
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+            captured["k"] = k
+            return []
 
-    monkeypatch.setattr(s, "run_sql", fake_run_sql)
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
     monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
     out = s.search(s.SearchRequest(question="temp excursion", domain_id="supply_chain", k=3))
-    assert "LIMIT 6" in captured["sql"]
+    assert captured["k"] == 6
     assert out["results"] == []
 
 
@@ -91,3 +109,28 @@ def test_rerank_fails_open(monkeypatch):
     monkeypatch.setitem(sys.modules, "judge", type(sys)("judge"))
     sys.modules["judge"].JudgeClient = BoomJudge
     assert s._rerank("q", rows) == rows
+
+
+def test_evidence_reads_lakebase(monkeypatch):
+    doc = {"external_document_id": "a.txt", "mime_type": "text/plain",
+           "path": "/v/a.txt", "web_url": "https://drive/x", "name": "a.txt"}
+    monkeypatch.setattr(s, "_lakebase_doc", lambda did, dom: doc)
+    monkeypatch.setattr(s.extracted_fields_repo, "list_for_doc",
+                        lambda conn, did: [{"field_name": "total", "field_value": "$5",
+                                            "page": 1, "bbox": None,
+                                            "source_text": "Total $5", "confidence": None}])
+    monkeypatch.setattr(s.chunks_repo, "list_for_doc",
+                        lambda conn, did: [{"chunk_id": "c1", "external_document_id": did,
+                                            "ordinal": 0, "location": "", "snippet": "hello"}])
+
+    class FakeLB:
+        from contextlib import contextmanager
+        @contextmanager
+        def connection(self):
+            yield object()
+
+    monkeypatch.setattr(s, "lakebase", FakeLB())
+    out = s.evidence("a.txt", "supply_chain")
+    assert out["document"]["source_url"] == "https://drive/x"
+    assert out["extracted_fields"][0]["field_name"] == "total"
+    assert out["source_chunks"][0]["source_text"] == "hello"

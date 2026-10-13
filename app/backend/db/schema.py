@@ -132,6 +132,7 @@ DDL: list[str] = [
     # Backfill the native source reference on deployments created before the
     # connector-first redesign (ensure_schema ignores "already exists").
     "ALTER TABLE external_documents ADD COLUMN IF NOT EXISTS source_item_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE external_documents ADD COLUMN IF NOT EXISTS doc_type TEXT NOT NULL DEFAULT ''",
     """
     CREATE TABLE IF NOT EXISTS document_chunks (
         chunk_id       TEXT PRIMARY KEY,
@@ -193,6 +194,37 @@ DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_chunks_hnsw ON document_chunks USING hnsw (embedding vector_cosine_ops)",
     "CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON document_chunks USING gin (tsv)",
     "CREATE INDEX IF NOT EXISTS idx_jobs_scope ON index_jobs (domain_id, project_id, status)",
+    """
+    CREATE TABLE IF NOT EXISTS extracted_fields (
+        doc_id        TEXT        NOT NULL,
+        field_name    TEXT        NOT NULL,
+        field_value   TEXT        NOT NULL DEFAULT '',
+        page          INT,
+        bbox          JSONB,
+        source_text   TEXT        NOT NULL DEFAULT '',
+        confidence    DOUBLE PRECISION,
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (doc_id, field_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS doc_sets (
+        id          TEXT        PRIMARY KEY,
+        domain_id   TEXT        NOT NULL,
+        name        TEXT        NOT NULL,
+        kind        TEXT        NOT NULL CHECK (kind IN ('pinned','query')),
+        filter_json JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS doc_set_members (
+        doc_set_id  TEXT NOT NULL REFERENCES doc_sets(id) ON DELETE CASCADE,
+        doc_id      TEXT NOT NULL,
+        pinned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (doc_set_id, doc_id)
+    )
+    """,
 ]
 
 
