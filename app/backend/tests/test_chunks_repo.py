@@ -40,3 +40,10 @@ def test_hybrid_search_with_project_keeps_filter():
     conn = FakeConn()
     chunks_repo.hybrid_search(conn, "supply_chain", "default", [0.1] * 1024, "invoice", k=3)
     assert conn.cur.sql.count("project_id=%s") == 2  # vec + kw CTEs
+
+
+def test_hybrid_search_selects_doc_type():
+    """Final SELECT must carry d.doc_type so hits show the classifier label."""
+    conn = FakeConn()
+    chunks_repo.hybrid_search(conn, "supply_chain", None, [0.1] * 1024, "invoice", k=3)
+    assert "d.doc_type" in conn.cur.sql

@@ -1,9 +1,10 @@
-"""Thin-spine API — endpoint-free search + evidence over the docintel_spine pipeline.
+"""Thin-spine API — Lakebase search + evidence over all ingested sources.
 
-Additive: reads the new `template` / `template_cdd` medallion tables produced by
-the `docintel_spine` Lakeflow pipeline. Does NOT touch existing routes. Retrieval
-uses batch-embedded `gold_chunks` + `vector_cosine_similarity` — no Vector Search
-endpoint, no serving endpoint.
+Search runs Lakebase hybrid retrieval (pgvector cosine + tsvector FTS fused via
+RRF) over every ingested source, with an optional OpenJev judge rerank of the
+top candidates. Evidence is assembled from Lakebase extracted_fields and
+document_chunks, with a source_url for open-at-source. Does NOT touch existing
+routes.
 
   POST /api/spine/search    {question, domain_id, k}   → ranked chunks + scores
   GET  /api/spine/evidence  ?doc_id&domain_id          → doc, extracted fields, source chunks
@@ -82,7 +83,7 @@ def _backend():
 def _to_hit(row: dict) -> dict:
     return {
         "doc_id": row["external_document_id"],
-        "doc_type": row.get("mime_type", ""),
+        "doc_type": row.get("doc_type") or row.get("mime_type", ""),
         "source_file": row.get("path", ""),
         "chunk_to_retrieve": row.get("snippet", ""),
         "score": round(float(row.get("score", 0.0)), 4),

@@ -29,6 +29,7 @@ def test_list_domains_shape():
 def test_search_uses_lakebase_backend(monkeypatch):
     hits = [{"chunk_id": "c1", "external_document_id": "a.txt", "name": "a.txt",
              "path": "/v/a.txt", "web_url": "https://drive/x", "mime_type": "text/plain",
+             "doc_type": "invoice",
              "status": "indexed", "ordinal": 0, "location": "", "snippet": "hello",
              "score": 0.5}]
 
@@ -42,6 +43,7 @@ def test_search_uses_lakebase_backend(monkeypatch):
     out = s.search(s.SearchRequest(question="q", domain_id="supply_chain", k=3))
     r = out["results"][0]
     assert r["doc_id"] == "a.txt"
+    assert r["doc_type"] == "invoice"
     assert r["chunk_to_retrieve"] == "hello"
     assert r["source"] == {"provider": "lakebase", "url": "https://drive/x"}
 

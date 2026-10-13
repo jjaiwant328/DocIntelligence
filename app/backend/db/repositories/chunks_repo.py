@@ -122,7 +122,7 @@ def hybrid_search(
               (SQL: d.mime_type = ANY(<types>))
 
     Returns [{chunk_id, external_document_id, name, path, web_url,
-              mime_type, status, ordinal, location, snippet, score}].
+              mime_type, doc_type, status, ordinal, location, snippet, score}].
     """
     # Build optional WHERE conditions applied to the outer d join
     extra_wheres: list[str] = []
@@ -166,7 +166,7 @@ def hybrid_search(
         GROUP BY chunk_id, external_document_id
     )
     SELECT c.chunk_id, c.external_document_id, d.name, d.path, d.web_url,
-           d.mime_type, d.status, c.ordinal, c.location, c.snippet, f.score
+           d.mime_type, d.doc_type, d.status, c.ordinal, c.location, c.snippet, f.score
     FROM fused f
     JOIN document_chunks c ON c.chunk_id=f.chunk_id
     JOIN external_documents d ON d.external_document_id=f.external_document_id
