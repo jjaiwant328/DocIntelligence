@@ -104,14 +104,16 @@ def list_for_doc(conn: Any, external_document_id: str) -> list[dict]:
 def hybrid_search(
     conn: Any,
     domain_id: str,
-    project_id: str,
-    query_embedding: list[float],
-    query_text: str,
+    project_id: Optional[str] = None,
+    query_embedding: Optional[list[float]] = None,
+    query_text: str = "",
     k: int = 10,
     folder: str = "",
     types: Optional[list[str]] = None,
 ) -> list[dict]:
     """RRF-fused vector + FTS hybrid search.
+
+    project_id=None searches across all projects in the domain.
 
     Optional filters applied in the final JOIN on external_documents:
     - folder: restricts to documents whose path starts with this prefix
@@ -136,12 +138,15 @@ def hybrid_search(
 
     where_clause = ("WHERE " + " AND ".join(extra_wheres)) if extra_wheres else ""
 
+    doc_filter = "domain_id=%s" + (" AND project_id=%s" if project_id else "")
+    doc_params: tuple = (domain_id, project_id) if project_id else (domain_id,)
+
     sql = f"""
     WITH vec AS (
         SELECT chunk_id, external_document_id,
                ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rnk
         FROM document_chunks
-        WHERE domain_id=%s AND project_id=%s AND embedding IS NOT NULL
+        WHERE {doc_filter} AND embedding IS NOT NULL
         ORDER BY embedding <=> %s::vector LIMIT 50
     ),
     kw AS (
@@ -150,7 +155,7 @@ def hybrid_search(
                    ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
                ) AS rnk
         FROM document_chunks
-        WHERE domain_id=%s AND project_id=%s
+        WHERE {doc_filter}
           AND tsv @@ plainto_tsquery('english', %s)
         LIMIT 50
     ),
@@ -172,8 +177,8 @@ def hybrid_search(
     ql = _vec_literal(query_embedding)
     cur.execute(
         sql,
-        (ql, domain_id, project_id, ql,
-         query_text, domain_id, project_id, query_text,
+        (ql, *doc_params, ql,
+         query_text, *doc_params, query_text,
          *extra_params, k),
     )
     return _dicts(cur)

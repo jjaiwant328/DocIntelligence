@@ -49,8 +49,8 @@ class LakebaseSearch:
     def search(
         self,
         domain_id: str,
-        project_id: str,
-        query: str,
+        project_id: Optional[str] = None,
+        query: str = "",
         k: int = 10,
         folder: str = "",
         types: Optional[list[str]] = None,

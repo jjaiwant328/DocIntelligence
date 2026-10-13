@@ -30,30 +30,50 @@ def test_list_domains_shape():
     assert {"supply_chain", "compliance_due_diligence"} <= ids
 
 
-def test_search_builds_sql_without_warehouse(monkeypatch):
-    """search() should compose a cosine query against the domain's gold_chunks."""
-    captured = {}
-    monkeypatch.setattr(s, "run_sql", lambda sql, wait="50s": captured.setdefault("sql", sql) or [])
-    s.search(s.SearchRequest(question="temp excursion", domain_id="supply_chain", k=3, rerank=False))
-    sql = captured["sql"]
-    assert "vector_cosine_similarity" in sql
-    assert "jai_docintel.template.gold_chunks" in sql
-    assert "ai_query(" in sql
-    assert "LIMIT 3" in sql
+def test_search_uses_lakebase_backend(monkeypatch):
+    hits = [{"chunk_id": "c1", "external_document_id": "a.txt", "name": "a.txt",
+             "path": "/v/a.txt", "web_url": "https://drive/x", "mime_type": "text/plain",
+             "status": "indexed", "ordinal": 0, "location": "", "snippet": "hello",
+             "score": 0.5}]
+
+    class FakeBackend:
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+            assert project_id is None
+            return hits
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain", k=3))
+    r = out["results"][0]
+    assert r["doc_id"] == "a.txt"
+    assert r["chunk_to_retrieve"] == "hello"
+    assert r["source"] == {"provider": "lakebase", "url": "https://drive/x"}
+
+
+def test_search_empty_corpus_returns_empty(monkeypatch):
+    class FakeBackend:
+        def search(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
+    monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
+    out = s.search(s.SearchRequest(question="q", domain_id="supply_chain", k=3))
+    assert out["results"] == []
 
 
 def test_search_rerank_widens_candidate_limit(monkeypatch):
-    """With rerank on, the SQL pulls 2k candidates (capped) for the judge."""
+    """With rerank on, the backend pulls 2k candidates (capped) for the judge."""
     captured = {}
 
-    def fake_run_sql(sql, wait="50s"):
-        captured["sql"] = sql
-        return []
+    class FakeBackend:
+        def search(self, domain_id, project_id, query, k=10, folder="", types=None):
+            captured["k"] = k
+            return []
 
-    monkeypatch.setattr(s, "run_sql", fake_run_sql)
+    monkeypatch.setattr(s, "_backend", lambda: FakeBackend())
     monkeypatch.setattr(s, "_rerank", lambda q, rows: rows)
     out = s.search(s.SearchRequest(question="temp excursion", domain_id="supply_chain", k=3))
-    assert "LIMIT 6" in captured["sql"]
+    assert captured["k"] == 6
     assert out["results"] == []
 
 

@@ -30,7 +30,6 @@ except Exception as _e:  # pragma: no cover
     print(f"⚠️ spine_routes: Databricks client failed: {_e}")
 
 CATALOG = "jai_docintel"
-EMBED_MODEL = os.getenv("DOCINTEL_EMBED_MODEL", "databricks-gte-large-en")
 
 # domain_id → medallion schema produced by the spine pipeline
 SCHEMA_BY_DOMAIN = {
@@ -100,28 +99,33 @@ def list_spine_domains():
     return {"domains": [{"domain_id": d, "schema": s} for d, s in SCHEMA_BY_DOMAIN.items()]}
 
 
+def _backend():
+    from search.lakebase_search import LakebaseSearch
+    return LakebaseSearch()
+
+
+def _to_hit(row: dict) -> dict:
+    return {
+        "doc_id": row["external_document_id"],
+        "doc_type": row.get("mime_type", ""),
+        "source_file": row.get("path", ""),
+        "chunk_to_retrieve": row.get("snippet", ""),
+        "score": round(float(row.get("score", 0.0)), 4),
+        "source": {"provider": "lakebase", "url": row.get("web_url", "")},
+    }
+
+
 @router.post("/search")
 def search(req: SearchRequest):
-    """Endpoint-free semantic search: embed the query once, cosine over stored chunk vectors.
-
-    Pulls up to RERANK_CANDIDATES vector hits, then reranks with the OpenJev
-    judge (skip with rerank=false) and returns the top k."""
-    schema = _schema(req.domain_id)
+    """Lakebase hybrid search over all ingested sources + OpenJev rerank."""
+    _schema(req.domain_id)  # 404 unknown domain
     k = max(1, min(req.k, 25))
     cand = max(k, min(2 * k, RERANK_CANDIDATES)) if req.rerank else k
-    q = _esc(req.question)
-    sql = f"""
-        WITH qy AS (SELECT CAST(ai_query('{EMBED_MODEL}', '{q}') AS ARRAY<FLOAT>) AS qv)
-        SELECT doc_id, doc_type, source_file, chunk_to_retrieve,
-               round(vector_cosine_similarity(embedding, qy.qv), 4) AS score
-        FROM {CATALOG}.{schema}.gold_chunks, qy
-        ORDER BY score DESC
-        LIMIT {cand}
-    """
-    rows = run_sql(sql)
+    rows = _backend().search(req.domain_id, None, req.question, k=cand)
+    hits = [_to_hit(r) for r in rows]
     if req.rerank:
-        rows = _rerank(req.question, rows)
-    return {"domain_id": req.domain_id, "question": req.question, "results": rows[:k]}
+        hits = _rerank(req.question, hits)
+    return {"domain_id": req.domain_id, "question": req.question, "results": hits[:k]}
 
 
 @router.get("/evidence")
