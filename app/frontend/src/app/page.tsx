@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { DomainContext, DEMO_USERS } from "@/context/DomainContext";
 import type { DomainInfo, ProjectInfo } from "@/context/DomainContext";
 import SpineSearchPanel from "@/components/SpineSearchPanel";
+import DocSetsPanel from "@/components/DocSetsPanel";
 
 const SourcesTab = dynamic(() => import("./sources/page"), {
   ssr: false,
@@ -29,6 +30,7 @@ function LoadingPane({ label }: { label: string }) {
 const TABS = [
   { id: "sources", icon: "🔌", label: "Sources", description: "Connect a source, crawl metadata, build the index." },
   { id: "search",  icon: "🔍", label: "Search & Evidence", description: "Judge-reranked semantic search with an evidence trail per hit." },
+  { id: "doc-sets", icon: "🗂", label: "Doc-Sets", description: "Assemble pinned or query-defined document sets; scope search to them." },
   { id: "agent",   icon: "🧠", label: "Agent", description: "Ask questions across the corpus; grounded answers with cited sources." },
 ] as const;
 
@@ -187,6 +189,7 @@ export default function Home() {
 
         {activeTab === "sources" && <SourcesTab domain={activeDomain} />}
         {activeTab === "search" && <SpineSearchPanel domain={activeDomain} />}
+        {activeTab === "doc-sets" && <DocSetsPanel domain={activeDomain} />}
         {activeTab === "agent" && <AgentTab domain={activeDomain} />}
       </div>
     </DomainContext.Provider>

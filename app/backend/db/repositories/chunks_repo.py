@@ -110,10 +110,13 @@ def hybrid_search(
     k: int = 10,
     folder: str = "",
     types: Optional[list[str]] = None,
+    doc_ids: Optional[list[str]] = None,
 ) -> list[dict]:
     """RRF-fused vector + FTS hybrid search.
 
     project_id=None searches across all projects in the domain.
+    doc_ids=None searches all documents; a list restricts candidates
+    (doc-set scoping) inside both CTEs.
 
     Optional filters applied in the final JOIN on external_documents:
     - folder: restricts to documents whose path starts with this prefix
@@ -140,6 +143,9 @@ def hybrid_search(
 
     doc_filter = "domain_id=%s" + (" AND project_id=%s" if project_id else "")
     doc_params: tuple = (domain_id, project_id) if project_id else (domain_id,)
+    if doc_ids is not None:
+        doc_filter += " AND external_document_id = ANY(%s)"
+        doc_params = doc_params + (doc_ids,)
 
     sql = f"""
     WITH vec AS (

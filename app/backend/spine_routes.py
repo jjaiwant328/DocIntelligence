@@ -49,6 +49,7 @@ class SearchRequest(BaseModel):
     domain_id: str = "supply_chain"
     k: int = 5
     rerank: bool = True
+    doc_set_id: str = ""
 
 
 RERANK_CANDIDATES = int(os.getenv("DOCINTEL_RERANK_CANDIDATES", "10"))
@@ -91,13 +92,41 @@ def _to_hit(row: dict) -> dict:
     }
 
 
+def _doc_set_ids(conn, set_id: str) -> list[str]:
+    """Resolve a doc-set to member document ids (pinned or query-defined)."""
+    from db.repositories import doc_sets_repo
+
+    s = doc_sets_repo.get(conn, set_id)
+    if not s:
+        raise HTTPException(status_code=404, detail=f"no doc-set '{set_id}'")
+    if s["kind"] == "pinned":
+        return doc_sets_repo.pinned_ids(conn, set_id)
+    from doc_set_routes import _resolve_query_set
+
+    fj = s["filter_json"]
+    if isinstance(fj, str):
+        import json
+
+        fj = json.loads(fj)
+    return [d["external_document_id"] for d in _resolve_query_set(conn, fj)]
+
+
 @router.post("/search")
 def search(req: SearchRequest):
-    """Lakebase hybrid search over all ingested sources + OpenJev rerank."""
+    """Lakebase hybrid search over all ingested sources + OpenJev rerank.
+
+    Optional doc_set_id narrows candidates to the set's members (pinned or
+    query-resolved) before rerank."""
     _schema(req.domain_id)  # 404 unknown domain
     k = max(1, min(req.k, 25))
     cand = max(k, min(2 * k, RERANK_CANDIDATES)) if req.rerank else k
-    rows = _backend().search(req.domain_id, None, req.question, k=cand)
+    doc_ids = None
+    if req.doc_set_id:
+        with lakebase.connection() as conn:
+            doc_ids = _doc_set_ids(conn, req.doc_set_id)
+        if not doc_ids:
+            return {"domain_id": req.domain_id, "question": req.question, "results": []}
+    rows = _backend().search(req.domain_id, None, req.question, k=cand, doc_ids=doc_ids)
     hits = [_to_hit(r) for r in rows]
     if req.rerank:
         hits = _rerank(req.question, hits)
